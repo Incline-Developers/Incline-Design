@@ -92,6 +92,8 @@ impl<'a> App<'a> {
             always_show_edges: false,
             depth_shade: None,
             pattern_from: None,
+            prismoid_grid: None,
+            quality: None,
         });
     }
 
@@ -280,6 +282,10 @@ impl<'a> App<'a> {
             self.editor.tri_cut_surface_reference_id = None;
             self.editor.tri_cut_surface_open = false;
         }
+        if self.editor.tri_cut_to_seam.contains(&Some(id)) {
+            self.editor.tri_cut_to_seam = [None; 2];
+            self.editor.tri_cut_to_open = false;
+        }
         if self.editor.tri_cut_pitshell_topology_id == Some(id) || self.editor.tri_cut_pitshell_pitshell_id == Some(id) {
             self.editor.tri_cut_pitshell_topology_id = None;
             self.editor.tri_cut_pitshell_pitshell_id = None;
@@ -289,6 +295,24 @@ impl<'a> App<'a> {
             self.editor.tri_include_solid_topology_id = None;
             self.editor.tri_include_solid_shape_id = None;
             self.editor.tri_include_solid_open = false;
+        }
+        if self.editor.tri_difference_upper_id == Some(id) || self.editor.tri_difference_lower_id == Some(id) {
+            self.editor.tri_difference_upper_id = None;
+            self.editor.tri_difference_lower_id = None;
+            self.editor.tri_difference_open = false;
+        }
+        if self.editor.tri_merge_first_id == Some(id) || self.editor.tri_merge_second_id == Some(id) {
+            self.editor.tri_merge_first_id = None;
+            self.editor.tri_merge_second_id = None;
+            self.editor.tri_merge_open = false;
+        }
+        if self.editor.tri_smooth_surface_id == Some(id) {
+            self.editor.tri_smooth_surface_id = None;
+            self.editor.tri_smooth_open = false;
+        }
+        if self.editor.tri_clean_surface_id == Some(id) {
+            self.editor.tri_clean_surface_id = None;
+            self.editor.tri_clean_open = false;
         }
         if self.editor.tri_contour_tri_id == Some(id) {
             self.editor.tri_contour_tri_id = None;
@@ -360,19 +384,27 @@ impl<'a> App<'a> {
     /// Add `surfaces` to the project as one undo step, together with `also`
     /// (applied after them; unloading the sources they were made from, say).
     /// With `select` they become the selection, and the last of them the
-    /// active surface. Returns their ids, in order.
+    /// active surface. A quality surface is never selected and is born
+    /// hidden. Returns their ids, in order.
     pub(crate) fn add_generated_triangulations(&mut self, surfaces: Vec<NewTriangulation>, also: Vec<Command>, select: bool) -> Vec<TriangulationId> {
+        let selectable: Vec<bool> = surfaces.iter().map(|surface| surface.built.quality.is_none()).collect();
+        let any_quality = selectable.contains(&false);
         let (ids, mut commands) = self.add_triangulation_commands(surfaces);
         commands.extend(also);
-        let cleared_object_selection = select && !ids.is_empty() && self.editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_)));
+        let selected: Vec<TriangulationId> = ids.iter().zip(&selectable).filter(|(_, selectable)| **selectable).map(|(&id, _)| id).collect();
+        let cleared_object_selection = select && !selected.is_empty() && self.editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_)));
         let Some(command) = Command::step(commands) else {
             return ids;
         };
         self.execute_job_edit(command);
-        if select && let Some(&last) = ids.last() {
+        if any_quality {
+            // As the eye does: the draw passes go by the hidden handles.
+            self.invalidate_geometry();
+        }
+        if select && let Some(&last) = selected.last() {
             self.active_triangulation = Some(last);
             self.editor.selected_handles.clear();
-            self.editor.selected_handles.extend(ids.iter().map(|&id| SceneEntityId::Triangulation(id)));
+            self.editor.selected_handles.extend(selected.iter().map(|&id| SceneEntityId::Triangulation(id)));
             // The edit redrew the surfaces; the objects that were selected
             // drop their highlight only when the scene is rebuilt.
             if cleared_object_selection {
@@ -398,7 +430,9 @@ impl<'a> App<'a> {
                 edges,
                 surface_face_order,
                 surface_type,
+                quality,
             } = built;
+            let state = quality_insert(state, quality.as_ref());
             let id = TriangulationId(self.next_triangulation_id);
             self.next_triangulation_id += 1;
             let name = crate::model::project::unique_item_name(name, self.triangulations.iter().map(|item| item.name.as_str()).chain(names.iter().map(String::as_str)));
@@ -412,6 +446,9 @@ impl<'a> App<'a> {
                     surface_type = format!("{surface_type:?}")
                 )
             );
+            if let Some(quality) = &quality {
+                userspace_log!("{}", tr!("cmd-session-quality-surface-hidden", name = name.clone(), quality = quality.label()));
+            }
             commands.push(Command::AddItem {
                 item: ItemRef::Triangulation(id),
                 index: first_index + ids.len(),
@@ -434,6 +471,8 @@ impl<'a> App<'a> {
                     always_show_edges: false,
                     depth_shade: None,
                     pattern_from: None,
+                    prismoid_grid: None,
+                    quality,
                 }))),
             });
             names.push(name);
@@ -492,6 +531,44 @@ impl<'a> App<'a> {
     }
 }
 
+/// A quality surface's state: hidden, as its height is not an RL.
+fn quality_insert(mut state: crate::model::project::ProjectItemState, quality: Option<&crate::model::triangulation::QualityMark>) -> crate::model::project::ProjectItemState {
+    if quality.is_some() {
+        state.hidden = true;
+    }
+    state
+}
+
+/// Refuse a quality surface where a tool takes RLs.
+pub(crate) fn refuse_quality(name: &str, quality: Option<&crate::model::triangulation::QualityMark>) -> Result<()> {
+    if let Some(quality) = quality {
+        anyhow::bail!("{}", tr!("cmd-session-quality-surface", name = name.to_owned(), quality = quality.label()));
+    }
+    Ok(())
+}
+
+/// The mark a surface made from two others carries: the first's, when both
+/// are heights or both one quality in one unit; refused when they differ. A
+/// blank unit is not known, so it agrees with any, and the unit given is kept.
+pub(crate) fn shared_quality(
+    (first, first_mark): (&str, Option<&crate::model::triangulation::QualityMark>),
+    (second, second_mark): (&str, Option<&crate::model::triangulation::QualityMark>),
+) -> Result<Option<crate::model::triangulation::QualityMark>> {
+    match (first_mark, second_mark) {
+        (None, None) => Ok(None),
+        (Some(mark), Some(other)) if mark.same_quality(other) && (mark.unit.trim() == other.unit.trim() || other.unit.trim().is_empty()) => Ok(Some(mark.clone())),
+        (Some(mark), Some(other)) if mark.same_quality(other) && mark.unit.trim().is_empty() => Ok(Some(other.clone())),
+        (Some(mark), _) => anyhow::bail!(
+            "{}",
+            tr!("cmd-session-mixed-qualities", name = first.to_owned(), quality = mark.label(), other = second.to_owned())
+        ),
+        (None, Some(mark)) => anyhow::bail!(
+            "{}",
+            tr!("cmd-session-mixed-qualities", name = second.to_owned(), quality = mark.label(), other = first.to_owned())
+        ),
+    }
+}
+
 /// Worker-thread half of a generated-triangulation apply: assemble the mesh,
 /// build its BVH and edge list. Pure (no `App`), so it can run off the UI
 /// thread; the result is handed to `insert_generated_triangulation`.
@@ -516,5 +593,6 @@ pub(crate) fn build_generated_triangulation(
         edges,
         surface_face_order,
         surface_type,
+        quality: None,
     })
 }

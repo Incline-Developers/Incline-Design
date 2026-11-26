@@ -128,7 +128,7 @@ impl App<'_> {
             let drawn = super::events::drawn_surfaces(
                 &self.editor,
                 false,
-                &self.triangulations,
+                crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                 &self.solid_view_body,
                 &self.reserves_scene,
                 &self.schedule_animation,

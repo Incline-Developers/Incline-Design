@@ -1,7 +1,7 @@
 use crate::{
     app::App,
     i18n::tr,
-    ui::state::{ActiveTool, DelayProduct, RECENT_FUNCTION_LIMIT, note_recent},
+    ui::state::{ActiveTool, DelayProduct, RECENT_FUNCTION_LIMIT, Workspace, note_recent},
     userspace_log, userspace_warn,
 };
 
@@ -16,6 +16,15 @@ impl<'a> App<'a> {
             userspace_warn!("{}", tr!("cmd-view-centre-rotation-not-available-flying"));
         } else {
             self.set_active_tool_from_toolbar(ActiveTool::PickRotationCentre);
+        }
+    }
+
+    /// Geology's viewport bar switch for the borehole inspector; the panel
+    /// only exists in Geology, so the key does nothing elsewhere.
+    pub(crate) fn toggle_borehole_inspector(&mut self) {
+        if self.editor.active_workspace == Workspace::Geology {
+            self.editor.show_borehole_inspector = !self.editor.show_borehole_inspector;
+            self.redraw_requested = true;
         }
     }
 
@@ -37,7 +46,7 @@ impl<'a> App<'a> {
             let drawn = crate::app::events::drawn_surfaces(
                 &self.editor,
                 self.showing_solid_preview(),
-                &self.triangulations,
+                crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
                 &self.solid_view_body,
                 &self.reserves_scene,
                 &self.schedule_animation,
@@ -292,7 +301,8 @@ impl<'a> App<'a> {
     /// Remember a menu function as just used and save the list with the rest
     /// of the config; no project is touched, so nothing turns dirty.
     pub(crate) fn note_recent_function(&mut self, row: crate::ui::elements::main_menu::MenuRow) -> anyhow::Result<()> {
-        if !note_recent(&mut self.editor.recent_functions, row) {
+        // Asked after the row's own command ran, which decided a tool's toggle.
+        if !row.kept_as_recent(&self.editor, self.workspace.has_active_project()) || !note_recent(&mut self.editor.recent_functions, row) {
             return Ok(());
         }
         crate::app::io::save_config(&config_from(
@@ -354,7 +364,7 @@ impl<'a> App<'a> {
         crate::app::events::drawn_surfaces(
             &self.editor,
             self.showing_solid_preview(),
-            &self.triangulations,
+            crate::app::commands::prismoid_grid::with_prismoid_scene(&self.triangulations, &self.prismoid_scene),
             &self.solid_view_body,
             &self.reserves_scene,
             &self.schedule_animation,

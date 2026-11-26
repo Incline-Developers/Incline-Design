@@ -10,6 +10,7 @@ pub(crate) mod arrangement;
 pub(crate) mod atomic_file;
 pub(crate) mod blast;
 pub(crate) mod block_model;
+pub(crate) mod control_checks;
 pub(crate) mod crs;
 pub(crate) mod drill_hole;
 pub(crate) mod folders;
@@ -17,6 +18,7 @@ pub(crate) mod forest;
 pub(crate) mod formats;
 pub(crate) mod geometry;
 pub(crate) mod geophysics;
+pub(crate) mod grid_surface;
 pub(crate) mod ground_filter;
 pub(crate) mod haulage;
 #[cfg(target_arch = "wasm32")]
@@ -32,14 +34,24 @@ pub(crate) mod optimization_run;
 pub(crate) mod pit_design;
 pub(crate) mod point_cloud;
 pub(crate) mod point_features;
+pub(crate) mod prismoid_grid;
 pub(crate) mod progress;
 pub(crate) mod project;
 pub(crate) mod raster;
+// Build Surface grids through `rbf_spans`, so the spline's own grid
+// calls and the whole-box `Lattice` have no caller. rbf.rs allows that
+// itself outside test builds.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) mod rbf;
+pub(crate) mod rbf_spans;
 pub(crate) mod schedule;
 pub(crate) mod simplify;
 pub(crate) mod solid_reserves;
 pub(crate) mod spatial;
+pub(crate) mod strat_order;
+pub(crate) mod string_clean;
 pub(crate) mod survey;
+pub(crate) mod thickness_points;
 pub(crate) mod triangulation;
 pub(crate) mod water;
 
@@ -97,6 +109,7 @@ pub(crate) enum SceneEntityId {
     /// surface is picked. Everything downstream that works on a selection can
     /// then reach it like any other entity.
     Raster(raster::RasterTextureId),
+    PrismoidGrid(prismoid_grid::PrismoidGridId),
     HaulRoad(haulage::RoadId),
     HaulNode(haulage::NodeId),
 }
@@ -126,6 +139,9 @@ pub(crate) struct Layer {
     /// Explorer section this layer is shown under.
     #[serde(default = "SectionKind::natural_layer", skip_serializing_if = "SectionKind::is_natural_layer")]
     pub(crate) section: SectionKind,
+    /// Set when the points' heights are a quality, not RLs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) quality: Option<triangulation::QualityMark>,
 }
 
 impl Layer {
@@ -1765,6 +1781,7 @@ impl Document {
             elevation,
             folder: None,
             section: SectionKind::natural_layer(),
+            quality: None,
         });
         self.touch();
         id
@@ -2346,7 +2363,7 @@ impl Document {
                         commands.push(unlink(solid.id, SolidEdit::BlockModel(Some(id)), SolidEdit::BlockModel(None)));
                     }
                 }
-                ItemRef::DrillHole(_) | ItemRef::PointCloud(_) | ItemRef::Raster(_) => {}
+                ItemRef::DrillHole(_) | ItemRef::PointCloud(_) | ItemRef::Raster(_) | ItemRef::PrismoidGrid(_) => {}
             }
         }
         commands
@@ -2393,6 +2410,15 @@ impl Document {
             self.touch();
         }
         true
+    }
+
+    pub(crate) fn set_layer_quality(&mut self, id: LayerId, quality: Option<triangulation::QualityMark>) {
+        if let Some(layer) = self.layers.iter_mut().find(|layer| layer.id == id)
+            && layer.quality != quality
+        {
+            layer.quality = quality;
+            self.touch();
+        }
     }
 
     /// Show a layer under `section`. Moving it clears the folder it was in.
@@ -2674,6 +2700,7 @@ impl Document {
                 layer.loaded.hash(&mut hasher);
                 layer.elevation.to_bits().hash(&mut hasher);
                 layer.section.hash(&mut hasher);
+                layer.quality.hash(&mut hasher);
                 layer.folder.and_then(|id| folders.name(layer.section, id)).hash(&mut hasher);
                 payloads.get(&layer.id).hash(&mut hasher);
                 (layer.id.0 & u64::from(u32::MAX), hasher.finish())
@@ -2684,7 +2711,7 @@ impl Document {
 
 /// A project-owned item that is not part of the design document: the things
 /// the explorer lists under Triangulations, Block Models, Drillholes, Point
-/// Clouds and Rasters.
+/// Clouds, Rasters and Prismoid Grids.
 ///
 /// [`SceneEntityId`] cannot serve here - rasters are project content but not
 /// scene entities, and design objects are document content rather than items -
@@ -2696,6 +2723,7 @@ pub(crate) enum ItemRef {
     DrillHole(drill_hole::DrillHoleId),
     PointCloud(point_cloud::PointCloudId),
     Raster(raster::RasterTextureId),
+    PrismoidGrid(prismoid_grid::PrismoidGridId),
 }
 
 impl ItemRef {
@@ -2706,6 +2734,7 @@ impl ItemRef {
             Self::DrillHole(_) => MemberKind::DrillHole,
             Self::PointCloud(_) => MemberKind::PointCloud,
             Self::Raster(_) => MemberKind::Raster,
+            Self::PrismoidGrid(_) => MemberKind::PrismoidGrid,
         }
     }
 
@@ -2717,6 +2746,7 @@ impl ItemRef {
             SceneEntityId::DrillHole(id) => Some(Self::DrillHole(id)),
             SceneEntityId::PointCloud(id) => Some(Self::PointCloud(id)),
             SceneEntityId::Raster(id) => Some(Self::Raster(id)),
+            SceneEntityId::PrismoidGrid(id) => Some(Self::PrismoidGrid(id)),
             SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_) => None,
         }
     }
@@ -2762,6 +2792,12 @@ pub(crate) enum ItemStyle {
     Raster {
         loaded: bool,
         hidden: bool,
+    },
+    PrismoidGrid {
+        loaded: bool,
+        hidden: bool,
+        color_by: prismoid_grid::PrismoidColorBy,
+        shaded: bool,
     },
 }
 
@@ -2814,13 +2850,23 @@ impl ItemStyle {
         }
     }
 
+    pub(crate) fn of_prismoid_grid(item: &prismoid_grid::OpenPrismoidGrid) -> Self {
+        Self::PrismoidGrid {
+            loaded: item.state.loaded,
+            hidden: item.state.hidden,
+            color_by: item.color_by.clone(),
+            shaded: item.shaded,
+        }
+    }
+
     pub(crate) fn loaded(&self) -> bool {
         match self {
             Self::Triangulation { loaded, .. }
             | Self::BlockModel { loaded, .. }
             | Self::DrillHole { loaded, .. }
             | Self::PointCloud { loaded, .. }
-            | Self::Raster { loaded, .. } => *loaded,
+            | Self::Raster { loaded, .. }
+            | Self::PrismoidGrid { loaded, .. } => *loaded,
         }
     }
 
@@ -2832,7 +2878,8 @@ impl ItemStyle {
             | Self::BlockModel { loaded, .. }
             | Self::DrillHole { loaded, .. }
             | Self::PointCloud { loaded, .. }
-            | Self::Raster { loaded, .. } => *loaded = value,
+            | Self::Raster { loaded, .. }
+            | Self::PrismoidGrid { loaded, .. } => *loaded = value,
         }
         self
     }
@@ -2843,7 +2890,8 @@ impl ItemStyle {
             | Self::BlockModel { hidden, .. }
             | Self::DrillHole { hidden, .. }
             | Self::PointCloud { hidden, .. }
-            | Self::Raster { hidden, .. } => *hidden,
+            | Self::Raster { hidden, .. }
+            | Self::PrismoidGrid { hidden, .. } => *hidden,
         }
     }
 
@@ -2855,17 +2903,18 @@ impl ItemStyle {
             | Self::BlockModel { hidden, .. }
             | Self::DrillHole { hidden, .. }
             | Self::PointCloud { hidden, .. }
-            | Self::Raster { hidden, .. } => *hidden = value,
+            | Self::Raster { hidden, .. }
+            | Self::PrismoidGrid { hidden, .. } => *hidden = value,
         }
         self
     }
 
     /// The same style with only its base colour changed. A raster has none:
-    /// its colours are its pixels.
+    /// its colours are its pixels. Nor has a prismoid grid yet.
     pub(crate) fn with_color(mut self, value: [f32; 4]) -> Self {
         match &mut self {
             Self::Triangulation { color, .. } | Self::BlockModel { color, .. } | Self::PointCloud { color, .. } => *color = value,
-            Self::DrillHole { .. } | Self::Raster { .. } => {}
+            Self::DrillHole { .. } | Self::Raster { .. } | Self::PrismoidGrid { .. } => {}
         }
         self
     }
@@ -2920,6 +2969,7 @@ impl ItemStyle {
                             })
                             .fold(0usize, usize::saturating_add)
                 }
+                Self::PrismoidGrid { color_by, .. } => color_by.value.as_ref().map_or(0, String::len),
                 _ => 0,
             }
     }
@@ -2935,6 +2985,7 @@ pub(crate) enum OpenItem {
     DrillHole(Box<drill_hole::OpenDrillHoleDataset>),
     PointCloud(Box<point_cloud::OpenPointCloud>),
     Raster(Box<raster::OpenRasterTexture>),
+    PrismoidGrid(Box<prismoid_grid::OpenPrismoidGrid>),
 }
 
 impl OpenItem {
@@ -2945,6 +2996,7 @@ impl OpenItem {
             Self::DrillHole(item) => ItemRef::DrillHole(item.id),
             Self::PointCloud(item) => ItemRef::PointCloud(item.id),
             Self::Raster(item) => ItemRef::Raster(item.id),
+            Self::PrismoidGrid(item) => ItemRef::PrismoidGrid(item.id),
         }
     }
 
@@ -2970,6 +3022,7 @@ impl OpenItem {
                     + item.colors.as_ref().map_or(0, |colors| colors.len() * size_of::<u32>())
             }
             Self::Raster(item) => size_of::<raster::OpenRasterTexture>() + item.name.len() + item.full_rgba.len() + item.rgba.len(),
+            Self::PrismoidGrid(item) => size_of::<prismoid_grid::OpenPrismoidGrid>() + item.name.len() + item.grid.estimated_bytes(),
         }
     }
 }
@@ -3020,6 +3073,7 @@ pub(crate) struct EditTarget<'a> {
     pub(crate) drill_holes: &'a mut Vec<drill_hole::OpenDrillHoleDataset>,
     pub(crate) point_clouds: &'a mut Vec<point_cloud::OpenPointCloud>,
     pub(crate) rasters: &'a mut Vec<raster::OpenRasterTexture>,
+    pub(crate) prismoid_grids: &'a mut Vec<prismoid_grid::OpenPrismoidGrid>,
     /// Accumulated by `apply`/`revert`; drained by the caller once the whole
     /// step is done, so one batch invalidates once.
     pub(crate) effects: StepEffects,
@@ -3060,10 +3114,17 @@ impl EditTarget<'_> {
     pub(crate) fn all_item_refs(&self) -> Vec<ItemRef> {
         let triangulations = self.triangulations.iter().map(|entry| ItemRef::Triangulation(entry.id));
         let rasters = self.rasters.iter().map(|entry| ItemRef::Raster(entry.id));
+        let prismoid_grids = self.prismoid_grids.iter().map(|entry| ItemRef::PrismoidGrid(entry.id));
         let point_clouds = self.point_clouds.iter().map(|entry| ItemRef::PointCloud(entry.id));
         let block_models = self.block_models.iter().map(|entry| ItemRef::BlockModel(entry.id));
         let drill_holes = self.drill_holes.iter().map(|entry| ItemRef::DrillHole(entry.id));
-        triangulations.chain(rasters).chain(point_clouds).chain(block_models).chain(drill_holes).collect()
+        triangulations
+            .chain(rasters)
+            .chain(prismoid_grids)
+            .chain(point_clouds)
+            .chain(block_models)
+            .chain(drill_holes)
+            .collect()
     }
 
     fn item_folder(&self, item: ItemRef) -> Option<FolderId> {
@@ -3121,6 +3182,7 @@ impl EditTarget<'_> {
             ItemRef::DrillHole(id) => self.drill_holes.iter().find(|entry| entry.id == id).map(|entry| &entry.state),
             ItemRef::PointCloud(id) => self.point_clouds.iter().find(|entry| entry.id == id).map(|entry| &entry.state),
             ItemRef::Raster(id) => self.rasters.iter().find(|entry| entry.id == id).map(|entry| &entry.state),
+            ItemRef::PrismoidGrid(id) => self.prismoid_grids.iter().find(|entry| entry.id == id).map(|entry| &entry.state),
         }
     }
 
@@ -3161,17 +3223,12 @@ impl EditTarget<'_> {
             ItemRef::DrillHole(id) => self.drill_holes.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.state),
             ItemRef::PointCloud(id) => self.point_clouds.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.state),
             ItemRef::Raster(id) => self.rasters.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.state),
+            ItemRef::PrismoidGrid(id) => self.prismoid_grids.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.state),
         }
     }
 
     fn item_epoch(&self, item: ItemRef) -> Option<u64> {
-        match item {
-            ItemRef::Triangulation(id) => self.triangulations.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
-            ItemRef::BlockModel(id) => self.block_models.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
-            ItemRef::DrillHole(id) => self.drill_holes.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
-            ItemRef::PointCloud(id) => self.point_clouds.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
-            ItemRef::Raster(id) => self.rasters.iter().find(|entry| entry.id == id).map(|entry| entry.state.epoch()),
-        }
+        self.item_state(item).map(project::ProjectItemState::epoch)
     }
 
     /// Mark one item and the project's content as changed, and report the
@@ -3212,6 +3269,7 @@ impl EditTarget<'_> {
             ItemRef::DrillHole(id) => self.drill_holes.iter().find(|entry| entry.id == id).map(ItemStyle::of_drill_hole),
             ItemRef::PointCloud(id) => self.point_clouds.iter().find(|entry| entry.id == id).map(ItemStyle::of_point_cloud),
             ItemRef::Raster(id) => self.rasters.iter().find(|entry| entry.id == id).map(ItemStyle::of_raster),
+            ItemRef::PrismoidGrid(id) => self.prismoid_grids.iter().find(|entry| entry.id == id).map(ItemStyle::of_prismoid_grid),
         }
     }
 
@@ -3302,6 +3360,14 @@ impl EditTarget<'_> {
                     changed = true;
                 }
             }
+            (ItemRef::PrismoidGrid(id), ItemStyle::PrismoidGrid { loaded, color_by, shaded, .. }) => {
+                if let Some(entry) = self.prismoid_grids.iter_mut().find(|entry| entry.id == id) {
+                    entry.state.loaded = *loaded;
+                    entry.color_by = color_by.clone();
+                    entry.shaded = *shaded;
+                    changed = true;
+                }
+            }
             _ => {}
         }
         if changed {
@@ -3326,6 +3392,7 @@ impl EditTarget<'_> {
             ItemRef::DrillHole(id) => self.drill_holes.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.name),
             ItemRef::PointCloud(id) => self.point_clouds.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.name),
             ItemRef::Raster(id) => self.rasters.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.name),
+            ItemRef::PrismoidGrid(id) => self.prismoid_grids.iter_mut().find(|entry| entry.id == id).map(|entry| &mut entry.name),
         };
         let Some(target) = target else {
             return;
@@ -3363,6 +3430,10 @@ impl EditTarget<'_> {
             ItemRef::Raster(id) => {
                 let index = self.rasters.iter().position(|entry| entry.id == id);
                 take(self.rasters, index).map(|(index, entry)| (index, OpenItem::Raster(Box::new(entry))))
+            }
+            ItemRef::PrismoidGrid(id) => {
+                let index = self.prismoid_grids.iter().position(|entry| entry.id == id);
+                take(self.prismoid_grids, index).map(|(index, entry)| (index, OpenItem::PrismoidGrid(Box::new(entry))))
             }
         };
         if taken.is_some() {
@@ -3449,6 +3520,30 @@ impl EditTarget<'_> {
         self.touch_item(ItemRef::DrillHole(dataset));
     }
 
+    /// Apply a set of interval corrections, or withdraw them when `apply` is
+    /// false. The dataset's revision carries the new values to its colours.
+    fn correct_intervals(&mut self, dataset: drill_hole::DrillHoleId, targets: &[drill_hole::CorrectionTarget], records: &[drill_hole::Correction], apply: bool) {
+        let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == dataset) else {
+            return;
+        };
+        let data = std::sync::Arc::make_mut(&mut entry.dataset);
+        if apply {
+            data.apply_corrections(targets, records);
+        } else {
+            data.withdraw_corrections(targets, records);
+        }
+        self.touch_item(ItemRef::DrillHole(dataset));
+    }
+
+    /// Write one side of a derived interval column edit.
+    fn write_interval_column(&mut self, dataset: drill_hole::DrillHoleId, column: &str, cells: &[(usize, usize, Option<drill_hole::DrillValue>)], derived: bool) {
+        let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == dataset) else {
+            return;
+        };
+        std::sync::Arc::make_mut(&mut entry.dataset).write_column(column, cells, derived);
+        self.touch_item(ItemRef::DrillHole(dataset));
+    }
+
     /// Write each named hole's charge, emptying those given `None`.
     fn write_charges(&mut self, dataset: drill_hole::DrillHoleId, charges: &[(usize, Option<blast::HoleCharge>)]) {
         let Some(entry) = self.drill_holes.iter_mut().find(|entry| entry.id == dataset) else {
@@ -3476,6 +3571,7 @@ impl EditTarget<'_> {
             OpenItem::DrillHole(entry) => self.drill_holes.insert(index.min(self.drill_holes.len()), *entry),
             OpenItem::PointCloud(entry) => self.point_clouds.insert(index.min(self.point_clouds.len()), *entry),
             OpenItem::Raster(entry) => self.rasters.insert(index.min(self.rasters.len()), *entry),
+            OpenItem::PrismoidGrid(entry) => self.prismoid_grids.insert(index.min(self.prismoid_grids.len()), *entry),
         }
         // The restored item keeps the epoch it was deleted with, so undoing a
         // delete of never-edited content leaves the project exactly as clean
@@ -3661,6 +3757,26 @@ pub(crate) enum Command {
         before: Option<drill_hole::Initiation>,
         after: Option<drill_hole::Initiation>,
     },
+    /// Propose corrections to drill-hole intervals: applying writes each
+    /// interpreted value and appends its record, reverting puts the value
+    /// back and withdraws the record.
+    CorrectIntervals {
+        dataset: drill_hole::DrillHoleId,
+        /// Where each record is written, in step: its hole and interval, and
+        /// for a boundary move the interval below that follows.
+        targets: Vec<drill_hole::CorrectionTarget>,
+        records: Vec<drill_hole::Correction>,
+    },
+    /// Write cells of an interval column a tool derives, such as true
+    /// thickness. Both sides name the same cells, `(hole, interval, value)`;
+    /// `derived` says whether the column was the tool's own before and after.
+    WriteIntervalColumn {
+        dataset: drill_hole::DrillHoleId,
+        column: String,
+        before: Vec<(usize, usize, Option<drill_hole::DrillValue>)>,
+        after: Vec<(usize, usize, Option<drill_hole::DrillValue>)>,
+        derived: (bool, bool),
+    },
     /// Load, reload or unload holes. Each side names the same holes: `before`
     /// is what they held (`None` for empty), `after` what they hold now.
     SetCharges {
@@ -3787,6 +3903,12 @@ impl Command {
                     .map(|tie| size_of::<drill_hole::TieIn>() + tie.product.len())
                     .fold(0usize, usize::saturating_add),
                 Command::SetInitiation { .. } => 0,
+                Command::CorrectIntervals { targets, records, .. } => {
+                    targets.len() * size_of::<drill_hole::CorrectionTarget>() + records.iter().map(drill_hole::Correction::estimated_bytes).fold(0usize, usize::saturating_add)
+                }
+                Command::WriteIntervalColumn { column, before, after, .. } => {
+                    column.len() + (before.len() + after.len()) * size_of::<(usize, usize, Option<drill_hole::DrillValue>)>()
+                }
                 Command::SetCharges { before, after, .. } => before
                     .iter()
                     .chain(after)
@@ -3903,6 +4025,8 @@ impl Command {
             | Self::RotateCollars { dataset, .. }
             | Self::SetTieIns { dataset, .. }
             | Self::SetInitiation { dataset, .. }
+            | Self::CorrectIntervals { dataset, .. }
+            | Self::WriteIntervalColumn { dataset, .. }
             | Self::SetCharges { dataset, .. } => into.push(ItemRef::DrillHole(*dataset)),
             // The swap lifts the resident version out, so it has to be there.
             Self::ReplaceItem { item, .. } => into.push(*item),
@@ -3945,6 +4069,8 @@ impl Command {
             | Command::RotateCollars { dataset, .. }
             | Command::SetTieIns { dataset, .. }
             | Command::SetInitiation { dataset, .. }
+            | Command::CorrectIntervals { dataset, .. }
+            | Command::WriteIntervalColumn { dataset, .. }
             | Command::SetCharges { dataset, .. } => {
                 let item = ItemRef::DrillHole(*dataset);
                 if !into.contains(&item) {
@@ -4125,6 +4251,10 @@ impl Command {
             Command::RotateCollars { dataset, originals, rotation } => target.rotate_collars(*dataset, originals, *rotation),
             Command::SetTieIns { dataset, before, after } => target.write_tie_ins(*dataset, before, after),
             Command::SetInitiation { dataset, before, after } => target.set_initiation(*dataset, *before, *after),
+            Command::CorrectIntervals { dataset, targets, records } => target.correct_intervals(*dataset, targets, records, true),
+            Command::WriteIntervalColumn {
+                dataset, column, after, derived, ..
+            } => target.write_interval_column(*dataset, column, after, derived.1),
             Command::SetCharges { dataset, after, .. } => target.write_charges(*dataset, after),
             Command::AddItem { item, index, added } => {
                 if let Some(added_item) = added.take() {
@@ -4290,6 +4420,10 @@ impl Command {
             // the edit touched are named by both of them.
             Command::SetTieIns { dataset, before, after } => target.write_tie_ins(*dataset, after, before),
             Command::SetInitiation { dataset, before, after } => target.set_initiation(*dataset, *after, *before),
+            Command::CorrectIntervals { dataset, targets, records } => target.correct_intervals(*dataset, targets, records, false),
+            Command::WriteIntervalColumn {
+                dataset, column, before, derived, ..
+            } => target.write_interval_column(*dataset, column, before, derived.0),
             Command::SetCharges { dataset, before, .. } => target.write_charges(*dataset, before),
             Command::AddItem { item, index, added } => {
                 if let Some((taken_index, taken)) = target.take_item(*item) {
@@ -4553,6 +4687,24 @@ impl History {
             items: Vec::new(),
         };
         self.push_entry(command, snapshot.clone(), snapshot, false);
+    }
+
+    /// [`Self::push_applied`] for one edit of a run that undoes as one step:
+    /// it extends the newest entry when `onto` is the revision the run's
+    /// previous push returned, so nothing has been recorded, undone or redone
+    /// since, and otherwise starts an entry of its own. Returns the revision
+    /// to pass as `onto` next time.
+    pub(crate) fn push_applied_merging(&mut self, project_epoch: u64, command: Command, onto: Option<u64>) -> u64 {
+        let continuing = onto == Some(self.archive_revision);
+        let snapshot = EpochSnapshot {
+            project: project_epoch,
+            items: Vec::new(),
+        };
+        self.open_run = continuing;
+        self.push_entry(command, snapshot.clone(), snapshot, continuing);
+        // The run is not a pointer gesture: no gesture may extend its entry.
+        self.open_run = false;
+        self.archive_revision
     }
 
     fn push_entry(&mut self, command: Command, before: EpochSnapshot, after: EpochSnapshot, continuing: bool) {

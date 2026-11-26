@@ -331,6 +331,22 @@ impl TriangleBvh {
         self.tree.get_or_init(|| built)
     }
 
+    /// Whether the tree can answer now, without starting a build.
+    pub(crate) fn is_built(&self) -> bool {
+        self.tree.get().is_some()
+    }
+
+    /// Claim the background build for the caller, so a query that asks for
+    /// one does not start a second. None when one is claimed already. A
+    /// claim dropped with no tree built, as by a job cancelled before it
+    /// ran, is handed back for the next ask.
+    pub(crate) fn claim_build(&self) -> Option<BuildClaim> {
+        (!self.building.swap(true, std::sync::atomic::Ordering::Relaxed)).then(|| BuildClaim {
+            tree: self.tree.clone(),
+            building: self.building.clone(),
+        })
+    }
+
     /// Build it now, ahead of work that would otherwise have every thread
     /// asking for it at once and each building its own.
     pub(crate) fn ensure_built(&self) {
@@ -393,6 +409,26 @@ impl TriangleBvh {
     /// is built, so leaf filtering does not have to refetch vertices.
     pub(crate) fn for_each_xy_bounds_candidate_index_with_stack(&self, min: DVec2, max: DVec2, stack: &mut Vec<usize>, visit: impl FnMut(usize)) {
         self.tree().for_each_xy_bounds_candidate_index_with_stack(min, max, stack, visit);
+    }
+
+    /// Visit triangle indices whose XY bounds a vertical plane may cross: the
+    /// plane through `point` with horizontal unit `normal`.
+    pub(crate) fn for_each_vertical_plane_candidate_index(&self, point: DVec3, normal: DVec3, visit: impl FnMut(usize)) {
+        self.tree().for_each_vertical_plane_candidate_index(point, normal, visit);
+    }
+}
+
+/// A tree's background build, claimed by [`TriangleBvh::claim_build`].
+pub(crate) struct BuildClaim {
+    tree: std::sync::Arc<std::sync::OnceLock<TriangleTree>>,
+    building: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for BuildClaim {
+    fn drop(&mut self) {
+        if self.tree.get().is_none() {
+            self.building.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 }
 
@@ -652,6 +688,45 @@ impl TriangleTree {
         }
     }
 
+    /// Visit triangle indices whose XY bounds a vertical plane may cross: the
+    /// plane through `point` with horizontal unit `normal`. Pruned node by
+    /// node like the rectangle query above, so a section through a big mesh
+    /// reads only the strip of it the plane passes.
+    fn for_each_vertical_plane_candidate_index(&self, point: DVec3, normal: DVec3, mut visit: impl FnMut(usize)) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        let local = point - self.origin;
+        let tol = crate::model::kernel::XY_TOL;
+        // A box straddles the plane when its centre is no farther from it
+        // than the box reaches along the normal.
+        let crosses = |min: [f32; 2], max: [f32; 2]| {
+            let (min_x, min_y, max_x, max_y) = (f64::from(min[0]), f64::from(min[1]), f64::from(max[0]), f64::from(max[1]));
+            let centre = (0.5 * (min_x + max_x) - local.x) * normal.x + (0.5 * (min_y + max_y) - local.y) * normal.y;
+            let reach = 0.5 * ((max_x - min_x) * normal.x.abs() + (max_y - min_y) * normal.y.abs());
+            centre.abs() <= reach + tol
+        };
+        let mut stack = vec![0];
+        while let Some(index) = stack.pop() {
+            let node = self.nodes[index];
+            if !crosses([node.min[0], node.min[1]], [node.max[0], node.max[1]]) {
+                continue;
+            }
+            if node.count > 0 {
+                let start = node.right_child_or_start as usize;
+                for &triangle_index in &self.order[start..start + node.count as usize] {
+                    let bounds = self.xy_bounds[triangle_index as usize];
+                    if crosses(bounds.min, bounds.max) {
+                        visit(triangle_index as usize);
+                    }
+                }
+            } else {
+                stack.push(node.right_child_or_start as usize);
+                stack.push(index + 1);
+            }
+        }
+    }
+
     fn node_min(&self, node: &TriNode) -> DVec3 {
         self.origin + DVec3::new(node.min[0] as f64, node.min[1] as f64, node.min[2] as f64)
     }
@@ -855,7 +930,9 @@ fn ray_box(origin: DVec3, direction: DVec3, min: DVec3, max: DVec3, limit: f64) 
     true
 }
 
-fn ray_triangle(origin: DVec3, direction: DVec3, triangle: [DVec3; 3]) -> Option<f64> {
+/// How far along the ray from `origin` it meets `triangle`, either face;
+/// `None` when it misses or runs edge on.
+pub(crate) fn ray_triangle(origin: DVec3, direction: DVec3, triangle: [DVec3; 3]) -> Option<f64> {
     let edge1 = triangle[1] - triangle[0];
     let edge2 = triangle[2] - triangle[0];
     let p = direction.cross(edge2);

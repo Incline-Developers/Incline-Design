@@ -292,6 +292,9 @@ pub(crate) struct LogTrace {
     /// The curve mnemonic this trace was read from, e.g. `"GAMM"`. Empty
     /// unless set with [`LogTrace::with_source`].
     source: String,
+    /// The [`curve_key`] a read joined a curve the log does not draw by
+    /// itself under. Empty unless set with [`LogTrace::with_key`].
+    key: String,
 }
 
 impl LogTrace {
@@ -399,6 +402,7 @@ impl LogTrace {
             pyramid,
             robust,
             source: String::new(),
+            key: String::new(),
         })
     }
 
@@ -603,11 +607,17 @@ impl LogTrace {
         &self.source
     }
 
+    /// Attach the [`curve_key`] the trace was joined under.
+    pub(crate) fn with_key(mut self, key: impl Into<String>) -> Self {
+        self.key = key.into();
+        self
+    }
+
     pub(crate) fn memory_bytes(&self) -> usize {
         let values_bytes = self.values.capacity() * std::mem::size_of::<u16>();
         let pyramid_bytes: usize = self.pyramid.iter().map(|level| level.capacity() * std::mem::size_of::<(u16, u16)>()).sum();
         let pyramid_vec_overhead = self.pyramid.capacity() * std::mem::size_of::<Vec<(u16, u16)>>();
-        std::mem::size_of::<Self>() + values_bytes + pyramid_bytes + pyramid_vec_overhead + self.source.capacity()
+        std::mem::size_of::<Self>() + values_bytes + pyramid_bytes + pyramid_vec_overhead + self.source.capacity() + self.key.capacity()
     }
 }
 
@@ -657,9 +667,31 @@ impl HoleLogs {
         &self.traces
     }
 
+    /// The trace of the curve named `name`, among those the log does not
+    /// draw by itself.
+    pub(crate) fn curve(&self, name: &str) -> Option<&LogTrace> {
+        self.traces.iter().find(|trace| trace.kind().is_none() && same_curve(&trace.key, name))
+    }
+
     pub(crate) fn memory_bytes(&self) -> usize {
         size_of::<Self>() + self.traces.iter().map(LogTrace::memory_bytes).sum::<usize>()
     }
+}
+
+/// A curve header as a read joins curves by: case and surrounding spaces
+/// aside.
+fn folded(header: &str) -> impl Iterator<Item = char> + '_ {
+    header.trim().chars().flat_map(char::to_lowercase)
+}
+
+/// The key a read joins the curves of a header under.
+pub(crate) fn curve_key(header: &str) -> String {
+    folded(header).collect()
+}
+
+/// Whether two headers, or a header and a [`curve_key`], are one curve.
+pub(crate) fn same_curve(a: &str, b: &str) -> bool {
+    folded(a).eq(folded(b))
 }
 
 /// A hole's rows past this many bytes are not read: tens of thousands of
@@ -671,11 +703,22 @@ pub(crate) const MAX_HOLE_BYTES: u64 = 256 * 1024 * 1024;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct GeophysicsLink {
     /// In the order they were read: a later file adds only depths an
-    /// earlier one has no reading at.
+    /// earlier one has no reading at. [`Self::settle`] after a change.
     pub(crate) files: Vec<LinkedFile>,
+    /// See [`Self::curve_names`]. Worked out by [`Self::settle`], not
+    /// saved: the log reads it every frame, and a shared link never changes.
+    #[serde(skip)]
+    curve_names: Vec<String>,
 }
 
 impl GeophysicsLink {
+    /// A link of `files`, settled.
+    pub(crate) fn new(files: Vec<LinkedFile>) -> Self {
+        let mut link = Self { files, curve_names: Vec::new() };
+        link.settle();
+        link
+    }
+
     /// The runs of `dhid`'s rows, by file, in the order they are read.
     pub(crate) fn runs_of<'a>(&'a self, dhid: &'a str) -> impl Iterator<Item = (usize, [u64; 2])> + 'a {
         self.files
@@ -686,6 +729,24 @@ impl GeophysicsLink {
 
     pub(crate) fn holds(&self, dhid: &str) -> bool {
         self.files.iter().any(|file| file.hole(dhid).is_some())
+    }
+
+    /// The curves the log does not draw by itself, named as the first file
+    /// carrying each spells it, in file and column order.
+    pub(crate) fn curve_names(&self) -> &[String] {
+        &self.curve_names
+    }
+
+    /// Whether `dhid` has readings of the curve named `name` in any file.
+    pub(crate) fn has_curve(&self, dhid: &str, name: &str) -> bool {
+        self.files.iter().any(|file| {
+            file.hole(dhid).is_some_and(|hole| {
+                file.columns
+                    .iter()
+                    .enumerate()
+                    .any(|(index, column)| column.role == (ColumnRole::Curve { kind: None }) && hole.curves.contains(index) && same_curve(&column.header, name))
+            })
+        })
     }
 
     /// Which drawn curves `dhid` has readings for, by [`LogKind::index`],
@@ -710,11 +771,19 @@ impl GeophysicsLink {
             .reduce(|[top, bottom], [from, to]| [top.min(from), bottom.max(to)])
     }
 
-    /// Put the holes back in the order lookups rely on, whatever wrote them.
-    pub(crate) fn sort(&mut self) {
+    /// Put the holes back in the order lookups rely on, whatever wrote them,
+    /// and list the curves again.
+    pub(crate) fn settle(&mut self) {
         for file in &mut self.files {
             file.holes.sort_unstable_by(|a, b| a.dhid.cmp(&b.dhid));
         }
+        let mut names: Vec<String> = Vec::new();
+        for column in self.files.iter().flat_map(|file| &file.columns) {
+            if column.role == (ColumnRole::Curve { kind: None }) && !names.iter().any(|name| same_curve(name, &column.header)) {
+                names.push(column.header.trim().to_owned());
+            }
+        }
+        self.curve_names = names;
     }
 }
 

@@ -1861,6 +1861,7 @@ dependencies = [
  "js-sys",
  "laz",
  "libc",
+ "libm",
  "log",
  "lyon",
  "memmap2",

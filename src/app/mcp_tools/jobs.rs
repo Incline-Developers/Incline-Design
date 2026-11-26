@@ -405,6 +405,7 @@ impl App<'_> {
             MadeItem::Item(ItemRef::DrillHole(id)) => ("drillholes", id.0, named(self.drill_holes.iter().find(|item| item.id == id).map(|item| &item.name))),
             MadeItem::Item(ItemRef::PointCloud(id)) => ("point_cloud", id.0, named(self.point_clouds.iter().find(|item| item.id == id).map(|item| &item.name))),
             MadeItem::Item(ItemRef::Raster(id)) => ("raster", id.0, named(self.raster_textures.iter().find(|item| item.id == id).map(|item| &item.name))),
+            MadeItem::Item(ItemRef::PrismoidGrid(id)) => ("prismoid_grid", id.0, named(self.prismoid_grids.iter().find(|item| item.id == id).map(|item| &item.name))),
             MadeItem::Layer(id) => (
                 "design_layer",
                 id.0,

@@ -221,7 +221,15 @@ impl App<'_> {
         if let Some(missing) = points.iter().chain(&controls).chain(&extent).find(|id| document.get_object(**id).is_none()) {
             return Err(format!("There is no design object with id {} in a loaded layer.", missing.0));
         }
-        self.mcp_do(UiCommand::BuildReferenceSurface { points, controls, extent })?;
+        let name = self.reference_surface_name(&points);
+        let spacing = self.editor.reference_surface_spacing;
+        self.mcp_do(UiCommand::BuildReferenceSurface {
+            points,
+            controls,
+            extent,
+            spacing,
+            name,
+        })?;
         Ok(json!({ "started": true }))
     }
 

@@ -1,10 +1,11 @@
-use glam::DVec3;
+use glam::{DVec2, DVec3};
 
 use crate::{
     app::App,
     i18n::tr,
     logging::CommandReportSpec,
     model::{Command, Object, ObjectId, PolyVertex, SceneEntityId},
+    rendering::camera::SectionSlab,
     ui::state::{ActiveTool, RelimitCandidate, RelimitMode, TrimEnd},
     userspace_warn,
 };
@@ -118,6 +119,12 @@ impl<'a> App<'a> {
         let Some(Object::Polyline { verts, closed: false, .. }) = self.active_document().get_object(source_id) else {
             return Vec::new();
         };
+        if let Some(slab) = self.drawing_section() {
+            return self
+                .active_document()
+                .get_object(target_id)
+                .map_or_else(Vec::new, |target| section_candidates(verts, target, slab));
+        }
         let target = match self.active_document().get_object(target_id) {
             Some(Object::Polyline { verts, closed, .. }) if verts.len() >= 2 => RelimitBoundary::Polyline {
                 points: crate::model::geometry::tessellate_polyline_bulges(verts, *closed),
@@ -298,6 +305,34 @@ struct RelimitWorldCandidate {
 enum RelimitBoundary {
     Polyline { points: Vec<DVec3>, closed: bool },
     Circle { center: DVec3, radius: f64 },
+    Runs(Vec<(DVec2, DVec2)>),
+}
+
+/// [`relimit_world_candidates`] on a section, worked in its frame against
+/// the runs of `target` the slab draws, so only what is shown stops a line;
+/// a circle is cut as its two-arc string (`Object::string_geometry`).
+fn section_candidates(source: &[PolyVertex], target: &Object, slab: SectionSlab) -> Vec<RelimitWorldCandidate> {
+    let Some((verts, closed)) = target.string_geometry() else {
+        return Vec::new();
+    };
+    let runs = (0..super::insert_point::edge_count(&verts, closed))
+        .flat_map(|edge| super::insert_point::slab_runs(&verts, edge, slab))
+        .map(|(a, b, ..)| (a, b))
+        .collect();
+    let frame: Vec<PolyVertex> = source
+        .iter()
+        .map(|vertex| PolyVertex {
+            pos: slab.frame_coords(vertex.pos),
+            ..*vertex
+        })
+        .collect();
+    relimit_world_candidates(&frame, &RelimitBoundary::Runs(runs))
+        .into_iter()
+        .map(|candidate| RelimitWorldCandidate {
+            target: slab.world_from_frame(candidate.target),
+            ..candidate
+        })
+        .collect()
 }
 
 impl RelimitBoundary {
@@ -319,6 +354,10 @@ impl RelimitBoundary {
                     })
                     .collect()
             }
+            Self::Runs(runs) => runs
+                .iter()
+                .filter_map(|&(c, d)| line_line_intersect_t(a.truncate(), b.truncate(), c, d).map(|t| (t, a + t * (b - a))))
+                .collect(),
             Self::Circle { center, radius } => {
                 if !center.is_finite() || !radius.is_finite() || *radius <= 0.0 {
                     return Vec::new();

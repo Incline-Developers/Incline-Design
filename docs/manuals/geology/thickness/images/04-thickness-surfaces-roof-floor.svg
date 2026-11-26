@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 300" width="540" height="300" role="img" aria-label="Geology workspace, section view looking north: A Roof plane above and the new A Floor below, 2 m apart under hole S1, S2 and S3">
+  <line x1="60" y1="40" x2="60" y2="250" stroke="#000" stroke-width="1"/>
+  <line x1="60" y1="250" x2="470" y2="250" stroke="#000" stroke-width="1"/>
+  <g stroke="#000" stroke-width="1" fill="#ccc">
+    <rect x="76" y="90" width="8" height="40"/><rect x="256" y="130" width="8" height="40"/><rect x="436" y="170" width="8" height="40"/>
+  </g>
+  <g stroke="#000" stroke-width="1">
+    <line x1="80" y1="50" x2="80" y2="235"/><line x1="260" y1="50" x2="260" y2="235"/><line x1="440" y1="50" x2="440" y2="235"/>
+  </g>
+  <polyline points="80,90 440,170" stroke="#000" stroke-width="1" fill="none"/>
+  <polyline points="80,130 440,210" stroke="#d9622b" stroke-width="3" fill="none"/>
+  <g font-family="sans-serif" font-size="13" fill="#000" text-anchor="middle">
+    <text x="52" y="94" text-anchor="end">80</text><text x="52" y="134" text-anchor="end">78</text><text x="52" y="214" text-anchor="end">74</text>
+    <text x="80" y="268">1000</text><text x="260" y="268">1100</text><text x="440" y="268">1200</text>
+    <text x="265" y="288">X (m)</text>
+    <text x="30" y="150" transform="rotate(-90 30 150)">RL (m)</text>
+    <text x="80" y="46" font-size="15">S1</text><text x="260" y="46" font-size="15">S3 (projected)</text><text x="440" y="46" font-size="15">S2</text>
+  </g>
+  <g font-family="sans-serif" font-size="13" fill="#000">
+    <text x="450" y="166">A Roof plane</text>
+    <text x="450" y="214">A Floor</text>
+  </g>
+</svg>

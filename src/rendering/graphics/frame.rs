@@ -22,13 +22,7 @@ fn main_scene_cache_key(
 ) -> u64 {
     use std::hash::{DefaultHasher, Hash, Hasher};
     let mut hasher = DefaultHasher::new();
-    slice_preview::slice_preview_scene_key(editor, document, triangulations, block_models, drill_holes, point_clouds, rasters).hash(&mut hasher);
-    // Every other item kind reaches the key above by the identity of the data
-    // it is holding, but a drill hole dataset is edited in place - laying a
-    // tie, turning a collar - so nothing about it here would change. Its
-    // instance cache has already been resynced by the time this runs, and it
-    // reports what it is holding: see `DrillHoleGpuCache::content_key`.
-    drill_hole_content_key.hash(&mut hasher);
+    slice_preview::slice_preview_scene_key(editor, document, triangulations, block_models, drill_holes, point_clouds, rasters, drill_hole_content_key).hash(&mut hasher);
     EditorSceneState::of(editor).hash(&mut hasher);
     hasher.write(bytemuck::bytes_of(camera_uniform));
     hasher.finish()
@@ -70,6 +64,14 @@ struct EditorSceneState {
     /// either chunk-debug view on has to force one.
     debug_surface_chunks: bool,
     debug_point_cloud_chunks: bool,
+    /// The model envelope's outline is rebuilt by the scene pass too.
+    model_envelope: Option<[u64; 7]>,
+    /// The revision of the picked prismoids' outline, which the scene pass
+    /// rebuilds; only in Geology, where it is drawn.
+    cell_selection: Option<u64>,
+    /// The key of the outline round the prismoids masked by hand, rebuilt by
+    /// the scene pass as well.
+    masked_cell_outline: Option<u64>,
 }
 
 impl EditorSceneState {
@@ -87,6 +89,13 @@ impl EditorSceneState {
             colors_points_by_classification: editor.colors_points_by_classification(),
             debug_surface_chunks: editor.debug_surface_chunks,
             debug_point_cloud_chunks: editor.debug_point_cloud_chunks,
+            model_envelope: passes::shown_model_envelope(editor).map(|envelope| envelope.bits()),
+            cell_selection: editor
+                .cell_selection
+                .as_ref()
+                .filter(|_| editor.active_workspace == crate::ui::state::Workspace::Geology)
+                .map(|selection| selection.revision),
+            masked_cell_outline: editor.masked_cell_outline.as_ref().map(|(key, _)| *key),
         }
     }
 }
@@ -332,6 +341,8 @@ impl<'a> Graphics<'a> {
             editor.measurement_start,
             editor.measurement_end,
             editor.batter_angle_points.clone(),
+            // A workspace switch puts the hovered segment's highlight down.
+            editor.reads_segment_hover(),
         );
         if measurement_state != self.cached_measurement_state {
             self.cached_measurement_state = measurement_state;
@@ -340,6 +351,45 @@ impl<'a> Graphics<'a> {
         if editor.poly_finish_dialog != self.cached_poly_finish_dialog {
             self.cached_poly_finish_dialog = editor.poly_finish_dialog;
             self.overlay_dirty = true;
+        }
+        let thin_preview = editor.thin_strings_dialog.as_ref().map(|dialog| dialog.preview_generation);
+        if thin_preview != self.cached_thin_preview {
+            self.cached_thin_preview = thin_preview;
+            self.overlay_dirty = true;
+        }
+
+        if self.section_surface.refresh(self.scene_origin, scale_factor) {
+            Self::upload_instance_stream(
+                &self.device,
+                &self.queue,
+                &mut self.section_surface_gpu,
+                &mut self.section_surface_capacity,
+                self.section_surface.strokes_mut(),
+                "Section Surface Line Buffer",
+            );
+        }
+        if self.section_cells.refresh(self.scene_origin, self.camera.forward()) && !self.section_cells.indices().is_empty() {
+            let (vertices, indices) = (self.section_cells.vertices(), self.section_cells.indices());
+            Self::ensure_stream_capacity(
+                &self.device,
+                &mut self.section_cell_vertex_gpu,
+                &mut self.section_cell_vertex_capacity,
+                vertices.len(),
+                size_of::<Vertex>(),
+                wgpu::BufferUsages::VERTEX,
+                "Section Cell Vertex Buffer",
+            );
+            Self::ensure_stream_capacity(
+                &self.device,
+                &mut self.section_cell_index_gpu,
+                &mut self.section_cell_index_capacity,
+                indices.len(),
+                size_of::<u32>(),
+                wgpu::BufferUsages::INDEX,
+                "Section Cell Index Buffer",
+            );
+            self.queue.write_buffer(&self.section_cell_vertex_gpu, 0, bytemuck::cast_slice(vertices));
+            self.queue.write_buffer(&self.section_cell_index_gpu, 0, bytemuck::cast_slice(indices));
         }
 
         if self.overlay_dirty {
@@ -634,7 +684,14 @@ impl Graphics<'_> {
             &editor.hidden_handles,
             self.scene_origin,
             scale_factor,
-            editor.active_tool == crate::ui::state::ActiveTool::DeletePoints,
+            editor.show_points
+                || matches!(
+                    editor.active_tool,
+                    crate::ui::state::ActiveTool::DeletePoints
+                        | crate::ui::state::ActiveTool::EditVertex
+                        | crate::ui::state::ActiveTool::InsertPoint
+                        | crate::ui::state::ActiveTool::FillSegment
+                ),
             self.geometry_dirty || self.cached_document_revision != document.revision(),
         );
         // Selection, hover and translucency only restyle: the shaders read

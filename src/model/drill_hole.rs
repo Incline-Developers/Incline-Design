@@ -28,6 +28,8 @@ pub(crate) const COLLAR_MARKER_FILL_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
 /// How many stops a numeric ramp may carry. A limit on the ramp only: a
 /// categorical field colours every code it has.
 pub(crate) const MAX_DRILL_COLOR_STOPS: usize = 12;
+/// The fewest stops a ramp may carry.
+pub(crate) const MIN_DRILL_COLOR_STOPS: usize = 2;
 /// Distinct codes above which a categorical column is named on load as
 /// likely free text. Nothing is dropped at any count.
 pub(crate) const WIDE_CATEGORY_FIELD_HINT: usize = 256;
@@ -101,23 +103,32 @@ pub(crate) struct TraceStation {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) enum DrillValue {
-    Numeric(f64),
+    Numeric(#[serde(with = "stored::number")] f64),
     Category(String),
 }
 
 /// One interval as the site logged it, and its identity within its hole.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct LoggedInterval {
+    #[serde(with = "stored::number")]
     pub(crate) from: f64,
+    #[serde(with = "stored::number")]
     pub(crate) to: f64,
     pub(crate) values: BTreeMap<String, DrillValue>,
+    /// The site logged nothing here: the interval was inserted by a
+    /// correction, `from` and `to` are the depths it went in at and stay its
+    /// identity, and `values` is empty.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) never_logged: bool,
 }
 
 /// One interval as interpreted: what every reader, colour and section sees.
 /// `logged` is what the site sent, or `None` when nothing has parted them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DrillInterval {
+    #[serde(with = "stored::number")]
     pub(crate) from: f64,
+    #[serde(with = "stored::number")]
     pub(crate) to: f64,
     pub(crate) values: BTreeMap<String, DrillValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -136,6 +147,435 @@ impl DrillInterval {
         self.logged
             .as_ref()
             .is_some_and(|logged| logged.from != self.from || logged.to != self.to || logged.values != self.values)
+    }
+
+    /// Whether a correction inserted the interval where the site logged
+    /// nothing.
+    pub(crate) fn is_never_logged(&self) -> bool {
+        self.logged.as_ref().is_some_and(|logged| logged.never_logged)
+    }
+
+    /// Set the as-logged interval aside, the first time a correction is
+    /// about to part the two.
+    fn keep_logged(&mut self) {
+        if self.logged.is_none() {
+            self.logged = Some(LoggedInterval {
+                from: self.from,
+                to: self.to,
+                values: self.values.clone(),
+                never_logged: false,
+            });
+        }
+    }
+}
+
+/// What a correction does to an interval.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum CorrectionKind {
+    /// A code or a name changes.
+    Value,
+    /// A from or a to moves.
+    Boundary,
+    /// An interval is added where nothing was logged.
+    Insertion,
+    /// An interval, logged or inserted, leaves the interpreted data; its
+    /// ground reads as not logged.
+    Deletion,
+}
+
+/// Where a correction stands on its way back to the site's database.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum CorrectionStatus {
+    Proposed,
+    Approved,
+    Denied,
+    Sent,
+    Confirmed,
+    Flagged,
+}
+
+/// One change to one interval of one hole, kept whatever is decided about it.
+/// The interval is named by its hole and its as-logged from and to, which a
+/// correction never moves.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Correction {
+    pub(crate) hole: String,
+    #[serde(with = "stored::number")]
+    pub(crate) logged_from: f64,
+    #[serde(with = "stored::number")]
+    pub(crate) logged_to: f64,
+    pub(crate) kind: CorrectionKind,
+    pub(crate) field: String,
+    #[serde(default)]
+    pub(crate) before: Option<DrillValue>,
+    #[serde(default)]
+    pub(crate) after: Option<DrillValue>,
+    pub(crate) author: String,
+    pub(crate) date: String,
+    pub(crate) reason: String,
+    pub(crate) status: CorrectionStatus,
+    /// Filled when a decision is made; empty until then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) approver: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) decision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) decided: Option<String>,
+    /// For an insertion that puts its row in, the whole row: every value it
+    /// holds, fixed when the insertion is proposed. Other records name none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) row: Option<BTreeMap<String, DrillValue>>,
+    /// For a deletion, the interval it takes out, whole: its depths, every
+    /// value it holds and its logged side, so undo puts it back exactly and
+    /// what was logged stays in the record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) removed: Option<DrillInterval>,
+}
+
+/// Numbers of drill-hole values and depths as a file holds them. JSON has no
+/// NaN or infinity, so such a number is written as its text and read back
+/// from it, and a null an earlier save left reads as NaN: a row survives a
+/// save whatever it holds. Finite values keep the shape they always had.
+mod stored {
+    pub(super) mod number {
+        use std::fmt;
+
+        use serde::{Deserializer, Serializer, de};
+
+        pub(crate) fn serialize<S: Serializer>(number: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+            match *number {
+                number if number.is_finite() => serializer.serialize_f64(number),
+                number if number.is_nan() => serializer.serialize_str("NaN"),
+                number if number > 0.0 => serializer.serialize_str("inf"),
+                _ => serializer.serialize_str("-inf"),
+            }
+        }
+
+        pub(crate) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+            deserializer.deserialize_any(Number)
+        }
+
+        /// Reads a number as [`serialize`] writes it, and a null as NaN. Any
+        /// other text is no number, and the record holding it is not read.
+        struct Number;
+
+        impl de::Visitor<'_> for Number {
+            type Value = f64;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a number, \"NaN\", \"inf\", \"-inf\" or null")
+            }
+
+            fn visit_f64<E: de::Error>(self, number: f64) -> Result<f64, E> {
+                Ok(number)
+            }
+
+            fn visit_i64<E: de::Error>(self, number: i64) -> Result<f64, E> {
+                Ok(number as f64)
+            }
+
+            fn visit_u64<E: de::Error>(self, number: u64) -> Result<f64, E> {
+                Ok(number as f64)
+            }
+
+            fn visit_str<E: de::Error>(self, text: &str) -> Result<f64, E> {
+                match text {
+                    "NaN" => Ok(f64::NAN),
+                    "inf" => Ok(f64::INFINITY),
+                    "-inf" => Ok(f64::NEG_INFINITY),
+                    _ => Err(E::custom(format!("not a number: {text:?}"))),
+                }
+            }
+
+            fn visit_unit<E: de::Error>(self) -> Result<f64, E> {
+                Ok(f64::NAN)
+            }
+
+            fn visit_none<E: de::Error>(self) -> Result<f64, E> {
+                Ok(f64::NAN)
+            }
+        }
+    }
+}
+
+impl Correction {
+    /// Roughly how much memory the record holds: its text, the codes before
+    /// and after, the decision fields and any row it holds.
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        let decided = [&self.approver, &self.decision, &self.decided].into_iter().flatten().map(String::len);
+        [
+            size_of::<Self>(),
+            self.hole.len(),
+            self.field.len(),
+            self.before.as_ref().map_or(0, value_bytes),
+            self.after.as_ref().map_or(0, value_bytes),
+            self.author.len(),
+            self.date.len(),
+            self.reason.len(),
+            self.row.as_ref().map_or(0, values_bytes),
+            self.removed.as_ref().map_or(0, |removed| {
+                values_bytes(&removed.values) + removed.logged.as_ref().map_or(0, |logged| values_bytes(&logged.values))
+            }),
+        ]
+        .into_iter()
+        .chain(decided)
+        .fold(0usize, usize::saturating_add)
+    }
+
+    /// A proposed correction to the interval of hole `hole` logged from
+    /// `logged.0` to `logged.1`, as `note` sets it out.
+    pub(crate) fn proposed(hole: &str, logged: (f64, f64), kind: CorrectionKind, field: &str, before: DrillValue, after: DrillValue, note: &CorrectionNote) -> Self {
+        Self {
+            hole: hole.to_owned(),
+            logged_from: logged.0,
+            logged_to: logged.1,
+            kind,
+            field: field.to_owned(),
+            before: Some(before),
+            after: Some(after),
+            author: note.author.clone(),
+            date: note.date.clone(),
+            reason: note.reason.clone(),
+            status: CorrectionStatus::Proposed,
+            approver: None,
+            decision: None,
+            decided: None,
+            row: None,
+            removed: None,
+        }
+    }
+}
+
+/// Records that met one outcome in an edit, counted for a single warning that
+/// names the first of them.
+#[derive(Default)]
+struct Tally<'a> {
+    count: usize,
+    first: Option<&'a Correction>,
+}
+
+impl<'a> Tally<'a> {
+    fn add(&mut self, record: &'a Correction) {
+        self.count += 1;
+        self.first.get_or_insert(record);
+    }
+
+    /// The count, and the first record's hole and logged depths as a message
+    /// names them; `None` when nothing was counted.
+    fn first(&self) -> Option<(usize, String, String, String)> {
+        self.first
+            .map(|record| (self.count, record.hole.clone(), format!("{:.2}", record.logged_from), format!("{:.2}", record.logged_to)))
+    }
+}
+
+/// Which intervals a seam rename reaches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RenameScope {
+    /// One horizon of one hole: the block the log draws around interval
+    /// `interval` of hole `hole`, that interval and the touching intervals
+    /// either side holding the same name. Same-named horizons elsewhere in
+    /// the hole are not reached.
+    Horizon { hole: usize, interval: usize },
+    /// Every hole of the set.
+    Set,
+}
+
+/// Who proposed a correction, when and why.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct CorrectionNote {
+    pub(crate) author: String,
+    pub(crate) date: String,
+    pub(crate) reason: String,
+}
+
+impl CorrectionNote {
+    /// A note dated now giving `reason`. The author stays empty until the
+    /// project names a current author.
+    pub(crate) fn now(reason: String) -> Self {
+        Self {
+            author: String::new(),
+            date: chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+            reason,
+        }
+    }
+}
+
+/// The field a floor move names: the to of the interval it is keyed on.
+/// Its before and after are depths.
+pub(crate) const FLOOR_FIELD: &str = "to";
+
+/// How near two depths are to count as one boundary, as the importer joins
+/// rows.
+const TOUCH_TOLERANCE: f64 = 1.0e-9;
+/// The field a roof moved alone names: the from of the interval it is
+/// keyed on.
+pub(crate) const ROOF_FIELD: &str = "from";
+
+/// Which edge of an interval a boundary move takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BoundarySide {
+    Roof,
+    Floor,
+}
+
+/// A roof or floor move asked for in one hole: the hole by index and by
+/// name, the interval and side picked, the boundary's depth when it was
+/// picked, and the depth it moves to.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BoundaryMove {
+    pub(crate) hole: usize,
+    pub(crate) dhid: String,
+    pub(crate) interval: usize,
+    pub(crate) side: BoundarySide,
+    pub(crate) at: f64,
+    pub(crate) to: f64,
+}
+
+/// Where a correction is written: its hole and the interval its record is
+/// keyed on, by index, and for a boundary move the touching interval below,
+/// whose from follows the moved to. An insertion's interval is where the row
+/// goes in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CorrectionTarget {
+    pub(crate) hole: usize,
+    pub(crate) interval: usize,
+    pub(crate) below: Option<usize>,
+}
+
+impl CorrectionTarget {
+    /// A correction written to one interval alone.
+    pub(crate) fn interval(hole: usize, interval: usize) -> Self {
+        Self { hole, interval, below: None }
+    }
+}
+
+/// An interval asked to go into one hole: the hole by index and by name,
+/// the field it is logged in, its depths and its code, and a code for any
+/// other field of that field's table, blank where it has none.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct IntervalInsert {
+    pub(crate) hole: usize,
+    pub(crate) dhid: String,
+    pub(crate) field: String,
+    pub(crate) from: f64,
+    pub(crate) to: f64,
+    pub(crate) code: String,
+    pub(crate) siblings: Vec<(String, String)>,
+}
+
+impl IntervalInsert {
+    /// Every code given, trimmed, each with its field: the field picked
+    /// first, then the others, blanks and any repeat of the picked field
+    /// left out.
+    pub(crate) fn codes(&self) -> Vec<(&str, &str)> {
+        let code = self.code.trim();
+        std::iter::once((self.field.as_str(), code))
+            .filter(|(_, code)| !code.is_empty())
+            .chain(
+                self.siblings
+                    .iter()
+                    .filter(|(field, code)| *field != self.field && !code.trim().is_empty())
+                    .map(|(field, code)| (field.as_str(), code.trim())),
+            )
+            .collect()
+    }
+}
+
+/// The rows of a hole an insertion of one field deals with, see
+/// [`DrillHole::insertion_rows`].
+#[derive(Clone, Debug, Default)]
+struct InsertionRows<'a> {
+    holding: Vec<(usize, &'a DrillInterval)>,
+    blank: Vec<(usize, &'a DrillInterval)>,
+}
+
+/// An interval asked to be deleted: the hole by index and by name, the
+/// interval by index and the field it was picked in, and the row as it was
+/// picked, which must still be there.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct IntervalDelete {
+    pub(crate) hole: usize,
+    pub(crate) dhid: String,
+    pub(crate) interval: usize,
+    pub(crate) field: String,
+    pub(crate) row: DrillInterval,
+}
+
+/// What an insertion would do: its corrections, in the order they apply,
+/// and which of the intervals it trims it splits, by index in the hole as
+/// it stands.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct InsertionPlan {
+    pub(crate) corrections: Vec<(CorrectionTarget, Correction)>,
+    pub(crate) split: Vec<usize>,
+}
+
+/// Why an interval cannot be inserted where asked.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum InsertionProblem {
+    /// The hole is not in the set.
+    Missing,
+    /// No code was given.
+    NoCode,
+    /// The from is not above the to.
+    NoThickness,
+    /// A depth lies outside 0 to the hole's end.
+    OutsideHole { end: f64 },
+    /// The interval would cover one of the field's intervals whole, which
+    /// is a deletion rather than an insertion.
+    Covers { from: f64, to: f64, name: String },
+    /// The interval would overlap a row of the field's table that holds no
+    /// value in the field, which is never trimmed.
+    OverlapsUnnamed { from: f64, to: f64 },
+}
+
+impl InsertionProblem {
+    pub(crate) fn message(&self) -> String {
+        let depth = |depth: &f64| format!("{depth:.2}");
+        match self {
+            Self::Missing => tr!("drill-hole-insertion-hole-missing"),
+            Self::NoCode => tr!("drill-hole-insertion-no-code"),
+            Self::NoThickness => tr!("drill-hole-insertion-no-thickness"),
+            Self::OutsideHole { end } => tr!("drill-hole-boundary-outside-hole", end = shown_depth(*end)),
+            Self::Covers { from, to, name } => tr!("drill-hole-insertion-covers", from = depth(from), to = depth(to), name = name.clone()),
+            Self::OverlapsUnnamed { from, to } => tr!("drill-hole-insertion-overlaps-unnamed", from = depth(from), to = depth(to)),
+        }
+    }
+}
+
+/// Why a boundary cannot be moved to the depth asked.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum BoundaryProblem {
+    /// The interval is not in the hole, or has no depths.
+    Missing,
+    /// The depth is not a number, or is where the boundary already is.
+    Unmoved,
+    /// The depth lies outside 0 to the hole's end.
+    OutsideHole { end: f64 },
+    /// An interval either side would be left with its from at its to.
+    NoThickness { from: f64, to: f64 },
+    /// The depth lies past the far edge of an interval either side.
+    PastEdge { from: f64, to: f64 },
+    /// With no interval touching below, the depth runs into the next one of
+    /// the table, which starts at `from`.
+    Overlap { from: f64 },
+    /// With no interval touching above, the depth runs into the one before
+    /// it in the table, which ends at `to`.
+    OverlapAbove { to: f64 },
+}
+
+impl BoundaryProblem {
+    pub(crate) fn message(&self) -> String {
+        let depth = |depth: &f64| format!("{depth:.2}");
+        match self {
+            Self::Missing => tr!("drill-hole-boundary-interval-missing"),
+            Self::Unmoved => tr!("drill-hole-boundary-unmoved"),
+            Self::OutsideHole { end } => tr!("drill-hole-boundary-outside-hole", end = shown_depth(*end)),
+            Self::NoThickness { from, to } => tr!("drill-hole-boundary-no-thickness", from = depth(from), to = depth(to)),
+            Self::PastEdge { from, to } => tr!("drill-hole-boundary-past-edge", from = depth(from), to = depth(to)),
+            Self::Overlap { from } => tr!("drill-hole-boundary-overlap", from = depth(from)),
+            Self::OverlapAbove { to } => tr!("drill-hole-boundary-overlap-above", to = depth(to)),
+        }
     }
 }
 
@@ -268,6 +708,10 @@ pub(crate) struct DrillHole {
     /// Defaults to `Unknown` for a project saved before this field existed.
     #[serde(default)]
     pub(crate) orientation_source: OrientationSource,
+    /// The driller's depth from the collar file, stored as recorded: the
+    /// logs may stop short of it, or run past it.
+    #[serde(default)]
+    pub(crate) total_depth: Option<f64>,
 }
 
 /// Row arrangement used when filling a blast boundary with collars.
@@ -593,7 +1037,71 @@ impl HolePlacement {
     }
 }
 
+/// The values exports write for a total depth not recorded. Exact values,
+/// not a range, so a deep hole in feet is still a depth; -99 and -999, the
+/// other usual ones, are below zero and out already.
+const TOTAL_DEPTH_NO_DATA: [f64; 2] = [9_999.0, 99_999.0];
+
+/// A total depth as recorded, if it is one: positive, finite and not a
+/// no-data value. Anything else is not recorded.
+pub(crate) fn recorded_total_depth(depth: f64) -> Option<f64> {
+    let no_data = TOTAL_DEPTH_NO_DATA.iter().any(|sentinel| (depth - sentinel).abs() < 1.0e-9);
+    (depth.is_finite() && depth > 0.0 && !no_data).then_some(depth)
+}
+
 impl DrillHole {
+    /// Where the hole ends: its trace's last depth, or deeper where an
+    /// interval or its total depth runs on past the trace.
+    pub(crate) fn end_depth(&self) -> f64 {
+        self.intervals
+            .iter()
+            .map(|interval| interval.to)
+            .chain(self.total_depth)
+            .filter(|to| to.is_finite())
+            .fold(self.trace.last().map_or(0.0, |station| station.depth), f64::max)
+    }
+
+    /// The stretch around `depth` an insertion of `field` has: from the
+    /// deepest floor of a row bounding it at or above the depth, or the
+    /// collar, to the shallowest roof of one below it, or the hole's end.
+    /// Bounding rows are those of [`Self::insertion_rows`]; a row holding no
+    /// data is as if it were not there. `None` where a bounding row holds the
+    /// depth, or it is outside the hole. `derived` are the set's derived
+    /// columns, which hold no data of their own; `end` is where the hole
+    /// ends, as [`DrillHoleDataset::end_of`] has it.
+    pub(crate) fn unlogged_stretch(&self, field: &str, depth: f64, derived: &BTreeSet<String>, end: f64) -> Option<(f64, f64)> {
+        if !(0.0..end).contains(&depth) {
+            return None;
+        }
+        let rows = self.insertion_rows(field, derived);
+        let bounds = || rows.holding.iter().chain(&rows.blank).map(|(_, interval)| *interval);
+        if bounds().any(|interval| interval.from <= depth && depth < interval.to) {
+            return None;
+        }
+        let from = bounds().map(|interval| interval.to).filter(|to| *to <= depth).fold(0.0, f64::max);
+        let to = bounds().map(|interval| interval.from).filter(|from| *from > depth).fold(end, f64::min);
+        Some((from, to))
+    }
+
+    /// The rows an insertion of `field` deals with, by index, split in one
+    /// pass: those holding a value of the field, which it trims, and those
+    /// of the field's table blank in it but holding other data, such as a
+    /// sample, which it may not overlap. A row holding no data, nothing but
+    /// blanks and `derived` columns, is in neither: it is as if it were not
+    /// there.
+    fn insertion_rows(&self, field: &str, derived: &BTreeSet<String>) -> InsertionRows<'_> {
+        let columns = field_table(self, field, derived);
+        let mut rows = InsertionRows::default();
+        for (index, interval) in self.intervals.iter().enumerate() {
+            if holds_value(interval, field) {
+                rows.holding.push((index, interval));
+            } else if holds_data(interval, derived) && shares_table(interval, &columns) {
+                rows.blank.push((index, interval));
+            }
+        }
+        rows
+    }
+
     /// Capture where the hole stands, for a preview to rewrite it from.
     pub(crate) fn placement(&self) -> HolePlacement {
         HolePlacement {
@@ -689,6 +1197,18 @@ impl DrillHole {
         let span = b.depth - a.depth;
         let t = if span > 0.0 { ((depth - a.depth) / span).clamp(0.0, 1.0) } else { 0.0 };
         Some(a.position.lerp(b.position, t))
+    }
+
+    /// Where the trace stands at `depth`, or `None` where the trace does not
+    /// reach it: above its first station, past its toe, at a depth that is
+    /// not a number, or with no trace at all. A pick there has no place, so
+    /// it is not put at the nearer end.
+    pub(crate) fn position_on_trace(&self, depth: f64) -> Option<DVec3> {
+        let (first, toe) = (self.trace.first()?, self.trace.last()?);
+        if depth.is_nan() || depth < first.depth - 1e-9 || depth > toe.depth + 1e-9 {
+            return None;
+        }
+        self.position_at_depth(depth)
     }
 
     /// The straight pieces the trace is drawn in between depths `from` and
@@ -794,9 +1314,27 @@ pub(crate) struct DrillHoleDataset {
     /// Holes the round can start at. One initiation per collar, with any
     /// number of collars participating in the same firing graph.
     pub(crate) initiations: Vec<Initiation>,
+    /// Every correction proposed against the set, oldest first. Append-only:
+    /// only undoing the edit that made one takes it back out.
+    pub(crate) corrections: Vec<Correction>,
     /// What each loaded hole is charged with, by hole index. Content, like
     /// the ties: undone with everything else and written with the dataset.
     pub(crate) charges: BTreeMap<usize, crate::model::blast::HoleCharge>,
+    /// Interval columns an Incline tool wrote and may write again. A column
+    /// of the same name that came in with the data is never written over.
+    pub(crate) derived_columns: BTreeSet<String>,
+    /// Records this build could not read, each after the count of readable
+    /// records saved before it: written back in that place, as saved, never
+    /// applied.
+    pub(crate) unread_corrections: Vec<(usize, serde_json::Value)>,
+    /// As-logged copies this build could not read or place, each with the
+    /// hole key it was saved under: written back apart from the readable
+    /// ones, under their own key, never applied.
+    pub(crate) unread_logged: Vec<(String, serde_json::Value)>,
+    /// The records of each hole that change how deep it was, deletions that
+    /// took out a row and floor moves, by index into `corrections`, worked
+    /// out on first use after an edit. Not saved.
+    deletions: std::sync::OnceLock<HashMap<String, Vec<usize>>>,
 }
 
 impl DrillHoleDataset {
@@ -814,7 +1352,12 @@ impl DrillHoleDataset {
             hole_boxes: Vec::new(),
             ties: Vec::new(),
             initiations: Vec::new(),
+            corrections: Vec::new(),
             charges: BTreeMap::new(),
+            derived_columns: BTreeSet::new(),
+            unread_corrections: Vec::new(),
+            unread_logged: Vec::new(),
+            deletions: std::sync::OnceLock::new(),
         };
         // The one gate every importer and project load passes through, so the
         // boxes cannot fall out of step with the traces.
@@ -872,6 +1415,603 @@ impl DrillHoleDataset {
         times
     }
 
+    /// Every interval holding `name` in `field` within `scope`, with its hole
+    /// and interval index. An interval missing a depth is left out: it is
+    /// never drawn, and its record could not be saved.
+    pub(crate) fn intervals_named<'a>(&'a self, field: &'a str, name: &str, scope: RenameScope) -> impl Iterator<Item = ((usize, usize), &'a DrillHole, &'a DrillInterval)> + 'a {
+        let holes: Box<dyn Iterator<Item = (usize, &DrillHole)>> = match scope {
+            RenameScope::Horizon { hole, .. } => Box::new(self.holes.get(hole).map(|drilled| (hole, drilled)).into_iter()),
+            RenameScope::Set => Box::new(self.holes.iter().enumerate()),
+        };
+        let horizon = match scope {
+            RenameScope::Horizon { hole, interval } => Some(self.horizon(hole, field, interval)),
+            RenameScope::Set => None,
+        };
+        let wanted = DrillValue::Category(name.to_owned());
+        holes.flat_map(move |(hole_index, hole)| {
+            let wanted = wanted.clone();
+            let horizon = horizon.clone();
+            hole.intervals
+                .iter()
+                .enumerate()
+                .filter(move |(index, interval)| {
+                    interval.from.is_finite()
+                        && interval.to.is_finite()
+                        && interval.values.get(field) == Some(&wanted)
+                        && horizon.as_ref().is_none_or(|members| members.contains(index))
+                })
+                .map(move |(interval_index, interval)| ((hole_index, interval_index), hole, interval))
+        })
+    }
+
+    /// The horizon around interval `interval` of hole `hole` in `field`, as
+    /// the log draws it: that interval and, in depth order, the touching
+    /// intervals either side holding the same name, by interval index. A gap
+    /// or an interval of another name ends it; a row holding no value of the
+    /// field, blank, of another table or empty, is passed over, as the strat
+    /// column passes it. Empty when the interval holds no name or has no
+    /// depths.
+    pub(crate) fn horizon(&self, hole: usize, field: &str, interval: usize) -> Vec<usize> {
+        let Some(drilled) = self.holes.get(hole) else {
+            return Vec::new();
+        };
+        let name_of = |index: usize| match drilled.intervals[index].values.get(field) {
+            Some(DrillValue::Category(name)) if !name.trim().is_empty() => Some(name),
+            _ => None,
+        };
+        let mut order: Vec<usize> = (0..drilled.intervals.len()).filter(|&index| holds_value(&drilled.intervals[index], field)).collect();
+        order.sort_by(|&a, &b| drilled.intervals[a].from.total_cmp(&drilled.intervals[b].from).then(a.cmp(&b)));
+        let Some(at) = order.iter().position(|&index| index == interval) else {
+            return Vec::new();
+        };
+        let Some(name) = name_of(interval) else {
+            return Vec::new();
+        };
+        let joins = |upper: usize, lower: usize| name_of(lower) == Some(name) && drilled.intervals[lower].from <= drilled.intervals[upper].to + TOUCH_TOLERANCE;
+        let mut start = at;
+        while start > 0 && joins(order[start - 1], order[start]) && name_of(order[start - 1]) == Some(name) {
+            start -= 1;
+        }
+        let mut end = at;
+        while end + 1 < order.len() && joins(order[end], order[end + 1]) {
+            end += 1;
+        }
+        order[start..=end].to_vec()
+    }
+
+    /// The value corrections renaming `from` to `to` in `field`, one per
+    /// interval carrying `from` within `scope`, each paired with its hole and
+    /// interval index. Nothing is changed here; the edit is the caller's.
+    pub(crate) fn rename_corrections(&self, field: &str, from: &str, to: &str, scope: RenameScope, note: &CorrectionNote) -> Vec<(CorrectionTarget, Correction)> {
+        if from == to {
+            return Vec::new();
+        }
+        self.intervals_named(field, from, scope)
+            .map(|((hole_index, interval_index), hole, interval)| {
+                let (logged_from, logged_to, _) = interval.logged();
+                let record = Correction::proposed(
+                    &hole.dhid,
+                    (logged_from, logged_to),
+                    CorrectionKind::Value,
+                    field,
+                    DrillValue::Category(from.to_owned()),
+                    DrillValue::Category(to.to_owned()),
+                    note,
+                );
+                (CorrectionTarget::interval(hole_index, interval_index), record)
+            })
+            .collect()
+    }
+
+    /// The other intervals of hole `hole` from the interval table of
+    /// interval `interval`, with depths. Two intervals are of one table when
+    /// they share a column, columns an Incline tool derives aside: a header
+    /// two tables share is told apart at import by the table's name, so a
+    /// lithology row and a quality row never share one. A row with every
+    /// cell blank, bar derived ones, could be of any table, so it counts in
+    /// each.
+    fn table_neighbours(&self, hole: usize, interval: usize) -> impl Iterator<Item = (usize, &DrillInterval)> + '_ {
+        let intervals = self.holes.get(hole).map_or(&[][..], |hole| &hole.intervals[..]);
+        let own = intervals.get(interval);
+        let columns: BTreeSet<&String> = own
+            .map(|own| own.values.keys().filter(|key| !self.derived_columns.contains(*key)).collect())
+            .unwrap_or_default();
+        intervals
+            .iter()
+            .enumerate()
+            .filter(move |(index, other)| *index != interval && own.is_some() && in_table(other, &columns, &self.derived_columns))
+    }
+
+    /// The interval of the same table that starts exactly where interval
+    /// `interval` of hole `hole` ends, by depth, never by index: the one a
+    /// moved floor carries along. A row holding data goes before one holding
+    /// none, blank or only derived, at the same depth.
+    pub(crate) fn interval_below(&self, hole: usize, interval: usize) -> Option<usize> {
+        let to = self.holes.get(hole)?.intervals.get(interval)?.to;
+        self.table_neighbours(hole, interval)
+            .filter(|(_, other)| (other.from - to).abs() <= TOUCH_TOLERANCE)
+            .min_by_key(|(_, other)| !holds_data(other, &self.derived_columns))
+            .map(|(index, _)| index)
+    }
+
+    /// The interval of the same table that ends exactly where interval
+    /// `interval` of hole `hole` starts, as [`Self::interval_below`] picks.
+    pub(crate) fn interval_above(&self, hole: usize, interval: usize) -> Option<usize> {
+        let from = self.holes.get(hole)?.intervals.get(interval)?.from;
+        self.table_neighbours(hole, interval)
+            .filter(|(_, other)| (other.to - from).abs() <= TOUCH_TOLERANCE)
+            .min_by_key(|(_, other)| !holds_data(other, &self.derived_columns))
+            .map(|(index, _)| index)
+    }
+
+    /// The boundary correction moving the roof or floor of interval
+    /// `interval` of hole `hole` to `depth`. A boundary two touching
+    /// intervals of one table share is the upper one's floor: one record
+    /// keyed on the upper interval, field [`FLOOR_FIELD`], its target
+    /// carrying the lower one, which follows, so no gap or overlap opens
+    /// and the hole keeps its length. A floor or roof nothing touches moves
+    /// alone, a roof's record keyed on its own interval with field
+    /// [`ROOF_FIELD`]. Refused, with the reason, when the depth is outside
+    /// the hole, at or past the far edge of either interval, or across a
+    /// gap into the next interval of the table. Nothing is changed here; the
+    /// edit is the caller's.
+    pub(crate) fn boundary_corrections(
+        &self,
+        hole: usize,
+        interval: usize,
+        side: BoundarySide,
+        depth: f64,
+        note: &CorrectionNote,
+    ) -> Result<Vec<(CorrectionTarget, Correction)>, BoundaryProblem> {
+        let drilled = self.holes.get(hole).ok_or(BoundaryProblem::Missing)?;
+        // A roof shared with the interval above is that interval's floor,
+        // and the clicked interval is the one that follows it: taken as is,
+        // never looked up again, as a blank row above shares no column to
+        // find it by.
+        let (interval, side, follower) = match side {
+            BoundarySide::Roof => match self.interval_above(hole, interval) {
+                Some(above) => (above, BoundarySide::Floor, Some(interval)),
+                None => (interval, BoundarySide::Roof, None),
+            },
+            BoundarySide::Floor => (interval, BoundarySide::Floor, None),
+        };
+        let moved = drilled
+            .intervals
+            .get(interval)
+            .filter(|moved| moved.from.is_finite() && moved.to.is_finite())
+            .ok_or(BoundaryProblem::Missing)?;
+        let at = if side == BoundarySide::Roof { moved.from } else { moved.to };
+        if !depth.is_finite() || depth == at {
+            return Err(BoundaryProblem::Unmoved);
+        }
+        let end = self.end_of(drilled);
+        if !(0.0..=end).contains(&depth) {
+            return Err(BoundaryProblem::OutsideHole { end });
+        }
+        let edge = |from: f64, to: f64, past: bool| {
+            if past {
+                BoundaryProblem::PastEdge { from, to }
+            } else {
+                BoundaryProblem::NoThickness { from, to }
+            }
+        };
+        let neighbours = || self.table_neighbours(hole, interval).map(|(_, other)| other);
+        let below = match side {
+            BoundarySide::Roof => {
+                if depth >= moved.to {
+                    return Err(edge(moved.from, moved.to, depth > moved.to));
+                }
+                let before = neighbours().map(|other| other.to).filter(|to| *to <= moved.from).max_by(f64::total_cmp);
+                if let Some(to) = before.filter(|to| depth < *to) {
+                    return Err(BoundaryProblem::OverlapAbove { to });
+                }
+                None
+            }
+            BoundarySide::Floor => {
+                if depth <= moved.from {
+                    return Err(edge(moved.from, moved.to, depth < moved.from));
+                }
+                let below = follower.or_else(|| self.interval_below(hole, interval));
+                match below.map(|index| &drilled.intervals[index]) {
+                    Some(lower) if depth >= lower.to => return Err(edge(lower.from, lower.to, depth > lower.to)),
+                    Some(_) => {}
+                    None => {
+                        let next = neighbours().map(|other| other.from).filter(|from| *from >= moved.to).min_by(f64::total_cmp);
+                        if let Some(from) = next.filter(|from| depth > *from) {
+                            return Err(BoundaryProblem::Overlap { from });
+                        }
+                    }
+                }
+                below
+            }
+        };
+        let (logged_from, logged_to, _) = moved.logged();
+        let field = if side == BoundarySide::Roof { ROOF_FIELD } else { FLOOR_FIELD };
+        let record = Correction::proposed(
+            &drilled.dhid,
+            (logged_from, logged_to),
+            CorrectionKind::Boundary,
+            field,
+            DrillValue::Numeric(at),
+            DrillValue::Numeric(depth),
+            note,
+        );
+        Ok(vec![(CorrectionTarget { hole, interval, below }, record)])
+    }
+
+    /// The hole `edit` names as it would read once moved, for a preview
+    /// drawn while the move is still being typed. `None` when the move would
+    /// be refused, or the hole at that index is no longer the one named.
+    /// Nothing is changed or recorded here.
+    pub(crate) fn boundary_preview(&self, edit: &BoundaryMove) -> Option<DrillHole> {
+        let drilled = self.holes.get(edit.hole).filter(|hole| hole.dhid == edit.dhid)?;
+        let (target, record) = self
+            .boundary_corrections(edit.hole, edit.interval, edit.side, edit.to, &CorrectionNote::default())
+            .ok()?
+            .into_iter()
+            .next()?;
+        let mut previewed = drilled.clone();
+        write_correction(&mut previewed, target, &record, true).then_some(previewed)
+    }
+
+    /// How many holes renaming `from` to `to` in `field` within `scope` would
+    /// leave with `to` out of `column`'s order: in such a hole, once renamed
+    /// and with touching runs of one name joined, a column name above a
+    /// renamed run comes after `to` in the column, or one below it comes no
+    /// later. Names outside the column and UNK are passed over, and a `to`
+    /// the column lacks is never out of order. Disorder elsewhere in a hole
+    /// does not count; only the renamed runs are judged. Nothing is changed.
+    pub(crate) fn rename_out_of_sequence(&self, field: &str, from: &str, to: &str, scope: RenameScope, column: &[String]) -> usize {
+        let mut renamed: Vec<(usize, usize)> = self.intervals_named(field, from, scope).map(|(at, _, _)| at).collect();
+        renamed.sort_unstable();
+        let mut out = 0;
+        let mut start = 0;
+        while start < renamed.len() {
+            let hole = renamed[start].0;
+            let end = start + renamed[start..].iter().take_while(|at| at.0 == hole).count();
+            let members: Vec<usize> = renamed[start..end].iter().map(|at| at.1).collect();
+            start = end;
+            let rows: Vec<(f64, Option<&str>, bool)> = self.holes[hole]
+                .intervals
+                .iter()
+                .enumerate()
+                .filter(|(_, interval)| interval.from.is_finite() && interval.to.is_finite())
+                .map(|(index, interval)| {
+                    let name = match interval.values.get(field) {
+                        Some(DrillValue::Category(name)) => Some(name.as_str()),
+                        _ => None,
+                    };
+                    (interval.from, name, members.contains(&index))
+                })
+                .collect();
+            if out_of_sequence(&rows, to, column) {
+                out += 1;
+            }
+        }
+        out
+    }
+
+    /// The corrections inserting the interval `edit` asks for. One insertion
+    /// record keyed on the new interval's depths, carrying the whole row it
+    /// puts in, and one more, carrying none, for each other field of its
+    /// table given a code. Each interval holding a value of the field that it
+    /// overlaps loses the overlap, its floor or roof moving alone with a
+    /// boundary record. Where it falls inside one, that interval is split:
+    /// its floor rises to the new from, and its part below the new to goes in
+    /// as an insertion carrying its values, derived columns left for their
+    /// tool to write again. Trims come first, then the inserted rows in depth
+    /// order, each target written against the hole as the ones before it
+    /// leave it. Refused, with the reason, when the hole at `edit.hole` is no
+    /// longer the one named, the code is blank, the from is not above the to,
+    /// a depth is outside the hole, the interval would cover one of the
+    /// field's intervals whole, or it would overlap a row of the field's
+    /// table blank in the field that holds other data, such as a sample,
+    /// which is never trimmed. A row holding no data, nothing but blanks and
+    /// derived columns, is left as it is and refuses nothing. Nothing is
+    /// changed here; the edit is the caller's.
+    pub(crate) fn insertion_corrections(&self, edit: &IntervalInsert, note: &CorrectionNote) -> Result<InsertionPlan, InsertionProblem> {
+        let drilled = self.holes.get(edit.hole).filter(|hole| hole.dhid == edit.dhid).ok_or(InsertionProblem::Missing)?;
+        let code = edit.code.trim();
+        if code.is_empty() {
+            return Err(InsertionProblem::NoCode);
+        }
+        let (from, to) = (edit.from, edit.to);
+        if !from.is_finite() || !to.is_finite() || from >= to {
+            return Err(InsertionProblem::NoThickness);
+        }
+        let end = self.end_of(drilled);
+        if from < 0.0 || to > end {
+            return Err(InsertionProblem::OutsideHole { end });
+        }
+        let field = edit.field.as_str();
+        let rows = drilled.insertion_rows(field, &self.derived_columns);
+        let holding = || rows.holding.iter().copied();
+        let mut overlapped: Vec<(usize, &DrillInterval)> = holding().filter(|(_, other)| other.from < to && other.to > from).collect();
+        overlapped.sort_by(|a, b| a.1.from.total_cmp(&b.1.from).then(a.0.cmp(&b.0)));
+        if let Some((_, covered)) = overlapped.iter().find(|(_, other)| from <= other.from && other.to <= to) {
+            return Err(InsertionProblem::Covers {
+                from: covered.from,
+                to: covered.to,
+                name: value_name(covered.values.get(field)),
+            });
+        }
+        if let Some((_, blank)) = rows.blank.iter().find(|(_, other)| other.from < to && other.to > from) {
+            return Err(InsertionProblem::OverlapsUnnamed { from: blank.from, to: blank.to });
+        }
+        let mut plan = InsertionPlan::default();
+        for &(index, other) in &overlapped {
+            let (logged_from, logged_to, _) = other.logged();
+            let (side, before, after) = if other.from < from {
+                (FLOOR_FIELD, other.to, from)
+            } else {
+                (ROOF_FIELD, other.from, to)
+            };
+            let record = Correction::proposed(
+                &drilled.dhid,
+                (logged_from, logged_to),
+                CorrectionKind::Boundary,
+                side,
+                DrillValue::Numeric(before),
+                DrillValue::Numeric(after),
+                note,
+            );
+            plan.corrections.push((CorrectionTarget::interval(edit.hole, index), record));
+            if other.from < from && other.to > to {
+                plan.split.push(index);
+            }
+        }
+        // After the deepest of the field's intervals starting above it, so
+        // the field's rows stay in depth order.
+        let position = holding()
+            .filter(|(_, other)| other.from < from)
+            .max_by(|a, b| a.1.from.total_cmp(&b.1.from).then(a.0.cmp(&b.0)))
+            .map(|(index, _)| index + 1)
+            .or_else(|| holding().map(|(index, _)| index).next())
+            .unwrap_or(drilled.intervals.len());
+        let inserted = |key: (f64, f64), field: &str, name: DrillValue, row: Option<BTreeMap<String, DrillValue>>| Correction {
+            before: None,
+            row,
+            ..Correction::proposed(&drilled.dhid, key, CorrectionKind::Insertion, field, name.clone(), name, note)
+        };
+        let codes = edit.codes();
+        let row: BTreeMap<String, DrillValue> = codes.iter().map(|(key, value)| ((*key).to_owned(), DrillValue::Category((*value).to_owned()))).collect();
+        // The row goes in with the first record; the other fields' records
+        // name what it holds.
+        for (index, (key, value)) in codes.iter().enumerate() {
+            let record = inserted((from, to), key, DrillValue::Category((*value).to_owned()), (index == 0).then(|| row.clone()));
+            plan.corrections.push((CorrectionTarget::interval(edit.hole, position), record));
+        }
+        for (offset, &index) in plan.split.clone().iter().enumerate() {
+            let parent = &drilled.intervals[index];
+            let Some(name) = parent.values.get(field).cloned() else { continue };
+            let values = parent
+                .values
+                .iter()
+                .filter(|(key, _)| !self.derived_columns.contains(*key))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            plan.corrections.push((
+                CorrectionTarget::interval(edit.hole, position + 1 + offset),
+                inserted((to, parent.to), field, name, Some(values)),
+            ));
+        }
+        Ok(plan)
+    }
+
+    /// The other code fields of `field`'s table in hole `hole`, in the set's
+    /// field order: categorical columns its rows hold that no Incline tool
+    /// derives. An insertion can give each a code.
+    pub(crate) fn table_fields(&self, hole: usize, field: &str) -> Vec<&DrillField> {
+        let Some(drilled) = self.holes.get(hole) else {
+            return Vec::new();
+        };
+        let columns = field_table(drilled, field, &self.derived_columns);
+        self.fields
+            .iter()
+            .filter(|other| other.key != field && columns.contains(&other.key) && matches!(other.kind, DrillFieldKind::Categorical { .. }))
+            .collect()
+    }
+
+    /// The codes inserting `edit` as `plan` sets out would put out of their
+    /// field's column order in its hole, each field given a code judged
+    /// against its own `column`, as [`Self::rename_out_of_sequence`] judges a
+    /// renamed run, against the intervals around it once trimmed. An
+    /// interval it splits is left out: a parting sits inside its seam, which
+    /// is no question of order. Nothing is changed.
+    pub(crate) fn insertion_out_of_sequence<'c>(&self, edit: &IntervalInsert, plan: &InsertionPlan, column: impl Fn(&str) -> &'c [String]) -> Vec<String> {
+        let Some(drilled) = self.holes.get(edit.hole) else {
+            return Vec::new();
+        };
+        // Where each interval starts once trimmed: a roof trim moves it.
+        let mut starts: Vec<f64> = drilled.intervals.iter().map(|interval| interval.from).collect();
+        for (target, record) in &plan.corrections {
+            if record.kind == CorrectionKind::Boundary
+                && record.field == ROOF_FIELD
+                && let (Some(start), Some(DrillValue::Numeric(depth))) = (starts.get_mut(target.interval), record.after.as_ref())
+            {
+                *start = *depth;
+            }
+        }
+        edit.codes()
+            .into_iter()
+            .filter(|(field, code)| {
+                let mut runs: Vec<(f64, Option<&str>, bool)> = drilled
+                    .intervals
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, interval)| !plan.split.contains(index) && interval.from.is_finite() && interval.to.is_finite())
+                    .map(|(index, interval)| {
+                        let name = match interval.values.get(*field) {
+                            Some(DrillValue::Category(name)) => Some(name.as_str()),
+                            _ => None,
+                        };
+                        (starts[index], name, false)
+                    })
+                    .collect();
+                runs.push((edit.from, Some(*code), true));
+                out_of_sequence(&runs, code, column(field))
+            })
+            .map(|(_, code)| code.to_owned())
+            .collect()
+    }
+
+    /// The deletion taking interval `interval` of hole `hole`, named `dhid`,
+    /// out of the interpreted data: one record keyed on its logged depths,
+    /// holding the whole row so that undo puts it back exactly and what was
+    /// logged stays. It names `field` and the code the row held there; where
+    /// `field` is a column an Incline tool derives, the row's first other
+    /// column holding a value instead, in column-name order, or no field at
+    /// all. Every field the row holds goes with it. Deleting an inserted row
+    /// is a deletion like any other, the insertion's record standing. `None`
+    /// when the hole at that index is no longer the one named, or the row
+    /// there is no longer `expected`, the row as it was picked. Nothing is
+    /// changed here; the edit is the caller's.
+    pub(crate) fn deletion_corrections(
+        &self,
+        hole: usize,
+        dhid: &str,
+        interval: usize,
+        field: &str,
+        expected: &DrillInterval,
+        note: &CorrectionNote,
+    ) -> Option<(CorrectionTarget, Correction)> {
+        let drilled = self.holes.get(hole).filter(|drilled| drilled.dhid == dhid)?;
+        let row = drilled.intervals.get(interval).filter(|row| same_interval(row, expected))?;
+        let (logged_from, logged_to, _) = row.logged();
+        let named = if self.derived_columns.contains(field) {
+            row.values
+                .iter()
+                .find(|(key, value)| is_data(key, value, &self.derived_columns))
+                .map_or("", |(key, _)| key.as_str())
+        } else {
+            field
+        };
+        let blank = DrillValue::Category(String::new());
+        let record = Correction {
+            before: row.values.get(named).cloned(),
+            after: None,
+            removed: Some(row.clone()),
+            ..Correction::proposed(dhid, (logged_from, logged_to), CorrectionKind::Deletion, named, blank.clone(), blank, note)
+        };
+        Some((CorrectionTarget::interval(hole, interval), record))
+    }
+
+    /// Whether any hole of the set has a total depth: only then does a hole
+    /// without one say so. A blast pattern, typed to a design depth, has none.
+    pub(crate) fn records_total_depth(&self) -> bool {
+        self.holes.iter().any(|hole| hole.total_depth.is_some())
+    }
+
+    /// Where `drilled` ends for a correction: its own end, or deeper where a
+    /// row a deletion took out, or a floor moved up from, ran on past it, so
+    /// the ground it freed reads as not logged and takes an insertion or a
+    /// move back.
+    pub(crate) fn end_of(&self, drilled: &DrillHole) -> f64 {
+        let moved_from = self.moved_floors(&drilled.dhid).filter_map(|record| match record.before {
+            Some(DrillValue::Numeric(depth)) => Some(depth),
+            _ => None,
+        });
+        self.deleted_rows(&drilled.dhid)
+            .map(|row| row.to)
+            .chain(moved_from)
+            .filter(|to| to.is_finite())
+            .fold(drilled.end_depth(), f64::max)
+    }
+
+    /// The floor moves recorded for the hole named `dhid`, through the same
+    /// index as its deleted rows.
+    fn moved_floors<'a>(&'a self, dhid: &'a str) -> impl Iterator<Item = &'a Correction> + 'a {
+        self.correction_index(dhid)
+            .filter(move |record| record.kind == CorrectionKind::Boundary && record.field == FLOOR_FIELD && record.hole == dhid)
+    }
+
+    /// The rows deletions have taken out of hole `hole` that the site had
+    /// logged, for an as-logged view to keep showing them. An inserted row
+    /// deleted again was never logged and is not among them.
+    pub(crate) fn deleted_logged_rows(&self, hole: usize) -> Vec<&DrillInterval> {
+        let Some(drilled) = self.holes.get(hole) else {
+            return Vec::new();
+        };
+        self.deleted_rows(&drilled.dhid).filter(|row| !row.is_never_logged()).collect()
+    }
+
+    /// Every row deletions have taken out of the hole named `dhid`, oldest
+    /// first, read through the index rather than every record.
+    fn deleted_rows<'a>(&'a self, dhid: &'a str) -> impl Iterator<Item = &'a DrillInterval> + 'a {
+        self.correction_index(dhid)
+            .filter(move |record| record.kind == CorrectionKind::Deletion && record.hole == dhid)
+            .filter_map(|record| record.removed.as_ref())
+    }
+
+    /// The records of hole `dhid` that change how deep it was: deletions
+    /// that removed a row and floor moves, found through an index built once.
+    fn correction_index<'a>(&'a self, dhid: &'a str) -> impl Iterator<Item = &'a Correction> + 'a {
+        let deletions = self.deletions.get_or_init(|| {
+            let mut deletions: HashMap<String, Vec<usize>> = HashMap::new();
+            for (index, record) in self.corrections.iter().enumerate() {
+                if (record.kind == CorrectionKind::Deletion && record.removed.is_some()) || (record.kind == CorrectionKind::Boundary && record.field == FLOOR_FIELD) {
+                    deletions.entry(record.hole.clone()).or_default().push(index);
+                }
+            }
+            deletions
+        });
+        deletions.get(dhid).into_iter().flatten().filter_map(|&index| self.corrections.get(index))
+    }
+
+    /// Work out again what is read from the records after they changed: the
+    /// index of deletions and floor moves, and the fields.
+    pub(crate) fn records_changed(&mut self) {
+        self.deletions = std::sync::OnceLock::new();
+        self.refresh_fields();
+    }
+
+    /// Collect the fields again. A field only logged rows deletions took out
+    /// still hold, as logged, is kept, so a deletion never takes a column
+    /// away; fields the holes' rows hold are theirs alone, and a column a tool
+    /// derives is not logged data.
+    fn refresh_fields(&mut self) {
+        let mut fields = collect_fields(&self.holes);
+        let kept: Vec<DrillField> = fields_of([self.deleted_logged_values()])
+            .into_iter()
+            .filter(|field| !self.derived_columns.contains(&field.key) && fields.iter().all(|live| live.key != field.key))
+            .collect();
+        if !kept.is_empty() {
+            fields.extend(kept);
+            fields.sort_by(|a, b| crate::natural_sort::natural_cmp(&a.label, &b.label));
+        }
+        self.fields = fields;
+    }
+
+    /// The values of each logged row deletions took out, as logged.
+    fn deleted_logged_values(&self) -> impl Iterator<Item = &BTreeMap<String, DrillValue>> {
+        self.corrections
+            .iter()
+            .filter(|record| record.kind == CorrectionKind::Deletion)
+            .filter_map(|record| record.removed.as_ref())
+            .filter(|row| !row.is_never_logged())
+            .map(|row| row.logged().2)
+    }
+
+    /// Take the derived columns a file names, keeping those some row still
+    /// holds: one of the holes', or any row a deletion took out, logged or
+    /// inserted, either side, which keeps the column the tool's for an undo.
+    /// A name no row holds is dropped, since a later import of that name
+    /// would otherwise be written over.
+    pub(crate) fn restore_derived_columns(&mut self, stored: BTreeSet<String>) {
+        let deleted = || {
+            self.corrections
+                .iter()
+                .filter(|record| record.kind == CorrectionKind::Deletion)
+                .filter_map(|record| record.removed.as_ref())
+        };
+        let held = |column: &String| {
+            self.holes.iter().any(|hole| hole.intervals.iter().any(|interval| interval.values.contains_key(column)))
+                || deleted().any(|row| row.values.contains_key(column) || row.logged().2.contains_key(column))
+        };
+        self.derived_columns = stored.into_iter().filter(held).collect();
+        self.records_changed();
+    }
+
     /// Which way the round crossed each tie, given [`Self::firing_times`],
     /// in the order of [`Self::ties`].
     pub(crate) fn tie_flows(&self, times: &[Option<u32>]) -> Vec<TieFlow> {
@@ -885,6 +2025,202 @@ impl DrillHoleDataset {
                 _ => TieFlow::Redundant,
             })
             .collect()
+    }
+
+    /// The value corrections sliding the names of `field` in hole `hole` one
+    /// run along the hole. A run is one name over consecutive intervals that
+    /// name a code of `column`; intervals with no name, a name the column
+    /// lacks, or [`UNKNOWN_NAME`] keep theirs, are counted, and are not part
+    /// of the slide. Up, each run takes the name of the run below it and the
+    /// bottom run the column's name after the hole's last; down is the
+    /// mirror. With no such column name the end run is named
+    /// [`UNKNOWN_NAME`].
+    ///
+    /// With `from`, an interval index, only its horizon ([`Self::horizon`]),
+    /// a run of its own as the log draws it, and the runs on the side the
+    /// names move to slide: up, the runs above it each take the name of the
+    /// run below, and the horizon is named [`UNKNOWN_NAME`], opened for a
+    /// name to be put in; the runs below are untouched. Down is the mirror.
+    /// A `from` in no run slides nothing.
+    ///
+    /// Only intervals whose name changes get a record; depths never move,
+    /// and an interval missing a depth is left out as a rename leaves it
+    /// out. Nothing is changed here; the edit is the caller's.
+    pub(crate) fn column_shift(&self, hole: usize, field: &str, column: &[String], direction: ShiftDirection, from: Option<usize>, note: &CorrectionNote) -> ColumnShift {
+        let mut shift = ColumnShift::default();
+        let Some(drilled) = self.holes.get(hole) else {
+            return shift;
+        };
+        let mut named: Vec<(usize, &String)> = Vec::new();
+        for (index, interval) in drilled.intervals.iter().enumerate() {
+            if !(interval.from.is_finite() && interval.to.is_finite()) {
+                continue;
+            }
+            let Some(DrillValue::Category(code)) = interval.values.get(field) else {
+                continue;
+            };
+            if code != UNKNOWN_NAME && column.contains(code) {
+                named.push((index, code));
+            } else {
+                shift.untouched += 1;
+            }
+        }
+        named.sort_by(|a, b| drilled.intervals[a.0].from.total_cmp(&drilled.intervals[b.0].from).then(a.0.cmp(&b.0)));
+        let horizon = from.map(|interval| self.horizon(hole, field, interval)).unwrap_or_default();
+        let mut runs: Vec<(&str, Vec<usize>)> = Vec::new();
+        let mut last_inside = false;
+        for (index, code) in named {
+            let inside = horizon.contains(&index);
+            match runs.last_mut() {
+                Some((name, members)) if *name == code.as_str() && inside == last_inside => members.push(index),
+                _ => runs.push((code.as_str(), vec![index])),
+            }
+            last_inside = inside;
+        }
+        let clicked = match from {
+            Some(interval) => match runs.iter().position(|(_, members)| members.contains(&interval)) {
+                Some(at) => Some(at),
+                None => return shift,
+            },
+            None => None,
+        };
+        let place = |code: &str| column.iter().position(|held| held == code);
+        let last = runs.len().saturating_sub(1);
+        for (at, (old, members)) in runs.iter().enumerate() {
+            let new: Option<&str> = match (direction, clicked) {
+                (ShiftDirection::Up, Some(clicked)) if at > clicked => continue,
+                (ShiftDirection::Down, Some(clicked)) if at < clicked => continue,
+                (_, Some(clicked)) if at == clicked => None,
+                (ShiftDirection::Up, _) if at < last => Some(runs[at + 1].0),
+                (ShiftDirection::Up, _) => place(old).and_then(|place| column.get(place + 1)).map(String::as_str),
+                (ShiftDirection::Down, _) if at > 0 => Some(runs[at - 1].0),
+                (ShiftDirection::Down, _) => place(old).and_then(|place| place.checked_sub(1)).and_then(|place| column.get(place)).map(String::as_str),
+            };
+            if new == Some(*old) {
+                continue;
+            }
+            let new = new.unwrap_or_else(|| {
+                shift.unknown += members.len();
+                UNKNOWN_NAME
+            });
+            for &index in members {
+                let (logged_from, logged_to, _) = drilled.intervals[index].logged();
+                let record = Correction::proposed(
+                    &drilled.dhid,
+                    (logged_from, logged_to),
+                    CorrectionKind::Value,
+                    field,
+                    DrillValue::Category((*old).to_owned()),
+                    DrillValue::Category(new.to_owned()),
+                    note,
+                );
+                shift.corrections.push((CorrectionTarget::interval(hole, index), record));
+            }
+        }
+        shift.corrections.sort_by_key(|(target, _)| target.interval);
+        shift
+    }
+
+    /// Write each correction's `after` and append its record: a value
+    /// correction's as its interval's interpreted value, a boundary's as its
+    /// interval's from or to and its follower's from, an insertion's as a new
+    /// row marked never logged. The as-logged interval is kept aside the
+    /// first time anything parts the two, and is never written after that.
+    pub(crate) fn apply_corrections(&mut self, targets: &[CorrectionTarget], records: &[Correction]) {
+        let mut not_applied = Tally::default();
+        for (&target, record) in targets.iter().zip(records) {
+            // An insertion or deletion whose record is still in the trail is
+            // still in place, its undo having failed: writing it again would
+            // put in a second row or refuse, and add a second record.
+            if matches!(record.kind, CorrectionKind::Insertion | CorrectionKind::Deletion) && self.corrections.iter().any(|kept| same_record(kept, record)) {
+                continue;
+            }
+            let written = self.holes.get_mut(target.hole).is_some_and(|hole| write_correction(hole, target, record, true));
+            if written {
+                self.corrections.push(record.clone());
+            } else if record.kind == CorrectionKind::Deletion {
+                not_applied.add(record);
+            }
+        }
+        if let Some((count, hole, from, to)) = not_applied.first() {
+            crate::userspace_warn!("{}", tr!("drill-hole-deletion-not-applied", count = count, hole = hole, from = from, to = to));
+        }
+        self.records_changed();
+    }
+
+    /// Write cells of a derived `column`, each `(hole, interval, value)`, and
+    /// mark the column derived or not. A derived value is no correction: it is
+    /// written beside an interval's logged values too, so it never makes the
+    /// interval read as corrected.
+    pub(crate) fn write_column(&mut self, column: &str, cells: &[(usize, usize, Option<DrillValue>)], derived: bool) {
+        for (hole, interval, value) in cells {
+            let Some(interval) = self.holes.get_mut(*hole).and_then(|hole| hole.intervals.get_mut(*interval)) else {
+                continue;
+            };
+            set_value(&mut interval.values, column, value.as_ref());
+            if let Some(logged) = interval.logged.as_mut().filter(|logged| !logged.never_logged) {
+                set_value(&mut logged.values, column, value.as_ref());
+            }
+        }
+        if derived {
+            self.derived_columns.insert(column.to_owned());
+        } else {
+            self.derived_columns.remove(column);
+        }
+        self.refresh_fields();
+    }
+
+    /// Undo [`Self::apply_corrections`]: the `before` values and depths go
+    /// back and the records are withdrawn, latest first. A record whose undo
+    /// could not be written stays, as what it changed is still there. What
+    /// could not be undone as asked is said once per outcome, with a count.
+    pub(crate) fn withdraw_corrections(&mut self, targets: &[CorrectionTarget], records: &[Correction]) {
+        let (mut rows_kept, mut kept, mut lost_back, mut lost) = (Tally::default(), Tally::default(), Tally::default(), Tally::default());
+        for (&target, record) in targets.iter().zip(records).rev() {
+            let position = self.corrections.iter().rposition(|kept| same_record(kept, record));
+            if record.kind == CorrectionKind::Deletion && position.is_none() {
+                // A deletion with no record never took its row out, which was
+                // said when it was applied, or its record was left out when
+                // the file was read, which the read said: nothing to put back.
+                continue;
+            }
+            let written = self.holes.get_mut(target.hole).is_some_and(|hole| write_correction(hole, target, record, false));
+            if written
+                && !matches!(record.kind, CorrectionKind::Insertion | CorrectionKind::Deletion)
+                && let Some(hole) = self.holes.get_mut(target.hole)
+            {
+                for index in [Some(target.interval), target.below].into_iter().flatten() {
+                    let interval = &mut hole.intervals[index];
+                    if !interval.is_corrected() {
+                        interval.logged = None;
+                    }
+                }
+            }
+            match (position, written) {
+                (Some(position), true) => {
+                    self.corrections.remove(position);
+                }
+                // A deleted row that could not go back keeps its record, so
+                // the row it holds is not lost.
+                (Some(_), false) if record.kind == CorrectionKind::Deletion => rows_kept.add(record),
+                (Some(_), false) => kept.add(record),
+                (None, true) => lost_back.add(record),
+                (None, false) => lost.add(record),
+            }
+        }
+        if let Some((count, hole, from, to)) = rows_kept.first() {
+            crate::userspace_warn!("{}", tr!("drill-hole-deletion-not-undone", count = count, hole = hole, from = from, to = to));
+        }
+        if let Some((count, hole, from, to)) = kept.first() {
+            crate::userspace_warn!("{}", tr!("drill-hole-correction-not-undone", count = count, hole = hole, from = from, to = to));
+        }
+        if let Some((count, hole, from, to)) = lost_back.first() {
+            crate::userspace_warn!("{}", tr!("drill-hole-undo-no-record", count = count, hole = hole, from = from, to = to));
+        }
+        if let Some((count, hole, from, to)) = lost.first() {
+            crate::userspace_warn!("{}", tr!("drill-hole-undo-no-record-not-back", count = count, hole = hole, from = from, to = to));
+        }
+        self.records_changed();
     }
 
     /// The ties as a file holds them, keyed by hole name.
@@ -1013,41 +2349,14 @@ impl DrillHoleDataset {
                         + hole
                             .intervals
                             .iter()
-                            .map(|interval| {
-                                size_of::<DrillInterval>()
-                                    + interval
-                                        .values
-                                        .iter()
-                                        .map(|(key, value)| {
-                                            key.len()
-                                                + size_of::<DrillValue>()
-                                                + match value {
-                                                    DrillValue::Category(text) => text.len(),
-                                                    DrillValue::Numeric(_) => 0,
-                                                }
-                                        })
-                                        .fold(0usize, usize::saturating_add)
-                                    + interval.logged.as_ref().map_or(0, |logged| {
-                                        logged
-                                            .values
-                                            .iter()
-                                            .map(|(key, value)| {
-                                                key.len()
-                                                    + size_of::<DrillValue>()
-                                                    + match value {
-                                                        DrillValue::Category(text) => text.len(),
-                                                        DrillValue::Numeric(_) => 0,
-                                                    }
-                                            })
-                                            .fold(0usize, usize::saturating_add)
-                                    })
-                            })
+                            .map(|interval| size_of::<DrillInterval>() + values_bytes(&interval.values) + interval.logged.as_ref().map_or(0, |logged| values_bytes(&logged.values)))
                             .fold(0usize, usize::saturating_add)
                 })
                 .fold(0usize, usize::saturating_add)
             + self.hole_boxes.len() * size_of::<WorldBox>()
             + self.ties.iter().map(|tie| size_of::<TieIn>() + tie.product.len()).fold(0usize, usize::saturating_add)
             + self.initiations.len() * size_of::<Initiation>()
+            + self.corrections.iter().map(Correction::estimated_bytes).fold(0usize, usize::saturating_add)
             + self
                 .fields
                 .iter()
@@ -1065,6 +2374,16 @@ impl DrillHoleDataset {
                 .charges
                 .values()
                 .map(|charge| size_of::<usize>() + charge.estimated_bytes())
+                .fold(0usize, usize::saturating_add)
+            + self
+                .unread_corrections
+                .iter()
+                .map(|(_, value)| size_of::<(usize, serde_json::Value)>().saturating_add(json_bytes(value)))
+                .fold(0usize, usize::saturating_add)
+            + self
+                .unread_logged
+                .iter()
+                .map(|(key, value)| size_of::<(String, serde_json::Value)>().saturating_add(key.len()).saturating_add(json_bytes(value)))
                 .fold(0usize, usize::saturating_add)
     }
 
@@ -1211,6 +2530,17 @@ pub(crate) struct DrillColorState {
     /// the group's colour, any other code keeps its own.
     #[serde(default)]
     pub(crate) by_working_section: bool,
+    /// The order of each categorical field's codes down the deposit, kept
+    /// beside the working sections and read as leniently, so a project
+    /// written before there was one loads with none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "lenient_strat_columns")]
+    pub(crate) strat_columns: Vec<StratColumn>,
+    /// The field the strat column reads until one is picked by hand: the
+    /// parent (seam) field an import found, else the field it ordered.
+    /// Written by import only and read as leniently as the columns, so a
+    /// project written before it loads with none.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient_strat_field")]
+    pub(crate) strat_field: Option<String>,
     /// How the set is drawn. A set saved before there was a choice reads
     /// back at its true diameter, the look it was saved with; an imported
     /// set starts as string and discs (see `Self::for_logged_holes`).
@@ -1252,6 +2582,93 @@ pub(crate) struct WorkingSection {
     pub(crate) name: String,
     pub(crate) field: String,
     pub(crate) codes: Vec<String>,
+}
+
+/// One categorical field's codes in order down the deposit, seams, plies and
+/// splits alike, as the geologist placed them. Nothing here is inferred.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(crate) struct StratColumn {
+    pub(crate) field: String,
+    pub(crate) codes: Vec<String>,
+}
+
+/// The name a shift gives a run it leaves with no name: unknown, until it
+/// is renamed. Never a strat column entry.
+pub(crate) const UNKNOWN_NAME: &str = "UNK";
+
+/// Which way a whole-column shift moves a hole's names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ShiftDirection {
+    /// The hole's names slide up one run: each run takes the name of the run
+    /// below it, the bottom run the column's next name.
+    Up,
+    /// The mirror: each run takes the name of the run above it, the top run
+    /// the column's name before the hole's first.
+    Down,
+}
+
+/// What a whole-column shift of one hole would do, worked out from its names
+/// as they stand, so no name is shifted twice.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ColumnShift {
+    /// One value correction per interval whose name moves, with its hole and
+    /// interval index.
+    pub(crate) corrections: Vec<(CorrectionTarget, Correction)>,
+    /// Of those, the intervals named [`UNKNOWN_NAME`]: the run a shift
+    /// from a horizon opens, or the end run when the column has no name past
+    /// the hole's last (or first).
+    pub(crate) unknown: usize,
+    /// Intervals naming a code the column does not hold, left alone.
+    pub(crate) untouched: usize,
+}
+
+impl ColumnShift {
+    /// Each distinct rename the shift makes, old name to new (an old name
+    /// held by several runs may take several), a name replaced by
+    /// [`UNKNOWN_NAME`] left out: no section or colour follows it.
+    pub(crate) fn renames(&self) -> Vec<(String, String)> {
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        for (_, record) in &self.corrections {
+            if let (Some(DrillValue::Category(from)), Some(DrillValue::Category(to))) = (&record.before, &record.after)
+                && to != UNKNOWN_NAME
+                && !pairs.iter().any(|(known, new)| known == from && new == to)
+            {
+                pairs.push((from.clone(), to.clone()));
+            }
+        }
+        pairs
+    }
+}
+
+/// `sections` after the renames of a shift, each judged against the
+/// sections as they stood, as [`sections_after_rename`] judges one: a
+/// section holding an old name takes the new one in its place, or beside it
+/// while `remains` says an interval still holds the old one, unless some
+/// section of the field already holds the new name. Judged together so no
+/// section gains a name by way of another rename.
+pub(crate) fn sections_after_shift(sections: &[WorkingSection], field: &str, renames: &[(String, String)], remains: impl Fn(&str) -> bool) -> Vec<WorkingSection> {
+    let held = |code: &str| sections.iter().any(|section| section.field == field && section.codes.iter().any(|member| member == code));
+    let mut after = sections.to_vec();
+    // Names added so far: the first section to take one keeps it.
+    let mut claimed: Vec<&String> = Vec::new();
+    for section in after.iter_mut().filter(|section| section.field == field) {
+        let mut codes = Vec::with_capacity(section.codes.len());
+        for code in &section.codes {
+            let mut new: Vec<&String> = Vec::new();
+            for (_, to) in renames.iter().filter(|(from, _)| from == code) {
+                if !held(to) && !claimed.contains(&to) {
+                    claimed.push(to);
+                    new.push(to);
+                }
+            }
+            if new.is_empty() || remains(code) {
+                codes.push(code.clone());
+            }
+            codes.extend(new.into_iter().cloned());
+        }
+        section.codes = codes;
+    }
+    after
 }
 
 /// Why a working section cannot be kept as named.
@@ -1297,6 +2714,58 @@ fn same_name(a: &str, b: &str) -> bool {
     a.chars().flat_map(char::to_lowercase).eq(b.chars().flat_map(char::to_lowercase))
 }
 
+/// The working section of `field` named like `code` without holding it: a
+/// code renamed to `code` would cost that section its name on the next open.
+pub(crate) fn section_named_apart<'a>(sections: &'a [WorkingSection], field: &str, code: &str) -> Option<&'a WorkingSection> {
+    sections
+        .iter()
+        .find(|section| section.field == field && same_name(&section.name, code) && !section.codes.iter().any(|held| held == code))
+}
+
+/// The working section an insertion's codes would cost its name, with the
+/// code that would, as [`section_named_apart`] finds for a rename: checked
+/// for the field picked and for every other field given a code.
+pub(crate) fn insertion_named_apart<'a, 'e>(sections: &'a [WorkingSection], edit: &'e IntervalInsert) -> Option<(&'a WorkingSection, &'e str)> {
+    edit.codes()
+        .into_iter()
+        .find_map(|(field, code)| section_named_apart(sections, field, code).map(|section| (section, code)))
+}
+
+/// What is said when `code` is named like `section` without being one of
+/// its codes: the code, its field and the section. The insert dialog shows
+/// it before anything is sent, and a rename, a shift or an insertion
+/// reaching the App is refused with it.
+pub(crate) fn name_is_code_message(section: &WorkingSection, code: &str) -> String {
+    tr!(
+        "drill-hole-section-name-is-code",
+        code = code.to_owned(),
+        field = section.field.clone(),
+        name = section.name.clone()
+    )
+}
+
+/// `sections` after `from` is renamed `to` in `field`: a section holding
+/// `from` takes `to` in its place, or beside it while an interval still holds
+/// `from`, so the renamed intervals keep their pick. A `to` some section of
+/// the field already holds stays where it is.
+pub(crate) fn sections_after_rename(sections: &[WorkingSection], field: &str, from: &str, to: &str, from_remains: bool) -> Vec<WorkingSection> {
+    let mut sections = sections.to_vec();
+    if sections.iter().any(|section| section.field == field && section.codes.iter().any(|code| code == to)) {
+        return sections;
+    }
+    for section in sections.iter_mut().filter(|section| section.field == field) {
+        let Some(at) = section.codes.iter().position(|code| code == from) else {
+            continue;
+        };
+        if from_remains {
+            section.codes.insert(at + 1, to.to_owned());
+        } else {
+            section.codes[at] = to.to_owned();
+        }
+    }
+    sections
+}
+
 /// What stops `name` naming a new working section of `field` holding
 /// `members`. The editor asks before offering to add one and
 /// [`tidy_working_sections`] before keeping one, so the two agree.
@@ -1327,11 +2796,18 @@ pub(crate) fn working_section_name_problem(name: &str, field: &str, codes: &[Str
 
 /// The codes `fields` lists for `key`, or none for a field that is not
 /// categorical or not there.
-fn field_codes<'a>(fields: &'a [DrillField], key: &str) -> &'a [String] {
+pub(crate) fn field_codes<'a>(fields: &'a [DrillField], key: &str) -> &'a [String] {
     match fields.iter().find(|field| field.key == key).map(|field| &field.kind) {
         Some(DrillFieldKind::Categorical { categories }) => categories,
         _ => &[],
     }
+}
+
+/// The codes a field offers to be typed, in the order a geologist reads them:
+/// its strat `column` first, in the column's order, then any other of its
+/// `codes` the column lacks, in their own order. Every code is offered.
+pub(crate) fn offered_codes(column: &[String], codes: &[String]) -> Vec<String> {
+    column.iter().chain(codes.iter().filter(|code| !column.contains(code))).cloned().collect()
 }
 
 /// A list of working sections as the app keeps it: names trimmed, each code
@@ -1465,6 +2941,63 @@ fn lenient_working_sections<'de, D: serde::Deserializer<'de>>(deserializer: D) -
     })
 }
 
+/// Reads the strat field; anything but a non-blank string reads as none.
+fn lenient_strat_field<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Field {
+        Key(String),
+        Unreadable(serde::de::IgnoredAny),
+    }
+    Ok(match Field::deserialize(deserializer)? {
+        Field::Key(key) if !key.trim().is_empty() => Some(key),
+        _ => None,
+    })
+}
+
+/// The codes a strat column keeps: no blank, no unknown, none twice.
+fn kept_strat_codes(codes: Vec<String>) -> Vec<String> {
+    let mut kept: Vec<String> = Vec::with_capacity(codes.len());
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::with_capacity(codes.len());
+    for code in codes {
+        if !code.trim().is_empty() && code != UNKNOWN_NAME && seen.insert(code.clone()) {
+            kept.push(code);
+        }
+    }
+    kept
+}
+
+/// Reads the strat columns a field at a time, so one malformed entry costs
+/// only itself and not the colours saved beside it.
+fn lenient_strat_columns<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<StratColumn>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        Column(StratColumn),
+        Unreadable(serde::de::IgnoredAny),
+    }
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum List {
+        Entries(Vec<Entry>),
+        Unreadable(serde::de::IgnoredAny),
+    }
+    Ok(match List::deserialize(deserializer)? {
+        List::Entries(entries) => entries
+            .into_iter()
+            .filter_map(|entry| match entry {
+                Entry::Column(column) => Some(StratColumn {
+                    codes: kept_strat_codes(column.codes),
+                    ..column
+                }),
+                Entry::Unreadable(_) => None,
+            })
+            .filter(|column| !column.codes.is_empty())
+            .collect(),
+        List::Unreadable(_) => Vec::new(),
+    })
+}
+
 /// How many saved working sections the reader passes over in a colour
 /// state's JSON: each list entry that is not a section, or one for a value
 /// that is not a list. Nothing saved counts nothing.
@@ -1474,6 +3007,35 @@ pub(crate) fn skipped_working_sections(color: &serde_json::Value) -> usize {
         Some(serde_json::Value::Array(entries)) => entries.iter().filter(|entry| WorkingSection::deserialize(*entry).is_err()).count(),
         Some(_) => 1,
     }
+}
+
+/// How many saved strat columns the reader passes over in a colour state's
+/// JSON, counted as [`skipped_working_sections`] counts: each list entry
+/// that is not a column, or one for a value that is not a list.
+pub(crate) fn skipped_strat_columns(color: &serde_json::Value) -> usize {
+    match color.get("strat_columns") {
+        None | Some(serde_json::Value::Null) => 0,
+        Some(serde_json::Value::Array(entries)) => entries.iter().filter(|entry| StratColumn::deserialize(*entry).is_err()).count(),
+        Some(_) => 1,
+    }
+}
+
+/// Whether a colour state's JSON saved a strat field the reader passes
+/// over: present, not null, and not a non-blank string.
+pub(crate) fn skipped_strat_field(color: &serde_json::Value) -> bool {
+    match color.get("strat_field") {
+        None | Some(serde_json::Value::Null) => false,
+        Some(serde_json::Value::String(key)) => key.trim().is_empty(),
+        Some(_) => true,
+    }
+}
+
+/// Whether a colour state's JSON saved fewer ramp stops than a ramp needs.
+pub(crate) fn saved_too_few_color_stops(color: &serde_json::Value) -> bool {
+    color
+        .get("stops")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|stops| stops.len() < MIN_DRILL_COLOR_STOPS)
 }
 
 /// A dataset is drawn at its drilled width until someone says otherwise.
@@ -1580,6 +3142,8 @@ impl Default for DrillColorState {
             min_pixel_diameter: default_min_pixel_diameter(),
             working_sections: Vec::new(),
             by_working_section: false,
+            strat_columns: Vec::new(),
+            strat_field: None,
             // The look a set had before there was a choice. A new set takes
             // the constructor for where it came from instead.
             hole_style: saved_before_styles_hole_style(),
@@ -1633,6 +3197,37 @@ impl DrillColorState {
         self.working_sections
             .iter()
             .find(|section| section.field == field && section.codes.iter().any(|member| member == code))
+    }
+
+    /// `field`'s strat column, top first; empty when it has none.
+    pub(crate) fn strat_column(&self, field: &str) -> &[String] {
+        self.strat_columns.iter().find(|column| column.field == field).map_or(&[], |column| column.codes.as_slice())
+    }
+
+    /// A saved ramp with too few stops takes its preset's, so the ramp
+    /// editor never meets an empty one.
+    pub(crate) fn settle_stops(&mut self) {
+        if self.stops.len() < MIN_DRILL_COLOR_STOPS {
+            self.stops = self.preset.stops();
+        }
+    }
+
+    /// Replace `field`'s strat column with `codes`, blanks, UNK and
+    /// duplicates left out, keeping the field's place among the others. An empty
+    /// column is kept as none.
+    pub(crate) fn set_strat_column(&mut self, field: &str, codes: Vec<String>) {
+        let kept = kept_strat_codes(codes);
+        match self.strat_columns.iter().position(|column| column.field == field) {
+            Some(at) if kept.is_empty() => {
+                self.strat_columns.remove(at);
+            }
+            Some(at) => self.strat_columns[at].codes = kept,
+            None if kept.is_empty() => {}
+            None => self.strat_columns.push(StratColumn {
+                field: field.to_owned(),
+                codes: kept,
+            }),
+        }
     }
 
     /// The working section of `field` called `name`, if any.
@@ -1696,6 +3291,43 @@ impl DrillColorState {
     /// Every write goes through here so the order the lookup searches holds.
     pub(crate) fn set_categories(&mut self, categories: Vec<DrillCategoryColor>) {
         self.categories = CategoryTable::new(categories);
+    }
+
+    /// Give `to` the colour `from` has in `field`, when `field` is the one
+    /// coloured by and `to` has none of its own, so a renamed code keeps its
+    /// look. Returns whether anything changed.
+    pub(crate) fn carry_category_color(&mut self, field: &str, from: &str, to: &str) -> bool {
+        if self.active_field.as_deref() != Some(field) || self.category_color(to).is_some() {
+            return false;
+        }
+        let Some(color) = self.category_color(from) else {
+            return false;
+        };
+        let mut table = Vec::from(std::mem::take(&mut self.categories));
+        table.push(DrillCategoryColor { value: to.to_owned(), color });
+        self.set_categories(table);
+        true
+    }
+
+    /// [`Self::carry_category_color`] for several renames made at once: each
+    /// new name without a colour takes its old name's colour as it stood, so
+    /// no colour is passed along by way of another rename.
+    pub(crate) fn carry_category_colors(&mut self, field: &str, renames: &[(String, String)]) -> bool {
+        if self.active_field.as_deref() != Some(field) {
+            return false;
+        }
+        let carried = renames
+            .iter()
+            .filter(|(_, to)| self.category_color(to).is_none())
+            .filter_map(|(from, to)| self.category_color(from).map(|color| DrillCategoryColor { value: to.clone(), color }))
+            .collect::<Vec<_>>();
+        if carried.is_empty() {
+            return false;
+        }
+        let mut table = Vec::from(std::mem::take(&mut self.categories));
+        table.extend(carried);
+        self.set_categories(table);
+        true
     }
 
     /// Give every code in `field`, and every working section of it, a
@@ -1888,12 +3520,348 @@ fn project_tangent(origin: DVec3, distance: f64, azimuth_degrees: f64, dip_degre
     origin + DVec3::new(horizontal * azimuth.sin(), horizontal * azimuth.cos(), distance * dip.sin())
 }
 
+/// Write one side of a correction to its hole: its after when `apply`, its
+/// before when undone. A value goes into the record's field, a roof's depth
+/// is the interval's from, a floor's its to and its follower's from. An
+/// insertion puts its row in, or takes it back out; a deletion takes its row
+/// out, or puts it back where it was. False, with nothing written, when the
+/// target is not in the hole.
+fn write_correction(hole: &mut DrillHole, target: CorrectionTarget, record: &Correction, apply: bool) -> bool {
+    match record.kind {
+        CorrectionKind::Insertion => return write_insertion(hole, target, record, apply),
+        CorrectionKind::Deletion => return write_deletion(hole, target, record, apply),
+        CorrectionKind::Value | CorrectionKind::Boundary => {}
+    }
+    let value = if apply { record.after.as_ref() } else { record.before.as_ref() };
+    let touched = [Some(target.interval), target.below];
+    if touched.iter().flatten().any(|&index| index >= hole.intervals.len()) {
+        return false;
+    }
+    if record.kind == CorrectionKind::Boundary {
+        let Some(&DrillValue::Numeric(depth)) = value else {
+            return false;
+        };
+        for index in touched.into_iter().flatten() {
+            hole.intervals[index].keep_logged();
+        }
+        if record.field == ROOF_FIELD {
+            hole.intervals[target.interval].from = depth;
+        } else {
+            hole.intervals[target.interval].to = depth;
+        }
+        if let Some(below) = target.below {
+            // A row joined across a hair's gap gets its own logged roof back.
+            let own = hole.intervals[below].logged.as_ref().map(|logged| logged.from);
+            hole.intervals[below].from = own.filter(|from| !apply && (from - depth).abs() <= TOUCH_TOLERANCE).unwrap_or(depth);
+        }
+    } else {
+        let interval = &mut hole.intervals[target.interval];
+        interval.keep_logged();
+        set_value(&mut interval.values, &record.field, value);
+    }
+    true
+}
+
+/// [`write_correction`] for an insertion. A record carrying its row puts it
+/// in at the target, its depths and key the record's, and when undone takes
+/// it back out, if it is still the one put in. A record carrying no row
+/// names a value of the row before it and only checks that row is there.
+fn write_insertion(hole: &mut DrillHole, target: CorrectionTarget, record: &Correction, apply: bool) -> bool {
+    let ours = hole
+        .intervals
+        .get(target.interval)
+        .and_then(|interval| interval.logged.as_ref())
+        .is_some_and(|logged| logged.never_logged && logged.from == record.logged_from && logged.to == record.logged_to);
+    match (&record.row, apply) {
+        (None, _) => ours,
+        (Some(_), false) => {
+            if ours {
+                hole.intervals.remove(target.interval);
+            }
+            ours
+        }
+        (Some(row), true) => {
+            if target.interval > hole.intervals.len() {
+                return false;
+            }
+            // Adding zero turns a negative zero into a plain one.
+            let (from, to) = (record.logged_from + 0.0, record.logged_to + 0.0);
+            hole.intervals.insert(
+                target.interval,
+                DrillInterval {
+                    from,
+                    to,
+                    values: row.clone(),
+                    logged: Some(LoggedInterval {
+                        from,
+                        to,
+                        values: BTreeMap::new(),
+                        never_logged: true,
+                    }),
+                },
+            );
+            true
+        }
+    }
+}
+
+/// [`write_correction`] for a deletion: the row the record holds leaves the
+/// hole at the target, if it is still that row, and when undone goes back in
+/// at the same place, exactly as it was.
+fn write_deletion(hole: &mut DrillHole, target: CorrectionTarget, record: &Correction, apply: bool) -> bool {
+    let Some(removed) = &record.removed else {
+        return false;
+    };
+    if apply {
+        let ours = hole.intervals.get(target.interval).is_some_and(|row| same_interval_as_saved(row, removed));
+        if ours {
+            hole.intervals.remove(target.interval);
+        }
+        ours
+    } else if hole.dhid == record.hole && target.interval <= hole.intervals.len() {
+        hole.intervals.insert(target.interval, removed.clone());
+        true
+    } else {
+        false
+    }
+}
+
+/// Whether two values are the same, a NaN the same as a NaN, as a row read
+/// back from a file must match the one it was.
+fn same_value(a: &DrillValue, b: &DrillValue) -> bool {
+    match (a, b) {
+        (DrillValue::Numeric(a), DrillValue::Numeric(b)) => a == b || (a.is_nan() && b.is_nan()),
+        (DrillValue::Category(a), DrillValue::Category(b)) => a == b,
+        _ => false,
+    }
+}
+
+fn same_option_value(a: Option<&DrillValue>, b: Option<&DrillValue>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => same_value(a, b),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn same_values(a: &BTreeMap<String, DrillValue>, b: &BTreeMap<String, DrillValue>) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|((key_a, a), (key_b, b))| key_a == key_b && same_value(a, b))
+}
+
+fn same_depth(a: f64, b: f64) -> bool {
+    a == b || (a.is_nan() && b.is_nan())
+}
+
+/// Whether two intervals are the same row, depths, values and logged side,
+/// a NaN matching a NaN.
+pub(crate) fn same_interval(a: &DrillInterval, b: &DrillInterval) -> bool {
+    same_depth(a.from, b.from)
+        && same_depth(a.to, b.to)
+        && same_values(&a.values, &b.values)
+        && match (&a.logged, &b.logged) {
+            (Some(a), Some(b)) => same_depth(a.from, b.from) && same_depth(a.to, b.to) && same_values(&a.values, &b.values) && a.never_logged == b.never_logged,
+            (None, None) => true,
+            _ => false,
+        }
+}
+
+/// Whether `row` is `held`, either as held or as a save reads it back: the
+/// interval columns of a file hold no NaN or infinite number, so such a value
+/// comes back as none. The logged side keeps it.
+fn same_interval_as_saved(row: &DrillInterval, held: &DrillInterval) -> bool {
+    same_interval(row, held) || {
+        let mut saved = held.clone();
+        saved.values.retain(|_, value| !matches!(value, DrillValue::Numeric(number) if !number.is_finite()));
+        same_interval(row, &saved)
+    }
+}
+
+/// Whether two records are the same record, as [`same_interval`] matches rows.
+fn same_record(a: &Correction, b: &Correction) -> bool {
+    a.hole == b.hole
+        && same_depth(a.logged_from, b.logged_from)
+        && same_depth(a.logged_to, b.logged_to)
+        && a.kind == b.kind
+        && a.field == b.field
+        && same_option_value(a.before.as_ref(), b.before.as_ref())
+        && same_option_value(a.after.as_ref(), b.after.as_ref())
+        && a.author == b.author
+        && a.date == b.date
+        && a.reason == b.reason
+        && a.status == b.status
+        && a.approver == b.approver
+        && a.decision == b.decision
+        && a.decided == b.decided
+        && match (&a.row, &b.row) {
+            (Some(a), Some(b)) => same_values(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+        && match (&a.removed, &b.removed) {
+            (Some(a), Some(b)) => same_interval(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+}
+
+/// Whether the member rows of `rows`, each its start, its name in the field
+/// and whether a member, read as `name`, sit out of `column`'s order: once
+/// touching runs of one name are joined, a column name above one of their
+/// runs comes after `name` in the column, or one below it comes no later.
+/// Rows starting together keep their order. Names outside the column and UNK
+/// are passed over, and a `name` the column lacks is never out of order.
+fn out_of_sequence(rows: &[(f64, Option<&str>, bool)], name: &str, column: &[String]) -> bool {
+    let rank = |name: &str| (name != UNKNOWN_NAME).then(|| column.iter().position(|code| code == name)).flatten();
+    let Some(target) = rank(name) else {
+        return false;
+    };
+    let mut order: Vec<&(f64, Option<&str>, bool)> = rows.iter().collect();
+    order.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // Runs top to bottom: place in the column, and whether a member.
+    let mut runs: Vec<(usize, bool)> = Vec::new();
+    for &&(_, named, is_member) in &order {
+        let place = if is_member { Some(target) } else { named.and_then(rank) };
+        let Some(place) = place else { continue };
+        match runs.last_mut() {
+            Some(run) if run.0 == place => run.1 |= is_member,
+            _ => runs.push((place, is_member)),
+        }
+    }
+    runs.iter()
+        .enumerate()
+        .filter(|(_, run)| run.1)
+        .any(|(at, _)| runs[..at].iter().any(|run| run.0 >= target) || runs[at + 1..].iter().any(|run| run.0 <= target))
+}
+
+/// Whether `interval` has depths and a value of `field`: one the strat
+/// column draws, and an insertion trims.
+pub(crate) fn holds_value(interval: &DrillInterval, field: &str) -> bool {
+    interval.from.is_finite()
+        && interval.to.is_finite()
+        && match interval.values.get(field) {
+            Some(DrillValue::Category(name)) => !name.trim().is_empty(),
+            Some(DrillValue::Numeric(_)) => true,
+            None => false,
+        }
+}
+
+/// Whether `interval` holds any data: a value neither blank nor in one of
+/// the `derived` columns an Incline tool writes. A row without is as if it
+/// were not there.
+fn holds_data(interval: &DrillInterval, derived: &BTreeSet<String>) -> bool {
+    interval.values.iter().any(|(key, value)| is_data(key, value, derived))
+}
+
+/// Whether `value`, in column `key`, is data: not blank, and not in one of
+/// the `derived` columns an Incline tool writes.
+fn is_data(key: &str, value: &DrillValue, derived: &BTreeSet<String>) -> bool {
+    !derived.contains(key)
+        && match value {
+            DrillValue::Category(text) => !text.trim().is_empty(),
+            DrillValue::Numeric(_) => true,
+        }
+}
+
+/// The columns of `field`'s table in `hole`: those of the rows holding a
+/// value of the field, bar the `derived` ones, which tell no table.
+fn field_table<'a>(hole: &'a DrillHole, field: &str, derived: &BTreeSet<String>) -> BTreeSet<&'a String> {
+    hole.intervals
+        .iter()
+        .filter(|interval| holds_value(interval, field))
+        .flat_map(|interval| interval.values.keys())
+        .filter(|key| !derived.contains(*key))
+        .collect()
+}
+
+/// Whether `interval` has depths and shares one of `columns`: a row of the
+/// table they are the columns of.
+fn shares_table(interval: &DrillInterval, columns: &BTreeSet<&String>) -> bool {
+    interval.from.is_finite() && interval.to.is_finite() && interval.values.keys().any(|key| columns.contains(key))
+}
+
+/// Whether `interval` is a row of the table whose columns are `columns`: it
+/// has depths and either shares one of them or holds nothing but `derived`
+/// columns, and so could be of any table.
+fn in_table(interval: &DrillInterval, columns: &BTreeSet<&String>, derived: &BTreeSet<String>) -> bool {
+    shares_table(interval, columns) || (interval.from.is_finite() && interval.to.is_finite() && interval.values.keys().all(|key| derived.contains(key)))
+}
+
+/// A rough measure of the memory a kept JSON value holds: a node's size each,
+/// plus its text and keys. Map leaves count as full and inner nodes not at all.
+fn json_bytes(value: &serde_json::Value) -> usize {
+    use serde_json::Value;
+    let node = size_of::<Value>();
+    match value {
+        Value::String(text) => node.saturating_add(text.len()),
+        Value::Array(items) => items.iter().fold(node, |sum, item| sum.saturating_add(json_bytes(item))),
+        // The map's B-tree leaves hold 11 slots each, filled or not.
+        Value::Object(map) => map.iter().fold(
+            node.saturating_add(map.len().div_ceil(11).saturating_mul(11 * size_of::<(String, Value)>() + 16)),
+            |sum, (key, item)| sum.saturating_add(key.len()).saturating_add(json_bytes(item).saturating_sub(size_of::<Value>())),
+        ),
+        _ => node,
+    }
+}
+
+/// Roughly how much memory `values` holds: per entry its key, its header
+/// and the value.
+fn values_bytes(values: &BTreeMap<String, DrillValue>) -> usize {
+    values
+        .iter()
+        .map(|(key, value)| size_of::<String>() + key.len() + size_of::<DrillValue>() + value_bytes(value))
+        .fold(0usize, usize::saturating_add)
+}
+
+/// The text a value holds beyond its own size.
+fn value_bytes(value: &DrillValue) -> usize {
+    match value {
+        DrillValue::Category(text) => text.len(),
+        DrillValue::Numeric(_) => 0,
+    }
+}
+
+/// A depth as a dialog shows it: rounded to the millimetre, trailing zeros
+/// left off, and never "-0". The insert dialog's hint and every refusal
+/// quoting a hole's end show it alike.
+pub(crate) fn shown_depth(depth: f64) -> String {
+    let text = format!("{depth:.3}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    if text == "-0" { "0".to_owned() } else { text.to_owned() }
+}
+
+/// A value as the strat column names it: a code trimmed, a number as written.
+pub(crate) fn value_name(value: Option<&DrillValue>) -> String {
+    match value {
+        Some(DrillValue::Category(name)) => name.trim().to_owned(),
+        Some(DrillValue::Numeric(number)) => format!("{number}"),
+        None => String::new(),
+    }
+}
+
+/// Set `key` to `value`, or leave it unrecorded when there is none.
+fn set_value(values: &mut BTreeMap<String, DrillValue>, key: &str, value: Option<&DrillValue>) {
+    match value {
+        Some(value) => {
+            values.insert(key.to_owned(), value.clone());
+        }
+        None => {
+            values.remove(key);
+        }
+    }
+}
+
 fn collect_fields(holes: &[DrillHole]) -> Vec<DrillField> {
+    fields_of(holes.iter().map(|hole| hole.intervals.iter().map(|interval| &interval.values)))
+}
+
+/// [`collect_fields`] over any groups of rows' values, such as those
+/// deletions hold.
+fn fields_of<'a, Rows: IntoIterator<Item = &'a BTreeMap<String, DrillValue>>>(holes: impl IntoIterator<Item = Rows>) -> Vec<DrillField> {
     let mut numeric: BTreeMap<String, (String, f64, f64, bool)> = BTreeMap::new();
     let mut categorical: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
     for hole in holes {
-        for interval in &hole.intervals {
-            for (key, value) in &interval.values {
+        for values in hole {
+            for (key, value) in values {
                 let label = key.clone();
                 match value {
                     // Sentinels stay out of the range; the field still shows.
@@ -2162,6 +4130,46 @@ pub(crate) struct ReferencePick {
 /// `codes` is one code, or every code of a working section: consecutive
 /// intervals holding any of them form a single run.
 pub(crate) fn reference_pick(hole: &DrillHole, field: &str, codes: &[String], side: ReferenceSide) -> ReferencePick {
+    let (runs, _) = value_runs(hole, field, codes);
+    let depth = runs.first().map(|&(top, base)| match side {
+        ReferenceSide::Roof => top,
+        ReferenceSide::Floor => base,
+    });
+    ReferencePick { depth, runs: runs.len() }
+}
+
+/// The uppermost run of a working section in one hole, whole.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SectionRun {
+    /// Down-hole depth of the roof: the top of the run's first interval.
+    pub(crate) top: f64,
+    /// Down-hole depth of the floor: the deepest base in the run.
+    pub(crate) base: f64,
+    /// How many separate runs the hole holds, as for [`ReferencePick`].
+    pub(crate) runs: usize,
+    /// The hole was logged past the run: a different value follows it. False
+    /// where the intervals ran out with the run open, so the base is only
+    /// where logging stopped.
+    pub(crate) closed: bool,
+}
+
+/// The uppermost run of intervals carrying any of `codes` in `field`, read by
+/// the same rules as [`reference_pick`], or `None` where the hole never holds
+/// them.
+pub(crate) fn section_run(hole: &DrillHole, field: &str, codes: &[String]) -> Option<SectionRun> {
+    let (runs, last_open) = value_runs(hole, field, codes);
+    let &(top, base) = runs.first()?;
+    Some(SectionRun {
+        top,
+        base,
+        runs: runs.len(),
+        closed: runs.len() > 1 || !last_open,
+    })
+}
+
+/// The `(top, base)` of every run of `codes` in `field`, uppermost first, and
+/// whether the last run was still open when the intervals ran out.
+fn value_runs(hole: &DrillHole, field: &str, codes: &[String]) -> (Vec<(f64, f64)>, bool) {
     let mut intervals: Vec<&DrillInterval> = hole.intervals.iter().collect();
     intervals.sort_by(|a, b| a.from.total_cmp(&b.from));
     let mut runs: Vec<(f64, f64)> = Vec::new();
@@ -2185,14 +4193,11 @@ pub(crate) fn reference_pick(hole: &DrillHole, field: &str, codes: &[String], si
             }
         }
     }
+    let last_open = open.is_some();
     if let Some(run) = open {
         runs.push(run);
     }
-    let depth = runs.first().map(|&(top, base)| match side {
-        ReferenceSide::Roof => top,
-        ReferenceSide::Floor => base,
-    });
-    ReferencePick { depth, runs: runs.len() }
+    (runs, last_open)
 }
 
 /// One disc of a hole drawn as string and discs: a stretch of the trace and

@@ -831,7 +831,7 @@ static NEXT_DIG_BLOCK_ID: AtomicU64 = AtomicU64::new(1);
 /// attempt it belongs to rather than only the inputs it was computed from.
 static NEXT_REQUEST_TOKEN: AtomicU64 = AtomicU64::new(1);
 
-fn next_view_id() -> TriangulationId {
+pub(crate) fn next_view_id() -> TriangulationId {
     TriangulationId(NEXT_VIEW_ID.fetch_sub(1, Ordering::Relaxed))
 }
 

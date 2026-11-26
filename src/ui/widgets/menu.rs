@@ -1615,6 +1615,14 @@ impl<'value> MenuFieldText<'value> {
             hint,
         } = self;
         let id = ui.scope_id().with(id_salt);
+        // Over a DragableMenu, which shares the Foreground order and rises
+        // over the popup on a click, keep the popup above it. egui sets a
+        // sublayer only within one order, and names the popup layer
+        // `id.with("completion_popup")`.
+        if ui.layer_id().order == egui::Order::Foreground {
+            let popup = egui::LayerId::new(egui::Order::Foreground, id.with("completion_popup"));
+            ui.ctx().set_sublayer(ui.layer_id(), popup);
+        }
         menu_field_row(ui, label, help_text, |ui, row_height, column_width| {
             let width = width.unwrap_or(column_width);
             let text_edit = egui::TextEdit::singleline(value)
@@ -1746,6 +1754,25 @@ impl<'value, T: PartialEq> MenuFieldCombo<'value, T> {
             response
         })
     }
+}
+
+/// The width a [`MenuFieldCombo`] needs to show `text` whole, measured as it
+/// measures its options.
+fn combo_width_for(ui: &egui::Ui, text: &str) -> f32 {
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let chrome = ui.spacing().icon_width + ui.spacing().icon_spacing + BUTTON_HORIZONTAL_PADDING * 2.0;
+    ui.painter().layout_no_wrap(text.to_owned(), font_id, egui::Color32::PLACEHOLDER).size().x + chrome
+}
+
+/// `text` cut short with an ellipsis until a combo `width` wide shows it
+/// whole, so a long option cannot widen the combo past `width`.
+pub(crate) fn elide_for_combo(ui: &egui::Ui, text: &str, width: f32) -> String {
+    let mut kept: Vec<char> = text.chars().collect();
+    let mut shown = text.to_owned();
+    while combo_width_for(ui, &shown) > width && kept.pop().is_some() {
+        shown = format!("{}…", kept.iter().collect::<String>().trim_end());
+    }
+    shown
 }
 
 /// Standard dialog keyboard shortcuts.

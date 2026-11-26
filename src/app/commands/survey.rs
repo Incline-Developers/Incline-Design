@@ -185,6 +185,7 @@ impl App<'_> {
         for handle in entities {
             match *handle {
                 SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_) => anyhow::bail!("{}", tr!("haul-survey-selection")),
+                SceneEntityId::PrismoidGrid(_) => anyhow::bail!("{}", tr!("survey-prismoid-grid-selection")),
                 SceneEntityId::Object(id) => {
                     let object = project.project.document.get_object(id).ok_or_else(|| anyhow!("{}", tr!("survey-wrong-project")))?;
                     let layer = project.project.document.layer(object.layer()).ok_or_else(|| anyhow!("{}", tr!("survey-unavailable")))?;
@@ -250,6 +251,7 @@ impl App<'_> {
                     OpenItem::PointCloud(item) => item.state.revision(),
                     OpenItem::DrillHole(item) => item.state.revision(),
                     OpenItem::Raster(item) => item.state.revision(),
+                    OpenItem::PrismoidGrid(item) => item.state.revision(),
                 };
                 (item.item_ref(), revision)
             })
@@ -307,6 +309,7 @@ impl App<'_> {
                         OpenItem::PointCloud(_) => clouds += 1,
                         OpenItem::DrillHole(_) => holes += 1,
                         OpenItem::Raster(_) => rasters += 1,
+                        OpenItem::PrismoidGrid(_) => {}
                     }
                 }
 
@@ -476,6 +479,12 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
                     *diameter *= transform.length_scale();
                     ensure!(diameter.is_finite(), "{}", tr!("survey-invalid-transform"));
                 }
+                if let Some(depth) = hole.total_depth {
+                    let depth = depth * transform.length_scale();
+                    ensure!(depth.is_finite(), "{}", tr!("survey-invalid-transform"));
+                    // As a reopen would read it: a no-data value is none.
+                    hole.total_depth = crate::model::drill_hole::recorded_total_depth(depth);
+                }
                 for (from, to) in &mut hole.render_ranges {
                     *from *= transform.length_scale();
                     *to *= transform.length_scale();
@@ -484,6 +493,30 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
                     interval.from *= transform.length_scale();
                     interval.to *= transform.length_scale();
                     ensure!(interval.from.is_finite() && interval.to.is_finite(), "{}", tr!("survey-invalid-transform"));
+                    if let Some(logged) = &mut interval.logged {
+                        logged.from *= transform.length_scale();
+                        logged.to *= transform.length_scale();
+                    }
+                }
+            }
+            for record in &mut dataset.corrections {
+                record.logged_from *= transform.length_scale();
+                record.logged_to *= transform.length_scale();
+                if record.kind == crate::model::drill_hole::CorrectionKind::Boundary {
+                    for depth in [&mut record.before, &mut record.after] {
+                        if let Some(crate::model::drill_hole::DrillValue::Numeric(depth)) = depth {
+                            *depth *= transform.length_scale();
+                        }
+                    }
+                }
+                // A deleted row goes back as it was, so it moves with the rest.
+                if let Some(removed) = &mut record.removed {
+                    removed.from *= transform.length_scale();
+                    removed.to *= transform.length_scale();
+                    if let Some(logged) = &mut removed.logged {
+                        logged.from *= transform.length_scale();
+                        logged.to *= transform.length_scale();
+                    }
                 }
             }
             // Rebuilt rather than reconstructed through `DrillHoleDataset::new`,
@@ -505,6 +538,7 @@ fn transform_item(item: &mut OpenItem, transform: &SurveyTransform, target_syste
             item.world_to_uv = composed_world_to_uv(item.world_to_uv, grid)?;
             item.projection = target_system.to_owned();
         }
+        OpenItem::PrismoidGrid(_) => anyhow::bail!("{}", tr!("survey-prismoid-grid-selection")),
     }
     ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
     Ok(())

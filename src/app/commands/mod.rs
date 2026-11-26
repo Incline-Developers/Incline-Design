@@ -17,8 +17,10 @@ pub(crate) mod pit_evaluation; // Measures what each pit design takes out of the
 pub(crate) mod pit_rehab; // Reshapes a dump into one even slope for its rehabilitation.
 pub(crate) mod pit_roads; // Keeps every pit design's ramps in the haul network as roads.
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
+pub(crate) mod prismoid_grid;
 pub(crate) mod products; // Handles the Drill & Blast workspace's stored products.
 pub(crate) mod property; // Handles changing colors, fills, etc. commands
+pub(crate) mod quality_points;
 pub(crate) mod raster; // Handles georeferenced image textures.
 pub(crate) mod rename; // Handles renaming layers and project items.
 pub(crate) mod reserves; // Handles the Solids workspace's Reserves setup (Field List, block model mappings).
@@ -28,11 +30,15 @@ pub(crate) mod schedule;
 pub(crate) mod schedule_capture; // Captures the project into the blended model a schedule run solves
 pub(crate) mod schedule_readiness; // Handles the Schedule workspace's loader classes and agents.
 pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
+pub(crate) mod session_results; // Thickness work's session-only results, pruned with their layers and surfaces.
 pub(crate) mod slice; // Handles the vertical slice view mode.
 pub(crate) mod solids; // Handles the Solids workspace's Solids setup (per-solid surfaces, kind, block model).
 pub(crate) mod solids_view;
+pub(crate) mod strat_check; // Orders a strat column by majority and flags the holes that disagree.
+pub(crate) mod string_clean; // Clean Strings: the app side of the open-string clean-up and the rings it leaves.
 mod survey; // Handles saved mine grids and transformations of project data.
 pub(crate) mod text; // Handles text editing commands
+pub(crate) mod thickness_points; // True thickness at each hole and measured pair, against a reference surface.
 pub(crate) mod tool_subject; // Opens the tools that work on one named item, on the selection or on what their dialog chooses.
 pub(crate) mod triangulation; // Handles loading meshes, deleting meshes, etc. commands
 pub(crate) mod view; /* Handles resetting camera view, , etc. commands */
@@ -44,11 +50,16 @@ use crate::{
     i18n::tr,
     model::Command,
     ui::state::{ActiveTool, UiCommand},
-    userspace_error,
+    userspace_error, userspace_log, userspace_warn,
 };
 
 impl<'a> App<'a> {
     pub(crate) fn apply_history_step(&mut self, undo: bool) {
+        // Before the step: a carry on ends even when there is none to take.
+        if self.editor.end_string_rework_for_history_step() {
+            self.invalidate_geometry();
+        }
+        let seam_surface_ready = self.seam_surface_dialog_ready();
         if self.restore_history_step(undo) {
             return;
         }
@@ -77,6 +88,10 @@ impl<'a> App<'a> {
         }
         self.editor.selected_handles.clear();
         self.editor.canvas_context_menu_open = false;
+        // Rings describe the strings as a build or a clean left them, by
+        // vertex number; a step back or forward leaves them describing
+        // strings that are no longer there, so they go.
+        self.editor.clear_string_rings();
         self.reset_fuse();
         self.cancel_chamfer();
         self.clear_bezier_state();
@@ -85,6 +100,29 @@ impl<'a> App<'a> {
         // references dangling. Both are settled by the same sweep.
         self.drop_editor_references_to_missing_items();
         self.apply_step_effects(effects);
+        // A step can stale a ready Thickness Surfaces dialog's run.
+        if seam_surface_ready {
+            self.refresh_seam_surface_dialog(true);
+        }
+        // An open Thin Strings dialog previews the strings as they were.
+        self.refresh_thin_preview(true);
+        // A copy's first pick is a vertex number on a string the step may
+        // have renumbered or removed.
+        self.editor.copy_along = None;
+        // The string picked to split may be another now.
+        self.clear_split_at_crossings();
+        // Drags and nudges after an undo or redo start an undo step of
+        // their own.
+        self.editor.vertex_edit_run = None;
+        // Insert Point's marker sits on the string as it was, as do Fill
+        // Segment's, the piece Remove Between Crossings shows and the
+        // segment Measure Distance reads.
+        if matches!(
+            self.editor.active_tool,
+            ActiveTool::InsertPoint | ActiveTool::FillSegment | ActiveTool::RemoveBetweenCrossings | ActiveTool::MeasureDistance
+        ) {
+            self.clear_insert_point_marker();
+        }
         self.invalidate_geometry();
         // A rollback to a checkpoint takes its next step once this one has
         // landed, which may be after items it needed were loaded.
@@ -118,6 +156,16 @@ impl<'a> App<'a> {
             }
         }
         self.walking_history = false;
+    }
+
+    /// Every string a join at ring `index` moves may be edited from the
+    /// canvas.
+    fn ring_strings_editable(&self, index: usize) -> bool {
+        let document = self.active_document();
+        self.editor
+            .string_rings
+            .get(index)
+            .is_some_and(|ring| ring.join_strings().into_iter().all(|id| self.editor.canvas_edits_object(document, id)))
     }
 
     pub(crate) fn handle_ui_commands(&mut self, commands: Vec<UiCommand>) {
@@ -184,11 +232,13 @@ impl<'a> App<'a> {
                 | UiCommand::ImportRasterPaths(_)
                 | UiCommand::ChooseImportSourceFiles(_)
                 | UiCommand::ImportCsvBlockModel { .. }
+                | UiCommand::ImportQualityPoints { .. }
                 | UiCommand::ImportDrillHole(_)
                 | UiCommand::ToggleCreateDrillPattern
                 | UiCommand::BeginDrillPatternShapePick
                 | UiCommand::CreateDrillPattern { .. }
                 | UiCommand::CreateLayer { .. }
+                | UiCommand::OpenNewLayer
                 | UiCommand::CreateFolder(_)
                 | UiCommand::DeleteFolder { .. }
                 | UiCommand::DeleteFolderAndContents { .. }
@@ -198,8 +248,58 @@ impl<'a> App<'a> {
                 | UiCommand::OpenReferencePoints
                 | UiCommand::OpenReferenceSurface
                 | UiCommand::BuildReferenceSurface { .. }
+                | UiCommand::OpenThicknessPoints
+                | UiCommand::ChooseThicknessPairs
+                | UiCommand::MakeThicknessPoints { .. }
+                | UiCommand::OpenSeamSurface
+                | UiCommand::MakeSeamSurface { .. }
+                | UiCommand::OpenCutTriangulationToSurface
+                | UiCommand::ExecuteCutTriangulationToSurface { .. }
+                | UiCommand::OpenSmoothSurface
+                | UiCommand::ExecuteSmoothSurface { .. }
+                | UiCommand::OpenCleanSurface
+                | UiCommand::ExecuteCleanSurface { .. }
+                | UiCommand::OpenDifferenceSurfaces
+                | UiCommand::ExecuteDifferenceSurfaces { .. }
+                | UiCommand::OpenMergeSurfaces
+                | UiCommand::ExecuteMergeSurfaces { .. }
+                | UiCommand::OpenBuildPrismoidGrid
+                | UiCommand::ExecuteBuildPrismoidGrid { .. }
+                | UiCommand::OpenBuildStrata
+                | UiCommand::ExecuteBuildStrata { .. }
+                | UiCommand::OpenCreateBlockModelFromPrismoidGrid
+                | UiCommand::CreateBlockModelFromPrismoidGrids(_)
+                | UiCommand::OpenAddPrismoidQualities
+                | UiCommand::ExecuteAddPrismoidQualities { .. }
+                | UiCommand::OpenPrismoidGridToSurface
+                | UiCommand::ExecutePrismoidGridToSurface { .. }
+                | UiCommand::OpenDifferencePrismoidGrids
+                | UiCommand::ExecuteDifferencePrismoidGrids { .. }
+                | UiCommand::OpenHoleMisfit
+                | UiCommand::ExecuteHoleMisfit { .. }
+                | UiCommand::TogglePrismoidMask
+                | UiCommand::UnmaskAllPrismoids
+                | UiCommand::OpenMaskPrismoidGridByPolyline
+                | UiCommand::ExecuteMaskPrismoidGridByPolyline { .. }
+                | UiCommand::OpenTrimPrismoidGrids
+                | UiCommand::ExecuteTrimPrismoidGrids { .. }
+                | UiCommand::OpenCreateRegularBlockModel
+                | UiCommand::ExecuteCreateRegularBlockModel { .. }
+                | UiCommand::BuildCollarPoints { .. }
+                | UiCommand::SetModellingSettings(_)
                 | UiCommand::BuildReferencePoints { .. }
                 | UiCommand::OpenCreateOreTriangulation
+                | UiCommand::RenameSeam { .. }
+                | UiCommand::MoveBoundary { .. }
+                | UiCommand::InsertInterval { .. }
+                | UiCommand::DeleteInterval { .. }
+                | UiCommand::CleanStrings
+                | UiCommand::CleanString(_)
+                | UiCommand::JoinAllAtHalfway
+                | UiCommand::JoinHereAtHalfway(_)
+                | UiCommand::DeleteRingVertex { .. }
+                | UiCommand::ShowObjectVertex { .. }
+                | UiCommand::ShiftStratColumn { .. }
                 | UiCommand::AddReserveField { .. }
                 | UiCommand::AddReserveFieldFromColumn { .. }
                 | UiCommand::SetReserveFieldAggregation { .. }
@@ -384,6 +484,18 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ClearActiveTriangulationRaster => self.clear_active_triangulation_raster(),
+            UiCommand::LoadPrismoidGrid(id) => {
+                self.set_item_loaded(crate::model::ItemRef::PrismoidGrid(id), true);
+                Ok(())
+            }
+            UiCommand::ClosePrismoidGrid(id) => {
+                self.set_item_loaded(crate::model::ItemRef::PrismoidGrid(id), false);
+                Ok(())
+            }
+            UiCommand::RemovePrismoidGrid(id) => {
+                self.remove_prismoid_grid(id);
+                Ok(())
+            }
             UiCommand::LoadPointCloud(id) => {
                 self.set_item_loaded(crate::model::ItemRef::PointCloud(id), true);
                 Ok(())
@@ -414,6 +526,7 @@ impl<'a> App<'a> {
                 #[cfg(not(target_arch = "wasm32"))]
                 self.import_block_model_source(crate::model::block_model::BlockModelSource { path, csv_columns: Some(mapping) })
             }
+            UiCommand::ImportQualityPoints { path, mapping } => self.import_quality_points(path, mapping),
             UiCommand::ExportOmf(selection) => self.choose_export_omf(&selection),
             UiCommand::ExportProjectDxf(runtime_id) => {
                 self.choose_export_project_dxf(runtime_id);
@@ -444,8 +557,16 @@ impl<'a> App<'a> {
                 self.choose_export_drill_hole_csv(id);
                 Ok(())
             }
+            UiCommand::ExportCorrectionsWorksheet(id) => {
+                self.choose_export_corrections_worksheet(id);
+                Ok(())
+            }
             UiCommand::HideSelection => {
                 self.hide_selected_elements();
+                Ok(())
+            }
+            UiCommand::UnhideAll => {
+                self.unhide_all_objects();
                 Ok(())
             }
             UiCommand::ShowAllHidden => {
@@ -464,6 +585,14 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::CreateLayer { name } => self.create_layer(name),
+            UiCommand::OpenNewLayer => {
+                if !self.editor.new_layer_dialog_open {
+                    self.editor.new_layer_dialog_open = true;
+                    self.editor.new_layer_name = tr!("ws-menubar-design");
+                    self.set_active_tool_from_toolbar(ActiveTool::None);
+                }
+                Ok(())
+            }
             UiCommand::CreateFolder(section) => self.create_folder(section),
             UiCommand::DeleteFolder { section, folder } => self.delete_folder(section, folder),
             UiCommand::DeleteFolderAndContents { section, folder } => self.delete_folder_and_contents(section, folder),
@@ -918,10 +1047,95 @@ impl<'a> App<'a> {
                 self.open_reference_surface();
                 Ok(())
             }
-            UiCommand::BuildReferenceSurface { points, controls, extent } => self.build_reference_surface(points, controls, extent),
+            UiCommand::BuildReferenceSurface {
+                points,
+                controls,
+                extent,
+                spacing,
+                name,
+            } => self.build_reference_surface(points, controls, extent, spacing, name),
+            UiCommand::OpenThicknessPoints => {
+                self.open_thickness_points();
+                Ok(())
+            }
+            UiCommand::ChooseThicknessPairs => {
+                self.choose_thickness_pairs();
+                Ok(())
+            }
+            UiCommand::MakeThicknessPoints {
+                surface,
+                holes,
+                field,
+                target,
+                side,
+                pairs,
+                then_surface,
+            } => {
+                let result = self.make_thickness_points(
+                    surface,
+                    holes,
+                    crate::app::commands::thickness_points::ReferenceSeam { field, target, side },
+                    pairs,
+                    then_surface,
+                );
+                if result.is_ok() {
+                    self.editor.thickness_points_dialog = None;
+                }
+                result
+            }
+            UiCommand::OpenSeamSurface => {
+                self.open_seam_surface();
+                Ok(())
+            }
+            UiCommand::ShowThicknessTable { runtime_id, layer } => {
+                self.editor.thickness_table = self.session.thickness_tables.get(&(runtime_id, layer)).cloned();
+                Ok(())
+            }
+            UiCommand::ShowSeamTable(surface) => {
+                self.editor.seam_table = self.session.seam_tables.get(&surface).cloned();
+                Ok(())
+            }
+            UiCommand::ShowHoleMisfitTable { runtime_id, layer } => {
+                self.editor.hole_misfit_table = self.session.misfit_tables.get(&(runtime_id, layer)).cloned();
+                Ok(())
+            }
+            UiCommand::MakeSeamSurface { surface } => {
+                let result = self.make_seam_surface(surface);
+                if result.is_ok() {
+                    self.editor.seam_surface_dialog = None;
+                } else {
+                    // Kept open on the reason, so Make greys and says why.
+                    self.set_seam_surface(surface);
+                }
+                result
+            }
+            UiCommand::BuildCollarPoints { holes } => {
+                if self.build_collar_points(holes) {
+                    self.editor.reference_points_dialog = None;
+                }
+                Ok(())
+            }
+            UiCommand::SetModellingSettings(settings) => {
+                if let Some(problem) = settings.problem() {
+                    anyhow::bail!("{problem}");
+                }
+                let changed = self.workspace.active_project_mut().is_some_and(|project| {
+                    let metadata = &mut project.project.metadata;
+                    let changed = metadata.modelling != settings;
+                    metadata.modelling = settings;
+                    changed
+                });
+                if changed {
+                    self.touch_active_project_content();
+                    userspace_log!("{}", tr!("cmd-commands-modelling-settings-set-settings", settings = settings.summary()));
+                }
+                Ok(())
+            }
             UiCommand::BuildReferencePoints { holes, field, target, side } => {
                 // What it placed is said in the activity log.
-                let _ = self.build_reference_points(holes, field, target, side);
+                if self.build_reference_points(holes, field, target, side).is_some() {
+                    self.editor.reference_points_dialog = None;
+                }
                 Ok(())
             }
             UiCommand::InspectDrillHole(hole) => self.inspect_drill_hole(hole),
@@ -959,6 +1173,48 @@ impl<'a> App<'a> {
             }
             UiCommand::SetDrillHoleCategoryColors { id, categories } => {
                 self.set_drill_hole_category_colors(id, categories);
+                Ok(())
+            }
+            UiCommand::RenameSeam {
+                dataset,
+                field,
+                from,
+                to,
+                scope,
+                reason,
+            } => {
+                self.rename_seam(dataset, field, from, to, scope, reason);
+                Ok(())
+            }
+            UiCommand::MoveBoundary { dataset, edit, reason } => {
+                self.move_boundary(dataset, edit, reason);
+                Ok(())
+            }
+            UiCommand::InsertInterval { dataset, edit, reason } => {
+                self.insert_interval(dataset, edit, reason);
+                Ok(())
+            }
+            UiCommand::DeleteInterval { dataset, edit, reason } => {
+                self.delete_interval(dataset, &edit, reason);
+                Ok(())
+            }
+            UiCommand::SetStratColumn { id, field, codes } => {
+                self.set_strat_column(id, field, codes);
+                Ok(())
+            }
+            UiCommand::CheckStratColumn { id, field } => {
+                self.check_strat_column(id, field);
+                Ok(())
+            }
+            UiCommand::ShiftStratColumn {
+                dataset,
+                hole,
+                field,
+                direction,
+                from,
+                reason,
+            } => {
+                self.shift_strat_column(dataset, hole, field, direction, from, reason);
                 Ok(())
             }
             UiCommand::SetDrillHoleWorkingSections { id, sections } => {
@@ -1132,6 +1388,50 @@ impl<'a> App<'a> {
                 self.commit_stroke_open();
                 Ok(())
             }
+            UiCommand::RemoveLastStrokeVertex => {
+                self.remove_last_stroke_vertex();
+                Ok(())
+            }
+            UiCommand::ArmCopyAlongString => {
+                self.arm_copy_along_string();
+                Ok(())
+            }
+            UiCommand::ArmCarryOnString => {
+                self.arm_carry_on_string();
+                Ok(())
+            }
+            UiCommand::ArmRedrawRun => {
+                self.arm_redraw_run();
+                Ok(())
+            }
+            UiCommand::ArmDragVertex => {
+                self.arm_drag_vertex();
+                Ok(())
+            }
+            UiCommand::OpenNudgePanel => {
+                self.open_nudge_panel();
+                Ok(())
+            }
+            UiCommand::SetFillSegmentSpacing(spacing) => {
+                self.set_fill_segment_spacing(spacing);
+                Ok(())
+            }
+            UiCommand::NudgeHeldVertex(rise) => {
+                self.nudge_held_vertex(rise);
+                Ok(())
+            }
+            UiCommand::OpenNextVertexPanel => {
+                self.open_next_vertex_panel();
+                Ok(())
+            }
+            UiCommand::AddTypedStrokeVertex(world) => {
+                self.add_typed_stroke_vertex(world);
+                Ok(())
+            }
+            UiCommand::AddStrokeVertexAlongBearing { bearing, distance, dip } => {
+                self.add_stroke_vertex_along_bearing(bearing, distance, dip);
+                Ok(())
+            }
             UiCommand::CommitCircleTypedRadius => {
                 self.commit_circle_typed_radius();
                 Ok(())
@@ -1159,6 +1459,14 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::SetGridShown(shown) => self.set_grid_shown(shown),
+            UiCommand::ToggleSectionSurfaceLines => {
+                self.toggle_section_surface_lines();
+                Ok(())
+            }
+            UiCommand::SaveSectionSurfaceLines => {
+                self.save_section_surface_lines();
+                Ok(())
+            }
             UiCommand::SetTopologyWireframes(enabled) => self.set_topology_wireframes(enabled),
             UiCommand::SetTopologyContours(enabled) => self.set_topology_contours(enabled),
             UiCommand::SetShowPoints(enabled) => self.set_show_points(enabled),
@@ -1292,6 +1600,7 @@ impl<'a> App<'a> {
             }
             UiCommand::CloseCanvasContextMenu => {
                 self.editor.canvas_context_menu_open = false;
+                self.editor.canvas_context_menu_ring = None;
                 Ok(())
             }
             UiCommand::NoteRecentFunction(row) => self.note_recent_function(row),
@@ -1376,6 +1685,14 @@ impl<'a> App<'a> {
                 self.insert_points_at_selected_intersections();
                 Ok(())
             }
+            UiCommand::ReverseSelectedStrings => {
+                self.reverse_selected_strings();
+                Ok(())
+            }
+            UiCommand::ArmDrapeAlongTriangles => {
+                self.arm_drape_along_triangles();
+                Ok(())
+            }
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::InsertPointsAtCrossings { object_ids } => {
                 self.insert_points_at_crossings(object_ids);
@@ -1410,6 +1727,46 @@ impl<'a> App<'a> {
                 self.open_object_edit_dialog(id);
                 Ok(())
             }
+            UiCommand::ShowObjectVertex { id, row } => {
+                self.show_object_vertex(id, row);
+                Ok(())
+            }
+            UiCommand::CleanStrings => {
+                self.clean_selected_strings();
+                Ok(())
+            }
+            // The ring rows edit only strings the canvas could edit itself:
+            // shown and not locked. The menu offers no other, and a ring
+            // that went hidden or locked since the menu was drawn is refused
+            // here.
+            UiCommand::CleanString(id) => {
+                if self.editor.canvas_edits_object(self.active_document(), id) {
+                    self.clean_ringed_string(id);
+                }
+                Ok(())
+            }
+            UiCommand::ClearRings => {
+                self.editor.clear_string_rings();
+                self.redraw_requested = true;
+                Ok(())
+            }
+            UiCommand::JoinAllAtHalfway => {
+                let rings: Vec<usize> = (0..self.editor.string_rings.len())
+                    .filter(|&index| self.editor.string_rings[index].joinable() && self.ring_strings_editable(index))
+                    .collect();
+                self.join_at_halfway(&rings);
+                Ok(())
+            }
+            UiCommand::JoinHereAtHalfway(index) => {
+                if self.editor.string_rings.get(index).is_some_and(|ring| ring.joinable()) && self.ring_strings_editable(index) {
+                    self.join_at_halfway(&[index]);
+                }
+                Ok(())
+            }
+            UiCommand::DeleteRingVertex { id, vertex } => {
+                self.delete_ring_vertex(id, vertex);
+                Ok(())
+            }
             UiCommand::ApplyObjectEdit { id, object, close } => {
                 self.apply_object_edit(id, *object, close);
                 Ok(())
@@ -1417,6 +1774,40 @@ impl<'a> App<'a> {
             UiCommand::InsertPointsAtElevation { object_ids, elevation } => {
                 self.insert_points_at_elevation(object_ids, elevation);
                 Ok(())
+            }
+            UiCommand::OpenThinStringsDialog => {
+                self.open_thin_strings_dialog();
+                Ok(())
+            }
+            UiCommand::SetThinTolerance(tolerance) => {
+                self.set_thin_tolerance(tolerance);
+                Ok(())
+            }
+            UiCommand::ThinStrings { object_ids, tolerance } => {
+                self.thin_strings(object_ids, tolerance);
+                Ok(())
+            }
+            UiCommand::OpenInsertPointAtSpacingDialog => {
+                self.open_insert_point_at_spacing_dialog();
+                Ok(())
+            }
+            UiCommand::InsertPointsAtSpacing { object_ids, spacing } => {
+                let result = self.insert_points_at_spacing(object_ids, spacing);
+                if result.is_ok() {
+                    self.editor.insert_point_at_spacing_dialog = None;
+                }
+                result
+            }
+            UiCommand::OpenSmoothStringsDialog => {
+                self.open_smooth_strings_dialog();
+                Ok(())
+            }
+            UiCommand::SmoothStrings { object_ids, tolerance } => {
+                let result = self.smooth_strings(object_ids, tolerance);
+                if result.is_ok() {
+                    self.editor.smooth_strings_dialog = None;
+                }
+                result
             }
             UiCommand::OpenCreateTriangulation => {
                 self.open_create_triangulation();
@@ -1480,6 +1871,17 @@ impl<'a> App<'a> {
                 }
                 result
             }
+            UiCommand::OpenCutTriangulationToSurface => {
+                self.open_clip_to_surface();
+                Ok(())
+            }
+            UiCommand::ExecuteCutTriangulationToSurface { targets, upper, lower } => {
+                let result = self.cut_triangulation_to_surface(targets, upper, lower);
+                if result.is_ok() {
+                    self.editor.tri_cut_to_open = false;
+                }
+                result
+            }
             UiCommand::OpenCutTriangulationBySurface => {
                 self.editor.tri_cut_surface_open = true;
                 self.editor.tri_cut_surface_name_auto = true;
@@ -1533,6 +1935,182 @@ impl<'a> App<'a> {
                 }
                 result
             }
+            UiCommand::OpenBuildPrismoidGrid => {
+                self.editor.tri_prismoid_open = true;
+                self.editor.tri_prismoid_roof_id = None;
+                self.editor.tri_prismoid_floor_id = None;
+                self.editor.tri_prismoid_step = std::num::NonZeroUsize::MIN;
+                self.editor.tri_prismoid_name_input.clear();
+                self.editor.tri_prismoid_name_auto = true;
+                Ok(())
+            }
+            UiCommand::ExecuteBuildPrismoidGrid { roof_id, floor_id, step, name } => {
+                let result = self.build_prismoid_grid(roof_id, floor_id, step, name);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_open = false;
+                }
+                result
+            }
+            UiCommand::OpenBuildStrata => {
+                self.editor.tri_strata_open = true;
+                self.editor.tri_strata_rows.clear();
+                self.editor.tri_strata_intervals.clear();
+                self.editor.tri_strata_selected = None;
+                self.editor.tri_strata_step = std::num::NonZeroUsize::MIN;
+                self.editor.tri_strata_name_input.clear();
+                self.editor.tri_strata_name_auto = true;
+                Ok(())
+            }
+            UiCommand::ExecuteBuildStrata { horizons, intervals, step, name } => {
+                let result = self.build_strata(horizons, intervals, step, name);
+                if result.is_ok() {
+                    self.editor.tri_strata_open = false;
+                }
+                result
+            }
+            UiCommand::SetPrismoidGridColorValue { id, value } => {
+                self.set_prismoid_grid_color_by(id, |color_by| color_by.value = value);
+                Ok(())
+            }
+            UiCommand::SetPrismoidGridColorPreset { id, preset } => {
+                self.set_prismoid_grid_color_by(id, |color_by| color_by.preset = preset);
+                Ok(())
+            }
+            UiCommand::SetPrismoidGridShaded { id, shaded } => {
+                self.set_prismoid_grid_shaded(id, shaded);
+                Ok(())
+            }
+            UiCommand::OpenCreateBlockModelFromPrismoidGrid => {
+                self.open_prismoid_block_model();
+                Ok(())
+            }
+            UiCommand::CreateBlockModelFromPrismoidGrids(grid_ids) => {
+                let items: Vec<_> = self.prismoid_grids.iter().filter(|item| grid_ids.contains(&item.id)).collect();
+                let too_fine = items
+                    .iter()
+                    .find_map(|item| block_model::prismoid_cells_too_fine(&item.grid).map(|size| (item.name.clone(), size)));
+                if let Some((grid, size)) = too_fine {
+                    userspace_warn!(
+                        "{}",
+                        tr!(
+                            "cmd-prismoid-grid-cells-too-fine",
+                            grid = grid,
+                            size = prismoid_grid::cell_size(size),
+                            least = prismoid_grid::cell_size(block_model::LEAST_PRISMOID_BLOCK_SIZE)
+                        )
+                    );
+                    return Ok(());
+                }
+                // Several grids make one model; one keeps no count budget.
+                let active: Vec<usize> = items.iter().map(|item| item.summary.active_cells).collect();
+                if grid_ids.len() > 1
+                    && let Some(issue) = block_model::stacked_over_budget(&active)
+                {
+                    userspace_warn!("{issue}");
+                    return Ok(());
+                }
+                let result = self.create_block_model_from_prismoid_grids(grid_ids);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_block_open = false;
+                }
+                result
+            }
+            UiCommand::OpenAddPrismoidQualities => {
+                self.open_add_prismoid_qualities();
+                Ok(())
+            }
+            UiCommand::ExecuteAddPrismoidQualities { grid, surfaces, density } => {
+                let result = self.add_prismoid_qualities(grid, surfaces, density);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_qualities_open = false;
+                }
+                result
+            }
+            UiCommand::OpenPrismoidGridToSurface => {
+                self.open_prismoid_grid_surface();
+                Ok(())
+            }
+            UiCommand::ExecutePrismoidGridToSurface { grid, value, name } => {
+                let result = self.prismoid_grid_to_surface(grid, value, name);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_surface_open = false;
+                }
+                result
+            }
+            UiCommand::OpenDifferencePrismoidGrids => {
+                self.open_difference_prismoid_grids();
+                Ok(())
+            }
+            UiCommand::ExecuteDifferencePrismoidGrids { grid, other, value, name } => {
+                let result = self.difference_prismoid_grids(grid, other, value, name);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_difference_open = false;
+                }
+                result
+            }
+            UiCommand::OpenHoleMisfit => {
+                self.open_hole_misfit();
+                Ok(())
+            }
+            UiCommand::ExecuteHoleMisfit {
+                grid,
+                holes,
+                quality_points,
+                seam,
+            } => {
+                let result = self.misfit_at_holes(grid, holes, &quality_points, seam.as_ref());
+                if result.is_ok() {
+                    self.editor.hole_misfit_dialog = None;
+                }
+                result
+            }
+            UiCommand::TogglePrismoidMask => {
+                self.toggle_prismoid_mask();
+                Ok(())
+            }
+            UiCommand::UnmaskAllPrismoids => {
+                self.unmask_all_prismoids();
+                Ok(())
+            }
+            UiCommand::OpenMaskPrismoidGridByPolyline => {
+                self.open_mask_prismoid_grid();
+                Ok(())
+            }
+            UiCommand::ExecuteMaskPrismoidGridByPolyline { grid, polyline_id, mode, unmask } => {
+                let result = self.mask_prismoid_grid_by_polyline(grid, polyline_id, mode, unmask);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_mask_open = false;
+                }
+                result
+            }
+            UiCommand::OpenTrimPrismoidGrids => {
+                self.open_trim_prismoid_grids();
+                Ok(())
+            }
+            UiCommand::ExecuteTrimPrismoidGrids {
+                grids,
+                surface,
+                side,
+                name,
+                allowance,
+            } => {
+                let result = self.trim_prismoid_grids(grids, surface, side, name, allowance);
+                if result.is_ok() {
+                    self.editor.tri_prismoid_trim_open = false;
+                }
+                result
+            }
+            UiCommand::OpenCreateRegularBlockModel => {
+                self.open_create_regular_block_model();
+                Ok(())
+            }
+            UiCommand::ExecuteCreateRegularBlockModel { grids, size, name } => {
+                let result = self.create_regular_block_model_from_prismoid_grids(grids, size, name);
+                if result.is_ok() {
+                    self.editor.regular_block_model_open = false;
+                }
+                result
+            }
             UiCommand::OpenCutTopologyByPitShell => {
                 self.editor.tri_cut_pitshell_open = true;
                 self.editor.tri_cut_pitshell_name_auto = true;
@@ -1576,6 +2154,56 @@ impl<'a> App<'a> {
                 let result = self.include_solid_in_topology(topology_id, shape_id, name, save_as_two, hide_old);
                 if result.is_ok() {
                     self.editor.tri_include_solid_open = false;
+                }
+                result
+            }
+            UiCommand::OpenDifferenceSurfaces => {
+                self.open_difference_surfaces();
+                Ok(())
+            }
+            UiCommand::ExecuteDifferenceSurfaces { upper_id, lower_id, name } => {
+                let result = self.difference_triangulations(upper_id, lower_id, name);
+                if result.is_ok() {
+                    self.editor.tri_difference_open = false;
+                }
+                result
+            }
+            UiCommand::OpenMergeSurfaces => {
+                self.open_merge_surfaces();
+                Ok(())
+            }
+            UiCommand::ExecuteMergeSurfaces {
+                first_id,
+                second_id,
+                keep,
+                name,
+                unload_source,
+            } => {
+                let result = self.merge_triangulations(first_id, second_id, keep, name, unload_source);
+                if result.is_ok() {
+                    self.editor.tri_merge_open = false;
+                }
+                result
+            }
+            UiCommand::OpenSmoothSurface => {
+                self.open_smooth_surface();
+                Ok(())
+            }
+            UiCommand::ExecuteSmoothSurface { surface, passes, name } => {
+                let result = self.smooth_triangulation(surface, passes, name);
+                if result.is_ok() {
+                    self.editor.tri_smooth_open = false;
+                }
+                result
+            }
+            UiCommand::OpenCleanSurface => {
+                self.open_clean_surface();
+                Ok(())
+            }
+            UiCommand::ExecuteCleanSurface { surface, keep, name } => {
+                let result = self.clean_triangulation(surface, keep, name);
+                if result.is_ok() {
+                    self.editor.tri_clean_open = false;
                 }
                 result
             }
@@ -1708,6 +2336,39 @@ impl<'a> App<'a> {
         }
         self.execute_edit(Command::Batch(commands));
         self.invalidate_geometry();
+    }
+
+    /// Show the objects Hide Selection hid in loaded layers and every loaded
+    /// item that is hidden, as one undo step. Nothing unloaded is loaded;
+    /// the rings are left alone.
+    fn unhide_all_objects(&mut self) {
+        let Some(document) = self.workspace.active_document() else {
+            userspace_log!("{}", tr!("cmd-unhide-all-nothing-hidden"));
+            return;
+        };
+        let layer_loaded = |id: crate::model::ObjectId| document.get_object(id).and_then(|object| document.layer(object.layer())).is_some_and(|layer| layer.loaded);
+        let mut commands: Vec<Command> = document
+            .hidden_object_ids()
+            .filter(|&id| layer_loaded(id))
+            .map(|id| Command::SetObjectHidden { id, before: true, after: false })
+            .collect();
+        let objects = commands.len();
+        commands.extend(
+            self.project_item_refs()
+                .filter_map(|item| self.item_style_command(item, |style| if style.loaded() { style.with_hidden(false) } else { style })),
+        );
+        let items = commands.len() - objects;
+        if commands.is_empty() {
+            userspace_log!("{}", tr!("cmd-unhide-all-nothing-hidden"));
+            return;
+        }
+        self.execute_edit(Command::Batch(commands));
+        self.invalidate_geometry();
+        if items == 0 {
+            userspace_log!("{}", tr!("cmd-unhide-all-count", count = objects.to_string()));
+        } else {
+            userspace_log!("{}", tr!("cmd-unhide-all-objects-items-count", objects = objects.to_string(), items = items.to_string()));
+        }
     }
 
     /// Hide design objects of the active project, as the Hide tool's click or

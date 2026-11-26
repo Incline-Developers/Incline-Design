@@ -432,6 +432,7 @@ impl App<'_> {
                 Some(cloud.bounds)
             }
             Target::Item(ItemRef::Raster(_)) => return Err("A raster cannot be framed on its own: frame the surface it is draped on.".to_owned()),
+            Target::Item(ItemRef::PrismoidGrid(_)) => return Err("A prismoid grid cannot be framed on its own: frame the surface it is built on.".to_owned()),
             Target::Layer(layer) => {
                 let document = self.workspace.active_document().ok_or("No project is open.")?;
                 let name = document.layer(layer).map(|layer| layer.name.clone()).unwrap_or_default();

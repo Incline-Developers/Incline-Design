@@ -15,7 +15,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use glam::{DMat3, DVec3};
+use glam::{DMat3, DVec2, DVec3};
 use omf as omf_crate;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -29,17 +29,24 @@ use crate::{
             BlockBounds, BlockBoundsSource, BlockGeometry, BlockGeometryBuilder, Boundary, ColorTransferFunction, LoadedBlockModel, OpenBlockModel, RenderableBlockIndices,
             StoredColorTransferFunction, compute_world_bounds, opaque_irregular_surface_block_count, opaque_surface_block_count,
         },
-        drill_hole::{DrillHole, DrillHoleDataset, DrillHoleSource, DrillValue, LoadedDrillHoleDataset, OpenDrillHoleDataset, OrientationSource, skipped_working_sections},
+        drill_hole::{
+            DrillHole, DrillHoleDataset, DrillHoleSource, DrillValue, LoadedDrillHoleDataset, OpenDrillHoleDataset, OrientationSource, saved_too_few_color_stops,
+            skipped_strat_columns, skipped_strat_field, skipped_working_sections,
+        },
         formats::{
             block_column::{BlockColumn, BlockColumnBuilder},
             block_model_data::{BlockModelColumn, BlockModelData},
             mesh_data::{Triangulation, Vertex},
         },
         point_cloud::{LoadedPointCloud, OpenPointCloud, prepare_for_render},
+        prismoid_grid::{
+            BuildRecord, CellValueRole, CellValues, CutPoint, CutPrismoids, DEFAULT_PRISMOID_GRID_COLOR, Lattice, LoadedPrismoidGrid, OpenPrismoidGrid, PrismoidColorBy,
+            PrismoidGrid, Stratum,
+        },
         progress::Phase,
-        project::{self, ProjectFile, ProjectMetadata},
+        project::{self, ModellingSettings, ProjectFile, ProjectMetadata},
         raster::{LoadedRasterTexture, OpenRasterTexture},
-        triangulation::{GeometryVersion, LoadedTriangulation, OpenTriangulation, spatial_surface_face_order},
+        triangulation::{GeometryVersion, LoadedTriangulation, OpenTriangulation, QualityMark, quality_key, same_quality_name, spatial_surface_face_order},
     },
     rendering::color::{linear_to_srgb_byte, rgb_bytes_to_linear_rgba},
 };
@@ -62,6 +69,10 @@ const META_LAYER: &str = "incline:layer";
 /// has no folders, so a project without folders writes byte for byte as
 /// before.
 const META_FOLDERS: &str = "incline:folders";
+/// The project's modelling settings, on the OMF project record; omitted
+/// while they are the defaults, so such a project writes byte for byte as
+/// before they existed.
+const META_MODELLING: &str = "incline:modelling";
 /// A layer's or item's folder membership: the name of the folder in its
 /// own section, absent when the member is at the section root.
 const META_FOLDER: &str = "incline:folder";
@@ -70,6 +81,11 @@ const META_FOLDER: &str = "incline:folder";
 /// file whose items are all where their kind puts them is byte for byte what
 /// it was before.
 const META_SECTION: &str = "incline:section";
+/// A surface's or a design layer's [`QualityMark`], written only when set.
+const META_QUALITY: &str = "incline:quality";
+/// A prismoid grid's place in the strata it was built in, written only when
+/// it has one.
+const META_STRATUM: &str = "incline:stratum";
 const META_SOURCE: &str = "incline:source";
 const META_STYLE: &str = "incline:style";
 const META_ID: &str = "incline:id";
@@ -79,6 +95,15 @@ const META_RENDER_RANGES: &str = "incline:render_ranges";
 /// Where each hole's orientation came from, keyed like the render ranges and
 /// written only for holes whose source is known.
 const META_ORIENTATION_SOURCES: &str = "incline:orientation_sources";
+/// As-logged values of corrected intervals, keyed like the render ranges: per
+/// hole, pairs of interval index and what the site sent.
+const META_LOGGED_INTERVALS: &str = "incline:logged_intervals";
+/// As-logged values a build could not read or place, apart from the logged
+/// intervals so no build applies them to a row: each the hole key it was saved
+/// under and the value as saved.
+const META_UNREAD_LOGGED: &str = "incline:unread_logged_intervals";
+/// The dataset's correction records, whatever their status.
+const META_CORRECTIONS: &str = "incline:corrections";
 /// The category on every drillhole row naming the hole it belongs to.
 const DRILL_HOLE_ATTRIBUTE: &str = "Hole";
 const META_RESERVE_FIELDS: &str = "incline:reserve_fields";
@@ -105,8 +130,13 @@ const SCHEDULE_METADATA_VERSION: u64 = 7;
 /// they are what joins its holes rather than anything one hole holds.
 const META_TIE_INS: &str = "incline:tie_ins";
 const META_CHARGES: &str = "incline:charges";
+/// Interval columns an Incline tool wrote, by name, so a later run may write
+/// them again while a column that came in with the data is left alone.
+const META_DERIVED_COLUMNS: &str = "incline:derived_columns";
 /// Project-level: the pit optimization scenarios, as their own versioned JSON.
 const META_OPTIMIZATION: &str = "incline:optimization";
+/// What a prismoid grid was built from, written only when it has a record.
+const META_BUILT_FROM: &str = "incline:built_from";
 
 /// Every `incline:` key the writer puts on an element.
 ///
@@ -124,19 +154,29 @@ const KNOWN_ELEMENT_METADATA: &[&str] = &[
     META_FOLDERS,
     META_FOLDER,
     META_SECTION,
+    META_QUALITY,
+    META_STRATUM,
     META_SOURCE,
     META_STYLE,
     META_ID,
     META_RENDER_RANGES,
     META_ORIENTATION_SOURCES,
+    META_LOGGED_INTERVALS,
+    META_UNREAD_LOGGED,
+    META_CORRECTIONS,
     META_TIE_INS,
     META_CHARGES,
+    META_DERIVED_COLUMNS,
     META_RESERVE_FIELDS,
     META_SOLIDS,
     META_SCHEDULE,
     META_SCHEDULE_RESULT,
     META_HAULAGE,
+    META_BUILT_FROM,
 ];
+/// On a prismoid grid's cell values, not an element: what they are for,
+/// written only for a density.
+const META_ROLE: &str = "incline:role";
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_ARRAY_ITEMS: u64 = u32::MAX as u64;
 #[cfg(target_arch = "wasm32")]
@@ -152,6 +192,7 @@ pub(crate) struct ProjectSnapshot {
     pub(crate) drill_holes: Vec<OpenDrillHoleDataset>,
     pub(crate) point_clouds: Vec<OpenPointCloud>,
     pub(crate) rasters: Vec<OpenRasterTexture>,
+    pub(crate) prismoid_grids: Vec<OpenPrismoidGrid>,
     /// Every explorer folder in the project, for every section. The single
     /// source of truth for export: `designs`'s own `ProjectFile::folders` is
     /// not consulted, so there is exactly one registry to keep in sync.
@@ -172,6 +213,7 @@ impl std::fmt::Debug for ProjectSnapshot {
             .field("drill_holes", &self.drill_holes.len())
             .field("point_clouds", &self.point_clouds.len())
             .field("rasters", &self.rasters.len())
+            .field("prismoid_grids", &self.prismoid_grids.len())
             .field("folders", &self.folders)
             .field("optimization", &self.optimization.as_ref().map(|file| file.scenarios.len()))
             .finish()
@@ -190,12 +232,19 @@ impl ProjectSnapshot {
             && self.drill_holes.is_empty()
             && self.point_clouds.is_empty()
             && self.rasters.is_empty()
+            && self.prismoid_grids.is_empty()
             && self.folders.is_empty()
             && self.optimization.is_none()
     }
 
     pub(crate) fn item_count(&self) -> usize {
-        usize::from(self.designs.is_some()) + self.triangulations.len() + self.block_models.len() + self.drill_holes.len() + self.point_clouds.len() + self.rasters.len()
+        usize::from(self.designs.is_some())
+            + self.triangulations.len()
+            + self.block_models.len()
+            + self.drill_holes.len()
+            + self.point_clouds.len()
+            + self.rasters.len()
+            + self.prismoid_grids.len()
     }
 }
 
@@ -219,6 +268,7 @@ pub(crate) struct ImportedTriangulation {
     pub(crate) folder: Option<FolderId>,
     /// The section this item is shown under, as its element recorded it.
     pub(crate) section: SectionKind,
+    pub(crate) quality: Option<QualityMark>,
 }
 
 pub(crate) struct ImportedBlockModel {
@@ -287,6 +337,17 @@ pub(crate) struct ImportedRaster {
     pub(crate) section: SectionKind,
 }
 
+pub(crate) struct ImportedPrismoidGrid {
+    pub(crate) preferred_id: Option<u64>,
+    pub(crate) source_name: Option<String>,
+    pub(crate) source_format: Option<String>,
+    pub(crate) loaded: LoadedPrismoidGrid,
+    pub(crate) is_loaded: bool,
+    pub(crate) folder: Option<FolderId>,
+    /// The section this item is shown under, as its element recorded it.
+    pub(crate) section: SectionKind,
+}
+
 #[derive(Default)]
 pub(crate) struct ImportBundle {
     pub(crate) project_name: String,
@@ -299,11 +360,15 @@ pub(crate) struct ImportBundle {
     pub(crate) drill_holes: Vec<ImportedDrillHoles>,
     pub(crate) point_clouds: Vec<ImportedPointCloud>,
     pub(crate) rasters: Vec<ImportedRaster>,
+    pub(crate) prismoid_grids: Vec<ImportedPrismoidGrid>,
     /// Every explorer folder decoded so far, for every section. Populated
     /// from the OMF project record before any element is walked, so
     /// per-element membership below always resolves against it, and grown by
     /// `ensure` for a name the project record did not list.
     pub(crate) folders: FolderRegistry,
+    /// The project record's modelling settings; the defaults when it has
+    /// none, or none that can be read.
+    pub(crate) modelling: ModellingSettings,
     /// The project record's optimization scenarios, when it carries any.
     pub(crate) optimization: Option<crate::model::optimization::ScenarioFile>,
     pub(crate) warnings: Vec<String>,
@@ -311,7 +376,7 @@ pub(crate) struct ImportBundle {
 
 impl ImportBundle {
     pub(crate) fn item_count(&self) -> usize {
-        self.designs.len() + self.triangulations.len() + self.block_models.len() + self.drill_holes.len() + self.point_clouds.len() + self.rasters.len()
+        self.designs.len() + self.triangulations.len() + self.block_models.len() + self.drill_holes.len() + self.point_clouds.len() + self.rasters.len() + self.prismoid_grids.len()
     }
 }
 
@@ -500,6 +565,14 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compre
         complete += 1;
         progress.set_items(complete, total);
     }
+    for prismoid_grid in &snapshot.prismoid_grids {
+        let mut element = write_prismoid_grid(&mut writer, prismoid_grid)?;
+        tag_folder(&mut element, &snapshot.folders, prismoid_grid.state.section, prismoid_grid.state.folder);
+        tag_section(&mut element, MemberKind::PrismoidGrid, prismoid_grid.state.section);
+        elements.push(element);
+        complete += 1;
+        progress.set_items(complete, total);
+    }
 
     make_element_names_unique(&mut elements);
     let fallback_name = tr!("common-incline-design-project");
@@ -526,6 +599,13 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compre
             }
         }
         project.metadata.insert(META_FOLDERS.to_owned(), Value::Object(sections));
+    }
+    // Beside the coordinate system, from the same place.
+    if let Some(design) = snapshot.designs.as_ref()
+        && design.metadata.modelling != ModellingSettings::default()
+    {
+        let settings = serde_json::to_value(design.metadata.modelling).with_context(|| tr!("err-omf-encode-modelling"))?;
+        project.metadata.insert(META_MODELLING.to_owned(), settings);
     }
     if let Some(optimization) = &snapshot.optimization {
         project.metadata.insert(
@@ -556,6 +636,12 @@ fn tag_folder(element: &mut omf_crate::Element, folders: &FolderRegistry, sectio
 fn tag_section(element: &mut omf_crate::Element, kind: MemberKind, section: SectionKind) {
     if section != SectionKind::natural_for(kind) {
         put(element, META_SECTION, section.key());
+    }
+}
+
+fn put_quality(element: &mut omf_crate::Element, quality: Option<&QualityMark>) {
+    if let Some(quality) = quality {
+        put(element, META_QUALITY, json!({ "name": quality.name, "unit": quality.unit }));
     }
 }
 
@@ -720,6 +806,7 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
         // blob denies unknown fields.
         portable_layer.folder = None;
         portable_layer.section = SectionKind::natural_layer();
+        portable_layer.quality = None;
         // The file records visibility: a hidden layer opens unloaded.
         portable_layer.loaded = layer.is_visible();
         portable_layer.hidden = false;
@@ -728,6 +815,7 @@ fn write_design<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>,
             put(&mut element, META_FOLDER, folder);
         }
         tag_section(&mut element, MemberKind::Layer, layer.section);
+        put_quality(&mut element, layer.quality.as_ref());
         layers.push(element);
     }
     // The layers still sit inside this "Designs" composite element regardless
@@ -1029,6 +1117,7 @@ fn triangulation_element(triangulation: &OpenTriangulation, geometry: omf_crate:
             "raster_texture_id": triangulation.raster_texture.map(|id| id.0),
         }),
     );
+    put_quality(&mut element, triangulation.quality.as_ref());
     element
 }
 
@@ -1381,12 +1470,166 @@ fn write_block_model_arrays<W: Write + Seek + Send>(writer: &mut omf_crate::file
     Ok(element)
 }
 
+/// Whether a validation warning only says a prismoid roof's hand mask and a
+/// value saved under the same name before it was reserved share the name
+/// `masked`; reading renames the value.
+fn is_prismoid_mask_name_repeat(elements: &[omf_crate::Element], problem: &omf_crate::validate::Problem) -> bool {
+    if problem.reason != omf_crate::validate::Reason::SoftNotUnique("\"masked\"".to_owned()) {
+        return false;
+    }
+    elements.iter().any(|element| {
+        let omf_crate::Geometry::Composite(composite) = &element.geometry else { return false };
+        composite.elements.iter().any(|roof| {
+            let is_mask = |attribute: &omf_crate::Attribute| matches!(attribute.data, omf_crate::AttributeData::Boolean { .. }) && attribute.name == "masked";
+            let is_values = |attribute: &omf_crate::Attribute| matches!(attribute.data, omf_crate::AttributeData::Number { .. }) && attribute.name == "masked";
+            kind(roof) == Some("prismoid_roof")
+                && Some(roof.name.as_str()) == problem.name.as_deref()
+                && roof.attributes.iter().filter(|attribute| attribute.name == "masked").count() == 2
+                && roof.attributes.iter().any(is_mask)
+                && roof.attributes.iter().any(is_values)
+        })
+    })
+}
+
+/// Rename a value a file saved before the name was reserved holds as `masked`
+/// to the first free "name (2)", "name (3)", ... by quality key. Returns the
+/// name given, as at most one value of a grid that passes `check` is so named.
+fn rename_values_named_as_the_mask(cell_values: &mut [CellValues]) -> Option<String> {
+    let mut renamed = None;
+    let mut taken = cell_values.iter().map(|values| quality_key(&values.name)).collect::<BTreeSet<_>>();
+    for values in cell_values.iter_mut().filter(|values| same_quality_name(&values.name, "masked")) {
+        let base = values.name.trim().to_owned();
+        let free = (2u64..).map(|suffix| format!("{base} ({suffix})")).find(|name| !taken.contains(&quality_key(name)));
+        if let Some(name) = free {
+            taken.insert(quality_key(&name));
+            values.name = name.clone();
+            renamed = Some(name);
+        }
+    }
+    renamed
+}
+
+/// Write a prismoid grid as standard OMF elements under one composite: the
+/// roof and the floor as grid surfaces on the one lattice, each carrying the
+/// active-cell mask, and the walls round the active cells as a surface. The
+/// cells masked by hand, when any is, and the cell values ride on the roof,
+/// each set of values with its unit.
+fn write_prismoid_grid<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, open: &OpenPrismoidGrid) -> Result<omf_crate::Element> {
+    open.grid.check().with_context(|| tr!("err-omf-prismoid-grid", name = open.name.clone()))?;
+    prismoid_grid_element(writer, open)
+}
+
+/// The elements of a grid already checked, as [`write_prismoid_grid`] writes.
+fn prismoid_grid_element<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, open: &OpenPrismoidGrid) -> Result<omf_crate::Element> {
+    use omf_crate::{Attribute, Element, GridSurface, Location, Orient2, Surface};
+
+    let grid = &open.grid;
+    let lattice = &grid.lattice;
+    let horizontal = |plan: DVec2| [plan.x, plan.y, 0.0];
+    let orient = Orient2::new(horizontal(lattice.origin), horizontal(lattice.u), horizontal(lattice.v));
+    let color = Some(rgba8(open.color));
+    let cells = lattice_grid(writer, lattice)?;
+    let part = |writer: &mut omf_crate::file::Writer<W>, role: &str, part_kind: &str, heights: &[f64]| -> Result<Element> {
+        let surface = GridSurface::new(orient, cells.clone(), Some(writer.array_scalars(heights.iter().copied())?));
+        let mut element = Element::new(format!("{} {role}", open.name), surface);
+        element.color = color;
+        let mask = writer.array_booleans(grid.active.iter().map(|active| Some(*active)))?;
+        element.attributes.push(Attribute::from_booleans("active", Location::Primitives, mask));
+        put(&mut element, META_KIND, part_kind);
+        Ok(element)
+    };
+    let mut roof = part(writer, "roof", "prismoid_roof", &grid.roof)?;
+    // Only when used: a grid without hand masks writes as before.
+    if grid.masked.contains(&true) {
+        let masked = writer.array_booleans(grid.masked.iter().map(|masked| Some(*masked)))?;
+        roof.attributes.push(Attribute::from_booleans("masked", Location::Primitives, masked));
+    }
+    for cell_values in &grid.cell_values {
+        let values = writer.array_numbers(cell_values.values.iter().map(|value| value.filter(|value| value.is_finite())))?;
+        let mut attribute = Attribute::from_numbers(cell_values.name.clone(), Location::Primitives, values);
+        attribute.units.clone_from(&cell_values.unit);
+        if cell_values.role == CellValueRole::Density {
+            attribute.metadata.insert(META_ROLE.to_owned(), "density".into());
+        }
+        roof.attributes.push(attribute);
+    }
+    let mut parts = vec![roof, part(writer, "floor", "prismoid_floor", &grid.floor)?];
+    let (vertices, triangles) = grid.outline_walls();
+    if !triangles.is_empty() {
+        let walls = Surface::new(writer.array_vertices(vertices.iter().map(|vertex| vertex.to_array()))?, writer.array_triangles(triangles)?);
+        let mut outline = Element::new(format!("{} outline", open.name), walls);
+        outline.color = color;
+        put(&mut outline, META_KIND, "prismoid_outline");
+        parts.push(outline);
+    }
+    // Only when something is cut, as the masks: the kept faces of the cut
+    // cells, in the outline's frame (world plan, elevations).
+    let cut = &grid.cut;
+    if !cut.is_empty() {
+        let world = |plan: DVec2| lattice.origin + lattice.u * plan.x + lattice.v * plan.y;
+        let vertices = cut.points.iter().map(|point| world(point.plan).extend(point.roof).to_array());
+        let surface = Surface::new(writer.array_vertices(vertices)?, writer.array_triangles(cut.triangles.clone())?);
+        let mut cut_element = Element::new(format!("{} cut", open.name), surface);
+        cut_element.color = color;
+        let floors = writer.array_numbers(cut.points.iter().map(|point| Some(point.floor)))?;
+        cut_element.attributes.push(Attribute::from_numbers("cut_floor", Location::Vertices, floors));
+        let cells = cut
+            .cells
+            .iter()
+            .enumerate()
+            .flat_map(|(index, cell)| std::iter::repeat_n(Some(f64::from(*cell)), (cut.starts[index + 1] - cut.starts[index]) as usize));
+        let cells = writer.array_numbers(cells)?;
+        cut_element.attributes.push(Attribute::from_numbers("cut_prismoid", Location::Primitives, cells));
+        put(&mut cut_element, META_KIND, "prismoid_cut");
+        parts.push(cut_element);
+    }
+    let mut element = Element::new(open.name.clone(), omf_crate::Composite::new(parts));
+    element.color = color;
+    put(&mut element, META_KIND, "prismoid_grid");
+    put_item_identity(
+        &mut element,
+        open.id.0,
+        open.state.source_name.as_deref(),
+        open.state.source_format.as_deref(),
+        "prismoid_grid",
+    );
+    let mut style = json!({ "loaded": open.state.is_visible(), "color": open.color });
+    // Only a choice: a grid left on its thickness writes as before.
+    if open.color_by != PrismoidColorBy::default() {
+        style["color_by"] = serde_json::to_value(&open.color_by)?;
+    }
+    if open.shaded {
+        style["shaded"] = json!(true);
+    }
+    put(&mut element, META_STYLE, style);
+    if let Some(stratum) = &open.stratum {
+        put(&mut element, META_STRATUM, serde_json::to_value(stratum)?);
+    }
+    if let Some(record) = &open.built_from {
+        put(&mut element, META_BUILT_FROM, serde_json::to_value(record)?);
+    }
+    Ok(element)
+}
+
+/// A lattice's cell sizes as a regular grid where they allow one.
+fn lattice_grid<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, lattice: &Lattice) -> Result<omf_crate::Grid2> {
+    if lattice.is_regular() {
+        let count = [u32::try_from(lattice.columns())?, u32::try_from(lattice.rows())?];
+        return Ok(omf_crate::Grid2::from_size_and_count([lattice.u_sizes[0], lattice.v_sizes[0]], count));
+    }
+    Ok(omf_crate::Grid2::from_arrays(
+        writer.array_scalars(lattice.u_sizes.iter().copied())?,
+        writer.array_scalars(lattice.v_sizes.iter().copied())?,
+    ))
+}
+
 /// Write a drillhole dataset as three standard OMF elements under one
 /// composite, each holding every hole: collars as a point set, survey traces
 /// as one line set, and intervals as one line set whose segments are the
 /// intervals themselves. Every row carries a `Hole` category naming its hole,
 /// so the dataset regroups exactly, and the arrays are the only copy of the
-/// data - nothing is repeated in metadata.
+/// data. Metadata holds what the arrays cannot, such as corrections, never
+/// a second copy of a row.
 fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, open: &OpenDrillHoleDataset) -> Result<Option<omf_crate::Element>> {
     use omf_crate::{Attribute, Element, LineSet, Location, PointSet};
 
@@ -1414,6 +1657,14 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
         Location::Vertices,
         writer.array_numbers(holes.iter().map(|hole| hole.diameter.filter(|diameter| diameter.is_finite())))?,
     ));
+    // Only where a hole has one: blast patterns and bare sets carry none.
+    if holes.iter().any(|hole| hole.total_depth.is_some()) {
+        collars.attributes.push(Attribute::from_numbers(
+            "Total depth",
+            Location::Vertices,
+            writer.array_numbers(holes.iter().map(|hole| hole.total_depth.filter(|depth| depth.is_finite())))?,
+        ));
+    }
     put(&mut collars, META_KIND, "drillhole_collars");
 
     let mut segments = Vec::new();
@@ -1537,6 +1788,43 @@ fn write_drill_holes<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
         .collect::<Result<serde_json::Map<_, _>>>()?;
     if !orientation_sources.is_empty() {
         put(&mut element, META_ORIENTATION_SOURCES, Value::Object(orientation_sources));
+    }
+    let logged_intervals = holes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, hole)| {
+            let pairs = hole
+                .intervals
+                .iter()
+                .enumerate()
+                .filter_map(|(slot, interval)| interval.logged.as_ref().map(|logged| json!([slot, logged])))
+                .collect::<Vec<_>>();
+            (!pairs.is_empty()).then(|| (index.to_string(), Value::Array(pairs)))
+        })
+        .collect::<serde_json::Map<_, _>>();
+    if !logged_intervals.is_empty() {
+        put(&mut element, META_LOGGED_INTERVALS, Value::Object(logged_intervals));
+    }
+    if !open.dataset.unread_logged.is_empty() {
+        let kept = open.dataset.unread_logged.iter().map(|(key, value)| json!([key, value])).collect();
+        put(&mut element, META_UNREAD_LOGGED, Value::Array(kept));
+    }
+    if !open.dataset.corrections.is_empty() || !open.dataset.unread_corrections.is_empty() {
+        // Unread records go back where they were saved: before the readable
+        // record whose index is at least their count, else at the end.
+        let mut unread = open.dataset.unread_corrections.iter().peekable();
+        let mut records = Vec::new();
+        for (index, correction) in open.dataset.corrections.iter().enumerate() {
+            while let Some((_, record)) = unread.next_if(|(count, _)| *count <= index) {
+                records.push(record.clone());
+            }
+            records.push(serde_json::to_value(correction)?);
+        }
+        records.extend(unread.map(|(_, record)| record.clone()));
+        put(&mut element, META_CORRECTIONS, Value::Array(records));
+    }
+    if !open.dataset.derived_columns.is_empty() {
+        put(&mut element, META_DERIVED_COLUMNS, serde_json::to_value(&open.dataset.derived_columns)?);
     }
     Ok(Some(element))
 }
@@ -2078,6 +2366,14 @@ fn read_container<R: omf_crate::file::ReadAt>(source_name: &str, archive: R, bac
             }
         }
     }
+    // Settings that fail to read, or to validate, are dropped for the
+    // defaults and said so, never half applied.
+    if let Some(value) = project.metadata.get(META_MODELLING) {
+        match ModellingSettings::read(value).filter(|settings| settings.problem().is_none()) {
+            Some(settings) => bundle.modelling = settings,
+            None => bundle.warnings.push(tr!("omf-modelling-settings-unreadable")),
+        }
+    }
     if let Some(value) = project.metadata.get(META_OPTIMIZATION) {
         match crate::app::io::parse_optimization_scenarios(&value.to_string()) {
             Ok(file) => bundle.optimization = Some(file),
@@ -2087,7 +2383,7 @@ fn read_container<R: omf_crate::file::ReadAt>(source_name: &str, archive: R, bac
     let unsupported_project_metadata = project
         .metadata
         .keys()
-        .filter(|key| key.as_str() != META_FOLDERS && key.as_str() != META_OPTIMIZATION)
+        .filter(|key| key.as_str() != META_FOLDERS && key.as_str() != META_MODELLING && key.as_str() != META_OPTIMIZATION)
         .cloned()
         .collect::<Vec<_>>();
     if !unsupported_project_metadata.is_empty() {
@@ -2095,6 +2391,11 @@ fn read_container<R: omf_crate::file::ReadAt>(source_name: &str, archive: R, bac
             .warnings
             .push(tr!("omf-unsupported-metadata-keys", keys = unsupported_project_metadata.join(", ").to_string()));
     }
+    let problems = problems
+        .into_vec()
+        .into_iter()
+        .filter(|problem| !is_prismoid_mask_name_repeat(&project.elements, problem))
+        .collect::<Vec<_>>();
     if !problems.is_empty() {
         bundle.warnings.push(tr!("omf-validation-warnings", warnings = format!("{problems:?}")));
     }
@@ -2213,6 +2514,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     name: file_stem(self.source_name),
                     coordinate_reference_system: self.project_crs.clone(),
                     units: self.project_units.clone(),
+                    ..Default::default()
                 },
                 // The bundle's registry is the single source of truth for
                 // membership; a decoded `ProjectFile` never carries its own.
@@ -2247,6 +2549,27 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 self.read_textures(element)?;
                 return Ok(());
             }
+            // One that breaks a rule opens as the plain surfaces it is made of.
+            Some("prismoid_grid") => match self.read_prismoid_grid(element) {
+                Ok(loaded) => {
+                    let section = self.element_section(element, MemberKind::PrismoidGrid);
+                    let folder = self.element_folder(element, section);
+                    self.bundle.prismoid_grids.push(ImportedPrismoidGrid {
+                        preferred_id: element_id(element),
+                        source_name: element_source_name(element),
+                        source_format: element_source_format(element),
+                        loaded,
+                        is_loaded: style_loaded(element.metadata.get(META_STYLE)),
+                        folder,
+                        section,
+                    });
+                    return Ok(());
+                }
+                Err(error) => self
+                    .bundle
+                    .warnings
+                    .push(tr!("omf-prismoid-grid-not-kept", name = element_name(element).to_string(), error = format!("{error:#}"))),
+            },
             _ => {}
         }
 
@@ -2282,6 +2605,22 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             .and_then(|name| self.bundle.folders.ensure(section, name))
     }
 
+    /// The quality `element`, a surface or a layer by `kind`, is marked
+    /// with. A mark that does not decode is said, and the item reads
+    /// unmarked.
+    fn element_quality(&mut self, element: &omf_crate::Element, kind: MemberKind) -> Option<QualityMark> {
+        let value = element.metadata.get(META_QUALITY)?;
+        QualityMark::deserialize(value)
+            .inspect_err(|_| {
+                let name = element.name.to_string();
+                self.bundle.warnings.push(match kind {
+                    MemberKind::Layer => tr!("omf-layer-quality-mark-unreadable", name = name),
+                    _ => tr!("omf-quality-mark-unreadable", name = name),
+                });
+            })
+            .ok()
+    }
+
     /// The section `element` says its item is shown under, or the one its kind
     /// naturally sits in when it says nothing.
     fn element_section(&mut self, element: &omf_crate::Element, kind: MemberKind) -> SectionKind {
@@ -2314,17 +2653,48 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
 
     /// Warn once when a drill-hole dataset's saved `incline:style` JSON named
     /// working sections the lenient reader had to pass over, so a malformed
-    /// entry stays visible without resetting the colours saved beside it.
+    /// entry stays visible without resetting the colours saved beside it. A
+    /// colour state unreadable as a whole is reported by the next function.
     /// Shared by the deferred and resident drill-hole read paths: `walk`
     /// sends a given element through exactly one of them per decode, so
     /// calling this from both never doubles the warning for one load.
     fn warn_skipped_working_sections(&mut self, name: &str, style: Option<&Value>) {
-        let Some(color) = style.and_then(|style| style.get("color")) else { return };
+        let Some(color) = style.and_then(|style| style.get("color")).filter(|color| !drill_color_unreadable(color)) else {
+            return;
+        };
         let count = skipped_working_sections(color);
         if count > 0 {
             self.bundle
                 .warnings
                 .push(tr!("omf-element-name-has-count-unreadable", name = name.to_string(), count = count.to_string()));
+        }
+        let count = skipped_strat_columns(color);
+        if count > 0 {
+            self.bundle
+                .warnings
+                .push(tr!("omf-element-name-has-count-unreadable-strat", name = name.to_string(), count = count.to_string()));
+        }
+    }
+
+    /// Warn for each other part of a drill-hole dataset's saved style the
+    /// lenient readers had to pass over or replace, once per load as above.
+    fn warn_unreadable_style_parts(&mut self, name: &str, style: Option<&Value>) {
+        let name = name.to_string();
+        if let Some(color) = style.and_then(|style| style.get("color")) {
+            // A state lost as a whole is said once, not part by part.
+            if drill_color_unreadable(color) {
+                self.bundle.warnings.push(tr!("omf-element-name-color-unreadable", name = name.clone()));
+            } else {
+                if skipped_strat_field(color) {
+                    self.bundle.warnings.push(tr!("omf-element-name-strat-field-unreadable", name = name.clone()));
+                }
+                if saved_too_few_color_stops(color) {
+                    self.bundle.warnings.push(tr!("omf-element-name-color-stops-unreadable", name = name.clone()));
+                }
+            }
+        }
+        if geophysics_unreadable(style) {
+            self.bundle.warnings.push(tr!("omf-element-name-geophysics-unreadable", name = name));
         }
     }
 
@@ -2385,6 +2755,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             let section = self.element_section(element, MemberKind::DrillHole);
             let folder = self.element_folder(element, section);
             self.warn_skipped_working_sections(&name, style);
+            self.warn_unreadable_style_parts(&name, style);
             self.bundle.drill_holes.push(ImportedDrillHoles {
                 preferred_id,
                 source_name,
@@ -2402,7 +2773,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     name,
                     dataset: Arc::new(DrillHoleDataset::new(Vec::new())),
                 },
-                color: style_value(style, "color").unwrap_or_else(crate::model::drill_hole::DrillColorState::for_logged_holes),
+                color: style_drill_color(style),
                 geophysics: style_geophysics(style),
                 folder,
                 section,
@@ -2419,6 +2790,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 let spatial = Arc::new(crate::model::spatial::TriangleBvh::build(&mesh));
                 let section = self.element_section(element, MemberKind::Triangulation);
                 let folder = self.element_folder(element, section);
+                let quality = self.element_quality(element, MemberKind::Triangulation);
                 self.bundle.triangulations.push(ImportedTriangulation {
                     preferred_id,
                     source_name,
@@ -2448,6 +2820,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                     raster_texture_id: style_value(style, "raster_texture_id"),
                     folder,
                     section,
+                    quality,
                 });
             }
             omf_crate::Geometry::PointSet(points) => {
@@ -2686,6 +3059,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             {
                 document.set_layer_folder(layer_id, Some(folder));
             }
+            document.set_layer_quality(layer_id, self.element_quality(layer_element, MemberKind::Layer));
             let children = match &layer_element.geometry {
                 omf_crate::Geometry::Composite(layer) => layer.elements.as_slice(),
                 _ => std::slice::from_ref(layer_element),
@@ -2775,6 +3149,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 name: element_name(element).to_owned(),
                 coordinate_reference_system: self.project_crs.clone(),
                 units: self.project_units.clone(),
+                ..Default::default()
             },
             // The bundle's registry is the single source of truth for
             // membership; a decoded `ProjectFile` never carries its own.
@@ -3038,13 +3413,11 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         self.push_triangulation(element, vertices, faces)
     }
 
-    fn read_grid_surface(&mut self, element: &omf_crate::Element, surface: &omf_crate::GridSurface) -> Result<()> {
+    /// A grid surface's cell sizes along `u` and `v`, and its height at every
+    /// corner: zero where the file stores none.
+    fn grid_surface_heights(&self, element: &omf_crate::Element, surface: &omf_crate::GridSurface) -> Result<([Vec<f64>; 2], Vec<f64>)> {
         let [u_sizes, v_sizes] = self.grid2_sizes(&surface.grid)?;
-        let u_edges = cumulative_edges(&u_sizes);
-        let v_edges = cumulative_edges(&v_sizes);
-        let width = u_edges.len();
-        let height = v_edges.len();
-        let vertex_count = width.checked_mul(height).with_context(|| tr!("err-omf-grid-vertex-overflow"))?;
+        let vertex_count = (u_sizes.len() + 1).checked_mul(v_sizes.len() + 1).with_context(|| tr!("err-omf-grid-vertex-overflow"))?;
         ensure_items(vertex_count as u64, &tr!("err-omf-items-grid-vertices"))?;
         let heights = if let Some(values) = &surface.heights {
             let values = collect_results(self.reader.array_scalars(values)?)?;
@@ -3060,6 +3433,15 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         } else {
             vec![0.0; vertex_count]
         };
+        Ok(([u_sizes, v_sizes], heights))
+    }
+
+    fn read_grid_surface(&mut self, element: &omf_crate::Element, surface: &omf_crate::GridSurface) -> Result<()> {
+        let ([u_sizes, v_sizes], heights) = self.grid_surface_heights(element, surface)?;
+        let u_edges = cumulative_edges(&u_sizes);
+        let v_edges = cumulative_edges(&v_sizes);
+        let width = u_edges.len();
+        let vertex_count = heights.len();
         let origin = self.project_origin + DVec3::from_array(surface.orient.origin);
         let u = DVec3::from_array(surface.orient.u);
         let v = DVec3::from_array(surface.orient.v);
@@ -3101,6 +3483,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let color = style_value(style, "color").unwrap_or_else(|| element_color(element, [0.65, 0.68, 0.72, 1.0]));
         let section = self.element_section(element, MemberKind::Triangulation);
         let folder = self.element_folder(element, section);
+        let quality = self.element_quality(element, MemberKind::Triangulation);
         let payload_source = self.payload_locator();
         self.bundle.triangulations.push(ImportedTriangulation {
             preferred_id: element_id(element),
@@ -3128,6 +3511,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             raster_texture_id: style_value(style, "raster_texture_id"),
             folder,
             section,
+            quality,
         });
         Ok(())
     }
@@ -3552,6 +3936,216 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         transfers
     }
 
+    /// Rebuild a prismoid grid written by [`write_prismoid_grid`] from its
+    /// roof, floor, mask and cut cells; the outline is derived, so it is not
+    /// read.
+    fn read_prismoid_grid(&mut self, element: &omf_crate::Element) -> Result<LoadedPrismoidGrid> {
+        let name = element_name(element);
+        let omf_crate::Geometry::Composite(composite) = &element.geometry else {
+            bail!(tr!("err-omf-prismoid-not-composite", name = name.to_string()));
+        };
+        let part = |part_kind: &str| composite.elements.iter().find(|child| kind(child) == Some(part_kind));
+        let (Some(roof), Some(floor)) = (part("prismoid_roof"), part("prismoid_floor")) else {
+            bail!(tr!("err-omf-prismoid-no-roof-floor", name = name.to_string()));
+        };
+        let (omf_crate::Geometry::GridSurface(roof_surface), omf_crate::Geometry::GridSurface(floor_surface)) = (&roof.geometry, &floor.geometry) else {
+            bail!(tr!("err-omf-prismoid-not-grid-surfaces", name = name.to_string()));
+        };
+        let (sizes, roof_heights) = self.grid_surface_heights(roof, roof_surface)?;
+        let (floor_sizes, floor_heights) = self.grid_surface_heights(floor, floor_surface)?;
+        let orient = roof_surface.orient;
+        if orient != floor_surface.orient || sizes != floor_sizes {
+            bail!(tr!("err-omf-prismoid-lattices-differ", name = name.to_string()));
+        }
+        if orient.u[2].abs() > 1e-9 || orient.v[2].abs() > 1e-9 {
+            bail!(tr!("err-omf-prismoid-not-horizontal", name = name.to_string()));
+        }
+        // Heights are elevations above the orient's plane.
+        let base = self.project_origin + DVec3::from_array(orient.origin);
+        let [u_sizes, v_sizes] = sizes;
+        let lattice = Lattice {
+            origin: base.truncate(),
+            u: DVec2::new(orient.u[0], orient.u[1]),
+            v: DVec2::new(orient.v[0], orient.v[1]),
+            u_sizes,
+            v_sizes,
+        };
+        let mut active = vec![true; lattice.cell_count()];
+        let mut masked = vec![false; lattice.cell_count()];
+        let mut cell_values = Vec::new();
+        for attribute in roof.attributes.iter().filter(|attribute| attribute.location == omf_crate::Location::Primitives) {
+            match &attribute.data {
+                omf_crate::AttributeData::Boolean { values } if attribute.name == "active" => {
+                    ensure_items(values.item_count(), &tr!("err-omf-items-cell-mask"))?;
+                    active = collect_results(self.reader.array_booleans(values)?)?
+                        .into_iter()
+                        .map(|value| value.unwrap_or(true))
+                        .collect();
+                }
+                omf_crate::AttributeData::Boolean { values } if attribute.name == "masked" => {
+                    ensure_items(values.item_count(), &tr!("err-omf-items-cell-mask"))?;
+                    masked = collect_results(self.reader.array_booleans(values)?)?
+                        .into_iter()
+                        .map(|value| value.unwrap_or(false))
+                        .collect();
+                }
+                omf_crate::AttributeData::Number { values, .. } => cell_values.push(CellValues {
+                    name: attribute.name.clone(),
+                    unit: attribute.units.clone(),
+                    role: match attribute.metadata.get(META_ROLE).and_then(Value::as_str) {
+                        Some("density") => CellValueRole::Density,
+                        _ => CellValueRole::Quality,
+                    },
+                    values: read_numbers(self.reader, values)?,
+                }),
+                _ => {}
+            }
+        }
+        let elevations = |heights: Vec<f64>| heights.into_iter().map(|height| base.z + height).collect::<Vec<_>>();
+        let cut = match part("prismoid_cut") {
+            Some(cut) => self.read_prismoid_cut(cut, &lattice, name)?,
+            None => CutPrismoids::default(),
+        };
+        let renamed = rename_values_named_as_the_mask(&mut cell_values);
+        let grid = PrismoidGrid {
+            lattice,
+            roof: elevations(roof_heights),
+            floor: elevations(floor_heights),
+            active,
+            masked,
+            cell_values,
+            cut,
+        };
+        grid.check().with_context(|| tr!("err-omf-prismoid-grid", name = name.to_string()))?;
+        let style = element.metadata.get(META_STYLE);
+        let stratum = element.metadata.get(META_STRATUM).map(|record| Stratum::deserialize(record).ok().filter(Stratum::is_whole));
+        if let Some(None) = stratum {
+            self.bundle.warnings.push(tr!("omf-prismoid-stratum-dropped", name = name.to_string()));
+        }
+        let mut built_from = element.metadata.get(META_BUILT_FROM).map(|record| BuildRecord::deserialize(record).ok());
+        if let Some(None) = built_from {
+            self.bundle.warnings.push(tr!("omf-prismoid-record-dropped", name = name.to_string()));
+        }
+        let (mut color_by, shaded) = (style_value::<PrismoidColorBy>(style, "color_by"), style_value::<bool>(style, "shaded"));
+        if let Some(new) = &renamed {
+            // The colour choice and the record named the value before its rename.
+            let renamed_value = |value: &mut String| {
+                if same_quality_name(value, "masked") {
+                    value.clone_from(new);
+                }
+            };
+            color_by.iter_mut().filter_map(|color| color.value.as_mut()).for_each(renamed_value);
+            built_from
+                .iter_mut()
+                .flatten()
+                .flat_map(|record| record.values.iter_mut())
+                .for_each(|source| renamed_value(&mut source.value));
+        }
+        let present = |key: &str| style.and_then(|style| style.get(key)).is_some();
+        if (color_by.is_none() && present("color_by")) || (shaded.is_none() && present("shaded")) {
+            self.bundle.warnings.push(tr!("omf-prismoid-style-dropped", name = name.to_string()));
+        }
+        Ok(LoadedPrismoidGrid {
+            name: name.to_owned(),
+            color: style_value(style, "color").unwrap_or_else(|| element_color(element, DEFAULT_PRISMOID_GRID_COLOR)),
+            summary: grid.summary(),
+            grid: Arc::new(grid),
+            color_by: color_by.unwrap_or_default(),
+            stratum: stratum.flatten(),
+            built_from: built_from.flatten(),
+            shaded: shaded.unwrap_or(false),
+        })
+    }
+
+    /// The cut cells of a prismoid grid from its `prismoid_cut` surface: its
+    /// triangles grouped by `cut_prismoid`, each cell given only the points
+    /// its triangles use, in the lattice frame. The means are worked out, not
+    /// read.
+    fn read_prismoid_cut(&mut self, element: &omf_crate::Element, lattice: &Lattice, name: &str) -> Result<CutPrismoids> {
+        let refused = |reason: String| anyhow::anyhow!(tr!("err-omf-prismoid-cut-malformed", name = name.to_string(), reason = reason));
+        let omf_crate::Geometry::Surface(surface) = &element.geometry else {
+            return Err(refused(tr!("err-omf-prismoid-cut-not-surface")));
+        };
+        let offset = self.project_origin + DVec3::from_array(surface.origin);
+        let vertices = self.read_vertices(&surface.vertices)?;
+        ensure_items(surface.triangles.item_count(), &tr!("err-omf-items-grid-faces"))?;
+        let triangles = self.reader.array_triangles_vec(&surface.triangles)?;
+        let number = |attribute_name: &str, location: omf_crate::Location| {
+            element.attributes.iter().find_map(|attribute| match &attribute.data {
+                omf_crate::AttributeData::Number { values, .. } if attribute.name == attribute_name && attribute.location == location => Some(values),
+                _ => None,
+            })
+        };
+        let Some(floors) = number("cut_floor", omf_crate::Location::Vertices) else {
+            return Err(refused(tr!("err-omf-prismoid-cut-missing-attribute", attribute = "cut_floor".to_owned())));
+        };
+        let Some(cells) = number("cut_prismoid", omf_crate::Location::Primitives) else {
+            return Err(refused(tr!("err-omf-prismoid-cut-missing-attribute", attribute = "cut_prismoid".to_owned())));
+        };
+        let (floors, cells) = (read_numbers(self.reader, floors)?, read_numbers(self.reader, cells)?);
+        group_prismoid_cut(lattice, offset, &vertices, &floors, &triangles, &cells).map_err(refused)
+    }
+}
+
+/// The cells of a cut surface's `triangles` over its `vertices`, each cell
+/// holding only the points its triangles use, in the lattice frame, with
+/// `floors` per vertex and `cells` per triangle read as they were saved.
+/// The reason it is malformed, when it is.
+fn group_prismoid_cut(lattice: &Lattice, offset: DVec3, vertices: &[DVec3], floors: &[Option<f64>], triangles: &[[u32; 3]], cells: &[Option<f64>]) -> Result<CutPrismoids, String> {
+    if floors.len() != vertices.len() || cells.len() != triangles.len() {
+        return Err(tr!(
+            "err-omf-prismoid-cut-length-mismatch",
+            vertices = vertices.len().to_string(),
+            floors = floors.len().to_string(),
+            triangles = triangles.len().to_string(),
+            cells = cells.len().to_string()
+        ));
+    }
+    let cell_count = lattice.cell_count();
+    let mut by_cell = std::collections::BTreeMap::<usize, Vec<[u32; 3]>>::new();
+    for (triangle, cell) in triangles.iter().zip(cells) {
+        let cell = cell
+            .filter(|cell| cell.fract() == 0.0 && *cell >= 0.0 && *cell < cell_count as f64)
+            .ok_or_else(|| cell.map_or_else(|| tr!("err-omf-prismoid-cut-no-cell"), |cell| tr!("err-omf-prismoid-cut-bad-cell", cell = cell.to_string())))?;
+        if triangle.iter().any(|index| *index as usize >= vertices.len()) {
+            return Err(tr!("err-omf-prismoid-cut-index-past-vertices"));
+        }
+        by_cell.entry(cell as usize).or_default().push(*triangle);
+    }
+    let mut grouped = Vec::with_capacity(by_cell.len());
+    for (cell, cell_triangles) in by_cell {
+        let mut local = std::collections::HashMap::new();
+        let mut points = Vec::new();
+        let mut remapped = Vec::with_capacity(cell_triangles.len());
+        for triangle in cell_triangles {
+            let mut mapped = [0u32; 3];
+            for (slot, index) in mapped.iter_mut().zip(triangle) {
+                *slot = match local.get(&index) {
+                    Some(found) => *found,
+                    None => {
+                        let (vertex, floor) = (
+                            vertices[index as usize] + offset,
+                            floors[index as usize].ok_or_else(|| tr!("err-omf-prismoid-cut-missing-floor", vertex = index.to_string()))?,
+                        );
+                        let at = points.len() as u32;
+                        points.push(CutPoint {
+                            plan: lattice.to_lattice(vertex.truncate()),
+                            roof: vertex.z,
+                            floor: offset.z + floor,
+                        });
+                        local.insert(index, at);
+                        at
+                    }
+                };
+            }
+            remapped.push(mapped);
+        }
+        grouped.push((cell, points, remapped));
+    }
+    Ok(CutPrismoids::build(lattice, grouped))
+}
+
+impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
     /// Rebuild a dataset written by [`write_drill_holes`].
     fn read_drill_dataset(&mut self, element: &omf_crate::Element) -> Result<Option<ImportedDrillHoles>> {
         use crate::model::drill_hole::{DrillInterval, TraceStation};
@@ -3572,6 +4166,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let positions = self.read_vertices(&collar_points.vertices).with_context(|| context(&tr!("err-omf-part-collars")))?;
         let (collar_holes, names) = self.read_drill_hole_category(collars).with_context(|| context(&tr!("err-omf-part-collars")))?;
         let diameters = self.read_drill_numbers(collars, "Diameter")?.unwrap_or_default();
+        let total_depths = self.read_drill_numbers(collars, "Total depth")?.unwrap_or_default();
         let mut holes = positions
             .iter()
             .enumerate()
@@ -3588,6 +4183,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 render_ranges: Vec::new(),
                 intervals: Vec::new(),
                 orientation_source: OrientationSource::Unknown,
+                total_depth: total_depths.get(index).copied().flatten().and_then(crate::model::drill_hole::recorded_total_depth),
             })
             .collect::<Vec<_>>();
 
@@ -3671,10 +4267,78 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 }
             }
         }
+        // What cannot be read or placed is kept with its hole key and never
+        // applied. A save writes it back apart from the readable pairs, under
+        // its own key, so no slot is ever applied to a row and the value
+        // comes back word for word.
+        let mut unread_logged: Vec<(String, Value)> = Vec::new();
+        if let Some(logged) = element.metadata.get(META_LOGGED_INTERVALS) {
+            match logged.as_object() {
+                None => unread_logged.push((String::new(), logged.clone())),
+                Some(logged) => {
+                    for (index, pairs) in logged {
+                        let Some(list) = pairs.as_array() else {
+                            unread_logged.push((index.clone(), pairs.clone()));
+                            continue;
+                        };
+                        let Some(hole) = index.parse::<usize>().ok().and_then(|index| holes.get_mut(index)) else {
+                            unread_logged.extend(list.iter().map(|pair| (index.clone(), pair.clone())));
+                            continue;
+                        };
+                        for pair in list {
+                            match <(usize, crate::model::drill_hole::LoggedInterval)>::deserialize(pair) {
+                                Ok((slot, logged)) if slot < hole.intervals.len() => hole.intervals[slot].logged = Some(logged),
+                                _ => unread_logged.push((index.clone(), pair.clone())),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Values an earlier build kept: carried over as read, never applied.
+        // An entry of another shape, or a value that is no list, is kept whole
+        // under the empty key and goes back as `["", entry]`.
+        match element.metadata.get(META_UNREAD_LOGGED) {
+            None => {}
+            Some(Value::Array(kept)) => {
+                for entry in kept {
+                    match <(String, Value)>::deserialize(entry) {
+                        Ok(entry) => unread_logged.push(entry),
+                        Err(_) => unread_logged.push((String::new(), entry.clone())),
+                    }
+                }
+            }
+            Some(whole) => unread_logged.push((String::new(), whole.clone())),
+        }
         if holes.is_empty() {
             return Ok(None);
         }
         let mut dataset = DrillHoleDataset::new(holes);
+        dataset.unread_logged = unread_logged;
+        // Read record by record: one that cannot be read is kept as saved,
+        // never applied, and never costs the list the others.
+        match element.metadata.get(META_CORRECTIONS).map(Value::as_array) {
+            Some(Some(stored)) => {
+                for record in stored {
+                    match crate::model::drill_hole::Correction::deserialize(record) {
+                        Ok(correction) => dataset.corrections.push(correction),
+                        Err(_) => dataset.unread_corrections.push((dataset.corrections.len(), record.clone())),
+                    }
+                }
+            }
+            // Corrections that are not a list cannot be counted: all are lost.
+            Some(None) => self.bundle.warnings.push(crate::i18n::tr!("omf-corrections-unreadable", name = element.name.clone())),
+            None => {}
+        }
+        // Only columns a row still holds, in a hole or in a deletion's record:
+        // a name with no column behind it would let a later import of that
+        // name be written over.
+        let stored = element
+            .metadata
+            .get(META_DERIVED_COLUMNS)
+            .and_then(|value| std::collections::BTreeSet::<String>::deserialize(value).ok())
+            .unwrap_or_default();
+        dataset.restore_derived_columns(stored);
         // Resolved after construction: it is `new` that fixes the hole order
         // the stored names are looked up against.
         if let Some(value) = element.metadata.get(META_TIE_INS)
@@ -3705,6 +4369,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
         let folder = self.element_folder(element, section);
         let style = element.metadata.get(META_STYLE);
         self.warn_skipped_working_sections(element_name(element), style);
+        self.warn_unreadable_style_parts(element_name(element), style);
         Ok(Some(ImportedDrillHoles {
             preferred_id: element_id(element),
             source_name: element_source_name(element),
@@ -3719,7 +4384,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             },
             deferred: None,
             is_loaded: style_loaded(style),
-            color: style_value(style, "color").unwrap_or_else(crate::model::drill_hole::DrillColorState::for_logged_holes),
+            color: style_drill_color(style),
             geophysics: style_geophysics(style),
             folder,
             section,
@@ -4281,11 +4946,31 @@ fn style_value<T: serde::de::DeserializeOwned>(style: Option<&Value>, key: &str)
     T::deserialize(style?.get(key)?).ok()
 }
 
+/// A drill-hole dataset's colour state, its ramp never left with too few
+/// stops to edit.
+fn style_drill_color(style: Option<&Value>) -> crate::model::drill_hole::DrillColorState {
+    let mut color = style_value(style, "color").unwrap_or_else(crate::model::drill_hole::DrillColorState::for_logged_holes);
+    color.settle_stops();
+    color
+}
+
+/// Whether a saved colour state is present but cannot be read as a whole.
+fn drill_color_unreadable(color: &Value) -> bool {
+    !color.is_null() && crate::model::drill_hole::DrillColorState::deserialize(color).is_err()
+}
+
+/// Whether the style saved a geophysics link that cannot be read.
+fn geophysics_unreadable(style: Option<&Value>) -> bool {
+    style
+        .and_then(|style| style.get("geophysics"))
+        .is_some_and(|saved| !saved.is_null() && crate::model::geophysics::GeophysicsLink::deserialize(saved).is_err())
+}
+
 /// A drill-hole dataset's geophysics link; a project saved before links has
 /// none.
 fn style_geophysics(style: Option<&Value>) -> Option<Arc<crate::model::geophysics::GeophysicsLink>> {
     let mut link = style_value::<crate::model::geophysics::GeophysicsLink>(style, "geophysics")?;
-    link.sort();
+    link.settle();
     Some(Arc::new(link))
 }
 

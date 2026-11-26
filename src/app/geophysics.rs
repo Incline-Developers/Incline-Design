@@ -95,7 +95,7 @@ impl<'a> App<'a> {
         let link = match link {
             Some(link) => link,
             None => {
-                placeholder = Arc::new(GeophysicsLink { files: Vec::new() });
+                placeholder = Arc::new(GeophysicsLink::new(Vec::new()));
                 &placeholder
             }
         };
@@ -108,7 +108,8 @@ impl<'a> App<'a> {
     }
 
     /// Keep `link` as the dataset's, to be saved with it, and read from it.
-    pub(super) fn keep_geophysics_link(&mut self, id: DrillHoleId, link: GeophysicsLink) {
+    pub(super) fn keep_geophysics_link(&mut self, id: DrillHoleId, mut link: GeophysicsLink) {
+        link.settle();
         let link = Arc::new(link);
         let Some(dataset) = self.drill_holes.iter_mut().find(|item| item.id == id) else {
             return;
@@ -127,7 +128,7 @@ impl<'a> App<'a> {
         }
         match result {
             Ok(files) => {
-                let mut link = base.map_or_else(|| GeophysicsLink { files: Vec::new() }, |base| (*base).clone());
+                let mut link = base.map_or_else(|| GeophysicsLink::new(Vec::new()), |base| (*base).clone());
                 for (replaces, indexed) in files {
                     let file = indexed.into_file();
                     match replaces.and_then(|index| link.files.get_mut(index)) {
@@ -248,6 +249,7 @@ impl<'a> App<'a> {
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use std::{
+        collections::HashSet,
         io::{Read, Seek, SeekFrom},
         path::PathBuf,
         sync::Arc,
@@ -259,7 +261,10 @@ mod native {
         i18n::tr,
         model::{
             drill_hole::DrillHoleId,
-            formats::csv_geophysics::{self, ColumnSource},
+            formats::{
+                csv_drill_hole::CsvDrillError,
+                csv_geophysics::{self, ColumnSource},
+            },
             geophysics::{FileIdentity, GeophysicsLink, LinkState, LinkedColumn, LinkedFile},
         },
         userspace_log, userspace_warn,
@@ -381,28 +386,61 @@ mod native {
             let current = self.geophysics_link(id);
             let generation = self.restart_geophysics(id, current.as_ref(), LinkState::Indexing);
             let label = tr!("geophysics-linking-geophysics-name", name = self.drill_hole_name(id).to_string());
-            let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| {
+            // As in the browser, one of several picked files that fails is
+            // left out and the others are linked.
+            let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> anyhow::Result<Vec<(Option<usize>, Indexed)>> {
+                let several = tasks.len() > 1;
                 let mut done = Vec::new();
+                let mut failed = None;
                 for task in tasks {
-                    let (identity, input) = csv_geophysics::open_for_index(&task.path)?;
-                    if let Some(mut kept) = task.reuse.filter(|file| file.identity.matches(&identity)) {
-                        kept.path = task.path;
-                        kept.identity = identity;
-                        done.push((task.replaces, Indexed::Kept(kept)));
-                        continue;
+                    let name = task.path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+                    let can_leave_out = several && task.replaces.is_none();
+                    match index_task(task, &known, cancel, progress) {
+                        Ok(indexed) => done.push(indexed),
+                        Err(CsvDrillError::Cancelled) => return Err(CsvDrillError::Cancelled.into()),
+                        Err(error) if can_leave_out => {
+                            userspace_warn!("{}", tr!("common-file-was-left-out-downhole", file = name.to_string(), error = error.to_string()));
+                            failed = Some(error);
+                        }
+                        Err(error) => return Err(error.into()),
                     }
-                    let size = identity.size.max(1);
-                    let columns = task.previous.as_deref().map_or(ColumnSource::Guessed, ColumnSource::Previous);
-                    let indexed = csv_geophysics::index_file(task.path, identity, columns, &known, input, &|| cancel.is_cancelled(), &mut |bytes| {
-                        progress.set_fraction((bytes as f64 / size as f64) as f32)
-                    })?;
-                    done.push((task.replaces, Indexed::Read(indexed)));
                 }
-                Ok(done)
+                match failed {
+                    Some(error) if done.is_empty() => Err(error.into()),
+                    _ => Ok(done),
+                }
             };
             let apply = move |app: &mut App<'a>, result| app.finish_geophysics_index(id, generation, base, result);
             self.spawn_job_reporting_progress(label, Self::geophysics_keys(id, generation), compute, apply);
         }
+    }
+
+    /// Index one task's file: its index kept when it is unchanged, read
+    /// afresh when it is not. A file that cannot be opened is named.
+    fn index_task(
+        task: IndexTask,
+        known: &HashSet<String>,
+        cancel: &crate::app::jobs::CancelFlag,
+        progress: &crate::model::progress::Progress,
+    ) -> Result<(Option<usize>, Indexed), CsvDrillError> {
+        let (identity, input) = csv_geophysics::open_for_index(&task.path).map_err(|error| match error {
+            CsvDrillError::Io(error) => {
+                let file = task.path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+                CsvDrillError::Invalid(tr!("geophysics-file-cannot-be-opened", file = file.to_string(), error = error.to_string()))
+            }
+            other => other,
+        })?;
+        if let Some(mut kept) = task.reuse.filter(|file| file.identity.matches(&identity)) {
+            kept.path = task.path;
+            kept.identity = identity;
+            return Ok((task.replaces, Indexed::Kept(kept)));
+        }
+        let size = identity.size.max(1);
+        let columns = task.previous.as_deref().map_or(ColumnSource::Guessed, ColumnSource::Previous);
+        let indexed = csv_geophysics::index_file(task.path, identity, columns, known, input, &|| cancel.is_cancelled(), &mut |bytes| {
+            progress.set_fraction((bytes as f64 / size as f64) as f32)
+        })?;
+        Ok((task.replaces, Indexed::Read(indexed)))
     }
 
     /// The bytes of each of `dhid`'s runs, in link order. A file whose size
@@ -415,9 +453,15 @@ mod native {
             let file = match &mut open[index] {
                 Some(file) => file,
                 slot => {
-                    let file = std::fs::File::open(&linked.path)?;
-                    let metadata = file.metadata()?;
-                    if metadata.len() != linked.identity.size || FileIdentity::modified_millis(&metadata) != linked.identity.modified {
+                    let file = std::fs::File::open(&linked.path).map_err(|error| {
+                        anyhow::anyhow!(tr!(
+                            "geophysics-file-cannot-be-opened",
+                            file = linked.identity.name.clone().to_string(),
+                            error = error.to_string()
+                        ))
+                    })?;
+                    // Size, time and the hash of both ends, as the link was made.
+                    if !FileIdentity::of_path(&linked.path)?.matches(&linked.identity) {
                         return Err(FileChanged.into());
                     }
                     slot.insert(file)

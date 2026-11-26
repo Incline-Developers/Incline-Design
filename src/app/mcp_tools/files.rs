@@ -475,6 +475,10 @@ impl App<'_> {
                 Target::Item(ItemRef::DrillHole(id)) => Some(*id),
                 _ => None,
             })),
+            prismoid_grids: only(targets.iter().filter_map(|target| match target {
+                Target::Item(ItemRef::PrismoidGrid(id)) => Some(*id),
+                _ => None,
+            })),
         })
     }
 

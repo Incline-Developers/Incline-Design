@@ -6,9 +6,10 @@ use crate::{
     model::{
         Command, ItemRef, ItemStyle, MemberKind, OpenItem, SceneEntityId,
         drill_hole::{
-            DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleRef, DrillHoleSource, DrillHoleStyle,
-            LoadedDrillHoleDataset, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, OrientationSource, TraceStation, WIDE_CATEGORY_FIELD_HINT, clamp_disc_diameter,
-            clamp_string_pixel_width,
+            BoundaryMove, BoundarySide, CorrectionNote, DrillColorPreset, DrillColorState, DrillColorStop, DrillFieldKind, DrillHole, DrillHoleDataset, DrillHoleId, DrillHoleRef,
+            DrillHoleSource, DrillHoleStyle, DrillValue, IntervalDelete, IntervalInsert, LoadedDrillHoleDataset, MAX_DRILL_COLOR_STOPS, MIN_DRILL_COLOR_STOPS,
+            OpenDrillHoleDataset, OrientationSource, RenameScope, ShiftDirection, TraceStation, WIDE_CATEGORY_FIELD_HINT, clamp_disc_diameter, clamp_string_pixel_width,
+            name_is_code_message,
         },
         formats::{csv_drill_hole, csv_geophysics::StreamControl},
     },
@@ -27,7 +28,11 @@ fn remap_browser_source_path(source: &mut DrillHoleSource, path: std::path::Path
 /// A parsed bundle on its way to the App: the dataset, and the link to any
 /// geophysics files it carried.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) type LoadedBundle = (LoadedDrillHoleDataset, Option<crate::model::geophysics::GeophysicsLink>);
+pub(crate) type LoadedBundle = (
+    LoadedDrillHoleDataset,
+    Option<crate::model::geophysics::GeophysicsLink>,
+    Option<super::strat_check::ImportedStrat>,
+);
 
 /// The key a bundle load runs under: one bundle for one project always gives
 /// the same key, so a second import of it is refused while the first runs,
@@ -81,6 +86,7 @@ fn planned_dataset(id: DrillHoleId, name: String, collars: Vec<glam::DVec3>, dep
             render_ranges: Vec::new(),
             intervals: Vec::new(),
             orientation_source: OrientationSource::Assumed,
+            total_depth: None,
         })
         .collect();
     OpenDrillHoleDataset {
@@ -137,6 +143,16 @@ impl<'a> App<'a> {
     /// The picked files are split by role here, once.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn import_web_drill_hole_source(&mut self, mut source: DrillHoleSource) -> Result<()> {
+        // An ignored file leaves the bundle here, and its picked file with it
+        // below: the two lists pair by position.
+        let ignored = match &mut source {
+            DrillHoleSource::Csv { files, .. } => {
+                let ignored = files.iter().map(|file| file.role == csv_drill_hole::CsvDrillFileRole::Ignore).collect::<Vec<_>>();
+                files.retain(|file| file.role != csv_drill_hole::CsvDrillFileRole::Ignore);
+                ignored
+            }
+            _ => Vec::new(),
+        };
         let key = match self.drill_hole_load(&source) {
             Ok(Some(key)) => key,
             refused => {
@@ -149,10 +165,11 @@ impl<'a> App<'a> {
             anyhow::bail!("{}", tr!("cmd-drill-hole-only-mapped-csv-bundles-imported"));
         };
         let picked = self.take_web_import_picked_files();
-        if picked.len() != mappings.len() {
+        if picked.len() != ignored.len() {
             self.clear_browser_import_selection(crate::ui::state::DataMenu::CsvDrillHole);
             anyhow::bail!("{}", tr!("cmd-drill-hole-choose-drillhole-source-files-again"));
         }
+        let picked = picked.into_iter().zip(ignored).filter_map(|(file, ignored)| (!ignored).then_some(file));
         let mut table_files = Vec::new();
         let mut geophysics = Vec::new();
         for (mapping, file) in mappings.iter().cloned().zip(picked) {
@@ -215,7 +232,9 @@ impl<'a> App<'a> {
         let DrillHoleSource::Csv { files: mappings, .. } = &source else { return };
         let mappings = mappings.clone();
         let label = tr!("cmd-block-model-loading-name", name = source.display_name().to_string());
-        let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<LoadedDrillHoleDataset> {
+        let compute = move |cancel: &crate::app::jobs::CancelFlag,
+                            progress: &crate::model::progress::Progress|
+              -> Result<(LoadedDrillHoleDataset, Option<super::strat_check::ImportedStrat>)> {
             let control = StreamControl {
                 progress: &|fraction| progress.set_fraction(fraction),
                 cancelled: &|| cancel.is_cancelled(),
@@ -223,19 +242,24 @@ impl<'a> App<'a> {
             let dataset = csv_drill_hole::parse_bundle_tables(&mappings, tables.iter().map(|(mapping, table)| (mapping, table.bytes.as_slice())), control)?;
             // The table bytes go before the apply step.
             drop(tables);
-            Ok(LoadedDrillHoleDataset {
+            // Worked out here, off the UI thread, and written on the set
+            // only by this import: opening a project never fills a column.
+            let strat = super::strat_check::imported_strat(&dataset);
+            let loaded = LoadedDrillHoleDataset {
                 name: source.display_name(),
                 source,
                 dataset: std::sync::Arc::new(dataset),
-            })
+            };
+            Ok((loaded, strat))
         };
-        let apply = move |app: &mut App, result: Result<LoadedDrillHoleDataset>| match result {
-            Ok(loaded) => {
+        let apply = move |app: &mut App, result: Result<(LoadedDrillHoleDataset, Option<super::strat_check::ImportedStrat>)>| match result {
+            Ok((loaded, strat)) => {
                 let should_fit = !app.scene_has_renderables();
                 let id = app.add_as_one_step(|app| app.add_loaded_drill_holes(loaded));
                 if should_fit {
                     app.fit_view_to_extents();
                 }
+                app.fill_imported_strat(id, strat);
                 app.job_needs_gpu_upload();
                 if !geophysics.is_empty() {
                     app.link_bundle_geophysics(id, geophysics);
@@ -263,7 +287,11 @@ impl<'a> App<'a> {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn import_drill_hole_source(&mut self, source: DrillHoleSource) -> Result<()> {
+    pub(crate) fn import_drill_hole_source(&mut self, mut source: DrillHoleSource) -> Result<()> {
+        // An ignored file is listed in the dialog, never kept in the bundle.
+        if let DrillHoleSource::Csv { files, .. } = &mut source {
+            files.retain(|file| file.role != csv_drill_hole::CsvDrillFileRole::Ignore);
+        }
         match &source {
             DrillHoleSource::LegacyDhd { .. } => anyhow::bail!(tr!("err-drill-dhd-unsupported")),
             DrillHoleSource::Csv { files, .. } if files.iter().any(|file| !file.path.is_file()) => anyhow::bail!(tr!("err-drill-csv-sources-missing")),
@@ -290,13 +318,16 @@ impl<'a> App<'a> {
                 DrillHoleSource::Csv { files, .. } => csv_drill_hole::parse_paths(files, control).with_context(|| tr!("err-drill-csv-bundle-parse-failed"))?,
                 DrillHoleSource::Omf { .. } => anyhow::bail!(tr!("err-drill-omf-via-importer")),
             };
+            // Worked out here, off the UI thread, and written on the set
+            // only by this import: opening a project never fills a column.
+            let strat = super::strat_check::imported_strat(&parsed.dataset);
             progress.set_fraction(1.0);
             let loaded = LoadedDrillHoleDataset {
                 name,
                 source,
                 dataset: std::sync::Arc::new(parsed.dataset),
             };
-            Ok((loaded, parsed.geophysics))
+            Ok((loaded, parsed.geophysics, strat))
         };
         self.spawn_job_reporting_progress(label, vec![key], compute, apply_loaded_bundle);
         Ok(())
@@ -304,8 +335,9 @@ impl<'a> App<'a> {
 
     /// A CSV bundle's dataset, then the link to its geophysics files.
     #[cfg(not(target_arch = "wasm32"))]
-    fn add_loaded_bundle(&mut self, (loaded, geophysics): LoadedBundle) {
+    fn add_loaded_bundle(&mut self, (loaded, geophysics, strat): LoadedBundle) {
         let id = self.add_as_one_step(|app| app.add_loaded_drill_holes(loaded));
+        self.fill_imported_strat(id, strat);
         if let Some(link) = geophysics {
             self.keep_geophysics_link(id, link);
         }
@@ -446,7 +478,7 @@ impl<'a> App<'a> {
         for stop in &mut stops {
             stop.t = stop.t.clamp(0.0, 1.0);
         }
-        if (2..=MAX_DRILL_COLOR_STOPS).contains(&stops.len()) {
+        if (MIN_DRILL_COLOR_STOPS..=MAX_DRILL_COLOR_STOPS).contains(&stops.len()) {
             self.set_drill_hole_color(id, |_, color| color.stops = stops);
         }
     }
@@ -456,6 +488,261 @@ impl<'a> App<'a> {
         // stop's is, so no NaN reaches the shader.
         let categories = categories.into_iter().filter(|category| category.color.iter().all(|value| value.is_finite())).collect();
         self.set_drill_hole_color(id, |_, color| color.set_categories(categories));
+    }
+
+    /// Rename a seam in one hole or the whole set, proposing one value
+    /// correction per interval renamed as a single undo step, with the seam's
+    /// colour carried to its new name. The records carry no author yet: the
+    /// project holds no current author to name.
+    pub(crate) fn rename_seam(&mut self, id: DrillHoleId, field: String, from: String, to: String, scope: RenameScope, reason: String) {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id && item.state.loaded) else {
+            return;
+        };
+        if let Some(section) = crate::model::drill_hole::section_named_apart(&dataset.color.working_sections, &field, &to) {
+            let message = name_is_code_message(section, &to);
+            match scope {
+                RenameScope::Horizon { hole, .. } => {
+                    let Some(dhid) = dataset.dataset.holes.get(hole).map(|drilled| drilled.dhid.clone()) else {
+                        userspace_warn!("{}", message);
+                        return;
+                    };
+                    userspace_warn!("{}", tr!("cmd-drill-hole-name-reason", name = dhid, reason = message));
+                }
+                RenameScope::Set => userspace_warn!("{}", message),
+            }
+            return;
+        }
+        let note = CorrectionNote::now(reason);
+        let (targets, records): (Vec<_>, Vec<_>) = dataset.dataset.rename_corrections(&field, &from, &to, scope, &note).into_iter().unzip();
+        if records.is_empty() {
+            userspace_warn!("{}", tr!("cmd-drill-hole-no-interval-holds-seam", name = from));
+            return;
+        }
+        let count = records.len();
+        // An interval left out of the rename, in another hole or missing a
+        // depth, still holds the old name.
+        let old = DrillValue::Category(from.clone());
+        let held = dataset
+            .dataset
+            .holes
+            .iter()
+            .flat_map(|hole| &hole.intervals)
+            .filter(|interval| interval.values.get(&field) == Some(&old))
+            .count();
+        let sections = crate::model::drill_hole::sections_after_rename(&dataset.color.working_sections, &field, &from, &to, held > count);
+        let mut commands = vec![Command::CorrectIntervals { dataset: id, targets, records }];
+        commands.extend(self.item_style_command(ItemRef::DrillHole(id), |style| match style {
+            ItemStyle::DrillHole { loaded, hidden, mut color } => {
+                color.carry_category_color(&field, &from, &to);
+                color.working_sections = sections;
+                ItemStyle::DrillHole { loaded, hidden, color }
+            }
+            other => other,
+        }));
+        self.execute_edit(Command::Batch(commands));
+        userspace_log!("{}", tr!("cmd-drill-hole-seam-renamed", from = from, to = to, count = count.to_string()));
+    }
+
+    /// Move a roof or floor as `edit` asks, proposing one boundary correction
+    /// as a single undo step; a touching interval on the other side follows.
+    /// A move the depth rules refuse, or one whose hole or boundary is no
+    /// longer where the dialog found it, is reported and changes nothing.
+    pub(crate) fn move_boundary(&mut self, id: DrillHoleId, edit: BoundaryMove, reason: String) {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id && item.state.loaded) else {
+            return;
+        };
+        let at = dataset
+            .dataset
+            .holes
+            .get(edit.hole)
+            .filter(|hole| hole.dhid == edit.dhid)
+            .and_then(|hole| hole.intervals.get(edit.interval))
+            .map(|moved| match edit.side {
+                BoundarySide::Roof => moved.from,
+                BoundarySide::Floor => moved.to,
+            });
+        if at != Some(edit.at) {
+            userspace_warn!("{}", tr!("cmd-drill-hole-boundary-changed", hole = edit.dhid));
+            return;
+        }
+        let note = CorrectionNote::now(reason);
+        let (targets, records): (Vec<_>, Vec<_>) = match dataset.dataset.boundary_corrections(edit.hole, edit.interval, edit.side, edit.to, &note) {
+            Ok(corrections) => corrections.into_iter().unzip(),
+            Err(problem) => {
+                userspace_warn!("{}", tr!("cmd-drill-hole-boundary-refused", hole = edit.dhid, reason = problem.message()));
+                return;
+            }
+        };
+        self.execute_edit(Command::CorrectIntervals { dataset: id, targets, records });
+        userspace_log!(
+            "{}",
+            tr!(
+                "cmd-drill-hole-boundary-moved",
+                hole = edit.dhid,
+                from = format!("{:.2}", edit.at),
+                to = format!("{:.2}", edit.to)
+            )
+        );
+    }
+
+    /// Insert the interval `edit` asks for, proposing its insertion and the
+    /// trims and split it makes as a single undo step. One the depth rules
+    /// refuse, whose hole is no longer where the dialog found it, or with a
+    /// code named like a working section that does not hold it, as a rename
+    /// is guarded, is reported and changes nothing.
+    pub(crate) fn insert_interval(&mut self, id: DrillHoleId, edit: IntervalInsert, reason: String) {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id && item.state.loaded) else {
+            return;
+        };
+        if let Some((section, code)) = crate::model::drill_hole::insertion_named_apart(&dataset.color.working_sections, &edit) {
+            userspace_warn!(
+                "{}",
+                tr!("cmd-drill-hole-name-reason", name = edit.dhid.clone(), reason = name_is_code_message(section, code))
+            );
+            return;
+        }
+        let note = CorrectionNote::now(reason);
+        let (targets, records): (Vec<_>, Vec<_>) = match dataset.dataset.insertion_corrections(&edit, &note) {
+            Ok(plan) => plan.corrections.into_iter().unzip(),
+            Err(problem) => {
+                userspace_warn!("{}", tr!("cmd-drill-hole-insertion-refused", hole = edit.dhid, reason = problem.message()));
+                return;
+            }
+        };
+        let count = records.len();
+        self.execute_edit(Command::CorrectIntervals { dataset: id, targets, records });
+        userspace_log!(
+            "{}",
+            tr!(
+                "cmd-drill-hole-interval-inserted",
+                code = edit.code.trim().to_owned(),
+                from = format!("{:.2}", edit.from),
+                to = format!("{:.2}", edit.to),
+                hole = edit.dhid,
+                count = count.to_string()
+            )
+        );
+    }
+
+    /// Take interval `interval` of hole `hole` out of the interpreted data,
+    /// every field it holds with it, proposing one deletion correction as a
+    /// single undo step. One whose hole or row is no longer what the dialog
+    /// picked is reported and changes nothing: no record, no undo step.
+    pub(crate) fn delete_interval(&mut self, id: DrillHoleId, edit: &IntervalDelete, reason: String) {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id && item.state.loaded) else {
+            return;
+        };
+        let note = CorrectionNote::now(reason);
+        let Some((target, record)) = dataset.dataset.deletion_corrections(edit.hole, &edit.dhid, edit.interval, &edit.field, &edit.row, &note) else {
+            userspace_warn!("{}", tr!("cmd-drill-hole-deletion-hole-changed", hole = edit.dhid.clone()));
+            return;
+        };
+        let (from, to) = record.removed.as_ref().map_or((record.logged_from, record.logged_to), |row| (row.from, row.to));
+        self.execute_edit(Command::CorrectIntervals {
+            dataset: id,
+            targets: vec![target],
+            records: vec![record],
+        });
+        userspace_log!(
+            "{}",
+            tr!(
+                "cmd-drill-hole-interval-deleted",
+                from = format!("{from:.2}"),
+                to = format!("{to:.2}"),
+                hole = edit.dhid.clone()
+            )
+        );
+    }
+
+    /// Replace one field's strat column as one undo step, beside the working
+    /// sections it serves. Blanks, UNK and duplicates are left out; an
+    /// unchanged column is no step.
+    pub(crate) fn set_strat_column(&mut self, id: DrillHoleId, field: String, codes: Vec<String>) {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id) else {
+            return;
+        };
+        let mut changed = dataset.color.clone();
+        changed.set_strat_column(&field, codes);
+        if changed.strat_columns == dataset.color.strat_columns {
+            return;
+        }
+        self.set_drill_hole_color(id, |_, color| color.strat_columns = changed.strat_columns);
+    }
+
+    /// Slide the names of `field` in one hole one run along the hole, every
+    /// run or, with `from`, the clicked interval's run and those on the side
+    /// the names move to, as one undo step with one value correction per
+    /// interval renamed. Names are worked out from the hole as it stands, so
+    /// none moves twice; a run left with no name is named UNK and its
+    /// interval kept. Codes the column does not hold are left alone and
+    /// counted. Working sections follow each rename as they follow a seam
+    /// rename.
+    pub(crate) fn shift_strat_column(&mut self, id: DrillHoleId, hole: usize, field: String, direction: ShiftDirection, from: Option<usize>, reason: String) {
+        let Some(dataset) = self.drill_holes.iter().find(|item| item.id == id && item.state.loaded) else {
+            return;
+        };
+        let Some(dhid) = dataset.dataset.holes.get(hole).map(|hole| hole.dhid.clone()) else {
+            return;
+        };
+        let column = dataset.color.strat_column(&field);
+        if column.is_empty() {
+            userspace_warn!("{}", tr!("cmd-drill-hole-field-has-no-strat-column", field = field));
+            return;
+        }
+        let note = CorrectionNote::now(reason);
+        let shift = dataset.dataset.column_shift(hole, &field, column, direction, from, &note);
+        let renames = shift.renames();
+        if let Some((section, to)) = renames
+            .iter()
+            .find_map(|(_, to)| crate::model::drill_hole::section_named_apart(&dataset.color.working_sections, &field, to).map(|section| (section, to)))
+        {
+            userspace_warn!("{}", tr!("cmd-drill-hole-name-reason", name = dhid, reason = name_is_code_message(section, to)));
+            return;
+        }
+        if shift.corrections.is_empty() {
+            userspace_warn!(
+                "{}",
+                tr!("cmd-drill-hole-no-interval-names-column-code", hole = dhid, untouched = shift.untouched.to_string())
+            );
+            return;
+        }
+        // Whether an old name is still held anywhere once the shift is made:
+        // in another hole, or in this one by a name shifted onto it.
+        let mut held: std::collections::HashMap<&str, isize> = std::collections::HashMap::new();
+        for interval in dataset.dataset.holes.iter().flat_map(|hole| &hole.intervals) {
+            if let Some(DrillValue::Category(code)) = interval.values.get(&field) {
+                *held.entry(code.as_str()).or_default() += 1;
+            }
+        }
+        for (_, record) in &shift.corrections {
+            if let Some(DrillValue::Category(code)) = &record.before {
+                *held.entry(code.as_str()).or_default() -= 1;
+            }
+            if let Some(DrillValue::Category(code)) = &record.after {
+                *held.entry(code.as_str()).or_default() += 1;
+            }
+        }
+        let sections = crate::model::drill_hole::sections_after_shift(&dataset.color.working_sections, &field, &renames, |code| held.get(code).is_some_and(|count| *count > 0));
+        let (moved, unknown, untouched) = (shift.corrections.len() - shift.unknown, shift.unknown, shift.untouched);
+        let (targets, records): (Vec<_>, Vec<_>) = shift.corrections.into_iter().unzip();
+        let mut commands = vec![Command::CorrectIntervals { dataset: id, targets, records }];
+        commands.extend(self.item_style_command(ItemRef::DrillHole(id), |style| match style {
+            ItemStyle::DrillHole { loaded, hidden, mut color } => {
+                color.carry_category_colors(&field, &renames);
+                color.working_sections = sections;
+                ItemStyle::DrillHole { loaded, hidden, color }
+            }
+            other => other,
+        }));
+        self.execute_edit(Command::Batch(commands));
+        let (moved, unknown, untouched) = (moved.to_string(), unknown.to_string(), untouched.to_string());
+        userspace_log!(
+            "{}",
+            match direction {
+                ShiftDirection::Up => tr!("cmd-drill-hole-names-shifted-up", hole = dhid, moved = moved, unknown = unknown, untouched = untouched),
+                ShiftDirection::Down => tr!("cmd-drill-hole-names-shifted-down", hole = dhid, moved = moved, unknown = unknown, untouched = untouched),
+            }
+        );
     }
 
     pub(crate) fn set_drill_hole_working_sections(&mut self, id: DrillHoleId, sections: Vec<crate::model::drill_hole::WorkingSection>) {
@@ -534,6 +821,7 @@ impl<'a> App<'a> {
     /// A closed dataset gives back the geophysics read from its linked files
     /// and the memory it held; the link stays with it.
     pub(crate) fn release_drillhole_runtime(&mut self, id: DrillHoleId) {
+        self.keep_thickness_runs_through_unload(id);
         self.cancel_collar_move_touching(id);
         self.cancel_jobs(|key| *key == crate::app::jobs::JobKey::DrillHole(id));
         let entity = SceneEntityId::DrillHole(id);
@@ -613,7 +901,8 @@ impl<'a> App<'a> {
     /// derived from the holes and never edited; running again makes another
     /// layer, so a corrected pick shows up as a new set beside the old.
     ///
-    /// Runs on the holes the dialog holds, which may span datasets.
+    /// Runs on the holes the dialog holds, which may span datasets. Whether
+    /// it made the layer.
     pub(crate) fn build_reference_points(
         &mut self,
         holes: Vec<DrillHoleRef>,
@@ -624,6 +913,7 @@ impl<'a> App<'a> {
         let value = target.name().to_owned();
         let mut picks = Vec::new();
         let mut absent = 0usize;
+        let mut off_trace = 0usize;
         let mut flagged: Vec<String> = Vec::new();
         let mut involved: Vec<&OpenDrillHoleDataset> = Vec::new();
         for reference in &holes {
@@ -654,24 +944,50 @@ impl<'a> App<'a> {
                 absent += 1;
                 continue;
             };
+            match hole.position_on_trace(depth) {
+                Some(position) => picks.push(position),
+                // With no trace at all the hole has nowhere to place a pick.
+                None if hole.trace.is_empty() => {
+                    absent += 1;
+                    continue;
+                }
+                None => {
+                    off_trace += 1;
+                    continue;
+                }
+            }
             if pick.runs > 1 {
                 flagged.push(hole.dhid.clone());
             }
-            match hole.position_at_depth(depth) {
-                Some(position) => picks.push(position),
-                None => absent += 1,
-            }
+        }
+        if off_trace > 0 {
+            userspace_warn!(
+                "{}",
+                tr!(
+                    "cmd-drill-hole-reference-points-off-trace",
+                    count = off_trace.to_string(),
+                    value = target.label().to_string()
+                )
+            );
+        }
+        // Holes logging it where their traces do not reach were named above.
+        if picks.is_empty() && off_trace > 0 {
+            return None;
         }
         if picks.is_empty() {
             userspace_warn!("{}", tr!("cmd-drill-hole-no-hole-holds-value-field", value = target.label().to_string()));
             return None;
         }
         let project = self.workspace.active_project_mut()?;
+        let runtime_id = project.runtime_id;
         let document = &mut project.project.document;
         let layer_id = document.allocate_layer_id();
         let layer = crate::model::Layer {
             id: layer_id,
-            name: reference_layer_name(&target, side),
+            name: crate::model::project::unique_item_name(
+                crate::app::commands::thickness_points::seam_names::points_layer(target.name(), side),
+                document.layers().iter().map(|layer| layer.name.as_str()),
+            ),
             color_index: None,
             color: [1.0, 1.0, 1.0, 1.0],
             loaded: true,
@@ -679,6 +995,7 @@ impl<'a> App<'a> {
             elevation: 0.0,
             folder: None,
             section: crate::model::SectionKind::Designs,
+            quality: None,
         };
         let objects: Vec<crate::model::Object> = picks
             .iter()
@@ -689,6 +1006,7 @@ impl<'a> App<'a> {
                 color: crate::model::ObjectColor::ByLayer,
             })
             .collect();
+        let made: Vec<crate::model::ObjectId> = objects.iter().map(|object| object.id()).collect();
         let picks = ReferencePicks {
             #[cfg(not(target_arch = "wasm32"))]
             layer: layer_id,
@@ -697,13 +1015,17 @@ impl<'a> App<'a> {
             flagged,
         };
         self.execute_edit(Command::AddLayerSnapshot { layer, objects });
+        // The points become the selection, so Build Surface is ready for them.
+        self.select_only(made.into_iter().map(SceneEntityId::Object));
+        let label = target.label();
+        self.remember_reference_source(runtime_id, layer_id, crate::app::commands::thickness_points::ReferenceSource { field, target, side });
         userspace_log!(
             "{}",
             tr!(
                 "cmd-drill-hole-reference-points-used-holes-placed",
                 used = picks.points.to_string(),
                 absent = picks.without.to_string(),
-                value = target.label().to_string(),
+                value = label.to_string(),
                 flagged = picks.flagged.len().to_string()
             )
         );
@@ -712,6 +1034,64 @@ impl<'a> App<'a> {
         }
         self.invalidate_geometry();
         Some(picks)
+    }
+
+    /// One point per hole at its collar, as a new layer of points: what a
+    /// ground surface is built from where the project has no topography.
+    /// Like the reference points, derived from the holes and never edited.
+    /// Whether it made the layer.
+    pub(crate) fn build_collar_points(&mut self, holes: Vec<DrillHoleRef>) -> bool {
+        let mut collars = Vec::new();
+        let mut absent = 0usize;
+        for reference in &holes {
+            let hole = self
+                .drill_holes
+                .iter()
+                .find(|dataset| dataset.id == reference.dataset && dataset.state.loaded)
+                .and_then(|dataset| dataset.dataset.holes.get(reference.hole));
+            match hole.map(crate::model::drill_hole::DrillHole::collar_position).filter(|collar| collar.is_finite()) {
+                Some(collar) => collars.push(collar),
+                None => absent += 1,
+            }
+        }
+        if collars.is_empty() {
+            userspace_warn!("{}", tr!("cmd-drill-hole-no-collars"));
+            return false;
+        }
+        let Some(project) = self.workspace.active_project_mut() else {
+            return false;
+        };
+        let document = &mut project.project.document;
+        let layer_id = document.allocate_layer_id();
+        let layer = crate::model::Layer {
+            id: layer_id,
+            name: crate::model::project::unique_item_name(tr!("cmd-drill-hole-collars-layer"), document.layers().iter().map(|layer| layer.name.as_str())),
+            color_index: None,
+            color: [1.0, 1.0, 1.0, 1.0],
+            loaded: true,
+            hidden: false,
+            elevation: 0.0,
+            folder: None,
+            section: crate::model::SectionKind::Designs,
+            quality: None,
+        };
+        let objects: Vec<crate::model::Object> = collars
+            .iter()
+            .map(|&pos| crate::model::Object::Point {
+                id: document.allocate_object_id(),
+                layer: layer_id,
+                pos,
+                color: crate::model::ObjectColor::ByLayer,
+            })
+            .collect();
+        let used = objects.len();
+        let made: Vec<crate::model::ObjectId> = objects.iter().map(|object| object.id()).collect();
+        self.execute_edit(Command::AddLayerSnapshot { layer, objects });
+        // The points become the selection, so Build Surface is ready for them.
+        self.select_only(made.into_iter().map(SceneEntityId::Object));
+        userspace_log!("{}", tr!("cmd-drill-hole-collar-points", used = used.to_string(), absent = absent.to_string()));
+        self.invalidate_geometry();
+        true
     }
 }
 
@@ -728,18 +1108,6 @@ pub(crate) struct ReferencePicks {
     pub(crate) flagged: Vec<String>,
 }
 
-/// The new layer's name for a reference pick. A working section says so, so
-/// a section and a code of the same name (e.g. a section "COO" holding a
-/// code also called "COO") never collide on the layer they build.
-fn reference_layer_name(target: &crate::model::drill_hole::ReferenceTarget, side: crate::model::drill_hole::ReferenceSide) -> String {
-    match target {
-        crate::model::drill_hole::ReferenceTarget::Section(name) => {
-            tr!("cmd-drill-hole-name-working-section-side", name = name.clone().to_string(), side = side.label().to_string())
-        }
-        crate::model::drill_hole::ReferenceTarget::Code(name) => tr!("cmd-drill-hole-name-side", name = name.clone().to_string(), side = side.label().to_string()),
-    }
-}
-
 /// The codes a reference pick on `target` looks for in each dataset, found
 /// once per dataset rather than per hole, and whether the datasets define
 /// the section differently. A code stands for itself. A working section
@@ -747,7 +1115,7 @@ fn reference_layer_name(target: &crate::model::drill_hole::ReferenceTarget, side
 /// that name on `field` borrows the first definition among the others. A
 /// section none of them defines picks nothing: its name is never looked
 /// for as a code.
-fn reference_codes(datasets: &[&OpenDrillHoleDataset], field: &str, target: &crate::model::drill_hole::ReferenceTarget) -> (Vec<(DrillHoleId, Vec<String>)>, bool) {
+pub(super) fn reference_codes(datasets: &[&OpenDrillHoleDataset], field: &str, target: &crate::model::drill_hole::ReferenceTarget) -> (Vec<(DrillHoleId, Vec<String>)>, bool) {
     let name = match target {
         crate::model::drill_hole::ReferenceTarget::Code(code) => return (datasets.iter().map(|dataset| (dataset.id, vec![code.clone()])).collect(), false),
         crate::model::drill_hole::ReferenceTarget::Section(name) => name,

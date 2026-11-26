@@ -188,6 +188,7 @@ impl App<'_> {
             Target::Item(ItemRef::DrillHole(id)) => RenameTarget::DrillHole(id),
             Target::Item(ItemRef::PointCloud(id)) => RenameTarget::PointCloud(id),
             Target::Item(ItemRef::Raster(id)) => RenameTarget::Raster(id),
+            Target::Item(ItemRef::PrismoidGrid(id)) => RenameTarget::PrismoidGrid(id),
             Target::Object(_) => unreachable!("refused by mcp_item_target"),
         };
         self.mcp_run(UiCommand::RenameItem {
@@ -205,6 +206,7 @@ impl App<'_> {
             Target::Item(ItemRef::DrillHole(id)) => UiCommand::RemoveDrillHole(id),
             Target::Item(ItemRef::PointCloud(id)) => UiCommand::RemovePointCloud(id),
             Target::Item(ItemRef::Raster(id)) => UiCommand::RemoveRaster(id),
+            Target::Item(ItemRef::PrismoidGrid(id)) => UiCommand::RemovePrismoidGrid(id),
             Target::Object(_) => unreachable!("refused by mcp_item_target"),
         };
         self.mcp_run(command)?;
@@ -226,6 +228,8 @@ impl App<'_> {
             (Target::Item(ItemRef::PointCloud(id)), false) => UiCommand::ClosePointCloud(id),
             (Target::Item(ItemRef::Raster(id)), true) => UiCommand::LoadRaster(id),
             (Target::Item(ItemRef::Raster(id)), false) => UiCommand::UnloadRaster(id),
+            (Target::Item(ItemRef::PrismoidGrid(id)), true) => UiCommand::LoadPrismoidGrid(id),
+            (Target::Item(ItemRef::PrismoidGrid(id)), false) => UiCommand::ClosePrismoidGrid(id),
             (Target::Object(_), _) => unreachable!("refused by mcp_item_target"),
         };
         self.mcp_run(command)?;

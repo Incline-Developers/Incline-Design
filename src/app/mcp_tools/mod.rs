@@ -430,6 +430,7 @@ fn entity(target: Target) -> Option<SceneEntityId> {
         Target::Item(ItemRef::DrillHole(id)) => Some(SceneEntityId::DrillHole(id)),
         Target::Item(ItemRef::PointCloud(id)) => Some(SceneEntityId::PointCloud(id)),
         Target::Item(ItemRef::Raster(id)) => Some(SceneEntityId::Raster(id)),
+        Target::Item(ItemRef::PrismoidGrid(id)) => Some(SceneEntityId::PrismoidGrid(id)),
         Target::Object(id) => Some(SceneEntityId::Object(id)),
         Target::Layer(_) => None,
     }

@@ -5,17 +5,19 @@
 use std::{fmt::Debug, hash::Hash};
 
 use super::{
+    data_table::measured_rows,
     hint::Hint,
     viewport::{Outline, format_grade, outlined_galley, trim_decimal_zeros},
 };
 use crate::{
     i18n::tr,
+    model::drill_hole::{BoundarySide, ShiftDirection, UNKNOWN_NAME, holds_value, value_name},
     ui::{
         elements::properties::read_only_row,
         widgets::{
-            context_menu::{ContextMenuAction, context_menu_popup, context_menu_popup_with_fields},
+            context_menu::{ContextMenuAction, context_menu_popup, context_menu_popup_with_fields, context_menu_separator},
             data_table::DataTable,
-            log_traces::{self, ColumnTraces, TraceColumn, WellLogStyle},
+            log_traces::{self, ColumnCurve, ColumnTraces, TraceColumn, WellLogStyle},
             menu,
         },
     },
@@ -30,6 +32,11 @@ pub(crate) struct DrillHoleProperties<'a> {
     /// The dataset's fields, in order, become the columns after From and
     /// To, so every hole gets the same columns even if it never recorded one.
     fields: &'a [crate::model::drill_hole::DrillField],
+    /// Logged rows a deletion took out, listed after the hole's own as
+    /// logged, so the as-logged side still shows them.
+    deleted: Vec<&'a crate::model::drill_hole::DrillInterval>,
+    /// See [`Self::total_depth_row`].
+    total_depth_row: bool,
 }
 
 impl<'a> DrillHoleProperties<'a> {
@@ -38,7 +45,27 @@ impl<'a> DrillHoleProperties<'a> {
             id: egui::Id::unique(id_source),
             hole,
             fields,
+            deleted: Vec::new(),
+            total_depth_row: false,
         }
+    }
+
+    /// Logged rows deletions took out of the hole, to list after its own.
+    pub(crate) fn deleted_rows(mut self, rows: Vec<&'a crate::model::drill_hole::DrillInterval>) -> Self {
+        self.deleted = rows;
+        self
+    }
+
+    /// Whether the summary has a total depth row, "Not recorded" for a hole
+    /// without one: for a set that records total depths at all.
+    pub(crate) fn total_depth_row(mut self, shown: bool) -> Self {
+        self.total_depth_row = shown;
+        self
+    }
+
+    /// Whether there is any row to list, the hole's own or one deleted.
+    pub(crate) fn has_rows(&self) -> bool {
+        !self.hole.intervals.is_empty() || !self.deleted.is_empty()
     }
 
     /// The hole's collar, trace, orientation and interval count, as rows
@@ -54,6 +81,10 @@ impl<'a> DrillHoleProperties<'a> {
             _ => tr!("viewport-no-trace"),
         };
         read_only_row(ui, &tr!("viewport-trace-extent"), &extent);
+        if self.total_depth_row {
+            let total_depth = hole.total_depth.map_or_else(|| tr!("viewport-not-recorded"), |depth| format!("{depth:.2}"));
+            read_only_row(ui, &tr!("viewport-total-depth"), &total_depth);
+        }
         let orientation = match hole.orientation() {
             Some(orientation) => tr!(
                 "viewport-azimuth-dip",
@@ -73,28 +104,84 @@ impl<'a> DrillHoleProperties<'a> {
         let hole = self.hole;
         let header = drill_table_header(self.fields);
         let aligns = drill_table_aligns(self.fields);
-        let shown = |index: usize| hole.intervals.get(index).map(|interval| drill_table_row(interval, self.fields, false)).unwrap_or_default();
-        let copied = |index: usize| hole.intervals.get(index).map(|interval| drill_table_row(interval, self.fields, true)).unwrap_or_default();
-        DataTable::new(self.id.with("intervals"), &header, hole.intervals.len(), &shown)
+        let own = hole.intervals.len();
+        let row = |index: usize, raw: bool| match hole.intervals.get(index) {
+            Some(interval) => drill_table_row(interval, self.fields, raw),
+            None => self.deleted.get(index - own).map(|row| deleted_table_row(row, self.fields, raw)).unwrap_or_default(),
+        };
+        let shown = |index: usize| row(index, false);
+        let copied = |index: usize| row(index, true);
+        DataTable::new(self.id.with("intervals"), &header, own + self.deleted.len(), &shown)
             .aligns(&aligns)
             .copy_cells(&copied)
             .fingerprint(self.fingerprint())
             .max_height(max_height)
+            .measure_last(self.deleted.len())
             .show(ui);
     }
 
     /// What the table's columns were measured from; a change re-measures.
+    /// The depths, values and logged copy of the rows the table measures, as
+    /// any of them can widen a column.
     fn fingerprint(&self) -> u64 {
-        use std::hash::Hasher;
+        use std::hash::{Hash, Hasher};
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.hole
-            .intervals
-            .last()
-            .map(|interval| (interval.from.to_bits(), interval.to.to_bits()))
-            .hash(&mut hasher);
+        for field in self.fields {
+            field.label.hash(&mut hasher);
+        }
+        let own = self.hole.intervals.len();
+        for row in measured_rows(own + self.deleted.len(), self.deleted.len()) {
+            hash_interval(self.hole.intervals.get(row).unwrap_or_else(|| self.deleted[row - own]), &mut hasher);
+        }
+        self.deleted.len().hash(&mut hasher);
         hasher.finish()
     }
+}
+
+/// Feed what an interval's row is written from into `hasher`.
+fn hash_interval(interval: &crate::model::drill_hole::DrillInterval, hasher: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+
+    (interval.from.to_bits(), interval.to.to_bits()).hash(hasher);
+    hash_values(&interval.values, hasher);
+    if let Some(logged) = &interval.logged {
+        (logged.from.to_bits(), logged.to.to_bits(), logged.never_logged).hash(hasher);
+        hash_values(&logged.values, hasher);
+    }
+}
+
+/// Feed an interval's field values into `hasher`.
+fn hash_values(values: &std::collections::BTreeMap<String, crate::model::drill_hole::DrillValue>, hasher: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+
+    use crate::model::drill_hole::DrillValue;
+
+    for (key, value) in values {
+        key.hash(hasher);
+        match value {
+            DrillValue::Numeric(number) => (0u8, number.to_bits()).hash(hasher),
+            DrillValue::Category(category) => (1u8, category).hash(hasher),
+        }
+    }
+}
+
+/// A logged row a deletion took out, as the table lists it: as it was
+/// logged, marked deleted after its from, in a copy too, so a pasted row
+/// cannot pass for one still there.
+fn deleted_table_row(interval: &crate::model::drill_hole::DrillInterval, fields: &[crate::model::drill_hole::DrillField], raw: bool) -> Vec<String> {
+    let (from, to, values) = interval.logged();
+    let logged = crate::model::drill_hole::DrillInterval {
+        from,
+        to,
+        values: values.clone(),
+        logged: None,
+    };
+    let mut row = drill_table_row(&logged, fields, raw);
+    if let Some(first) = row.first_mut() {
+        *first = format!("{first} ({})", tr!("drill-hole-interval-deleted"));
+    }
+    row
 }
 
 /// The table's header row: From, To, then one column per dataset field.
@@ -110,11 +197,21 @@ fn drill_table_header(fields: &[crate::model::drill_hole::DrillField]) -> Vec<St
 /// precision instead of display rounding. An unrecorded field is an empty cell.
 ///
 /// A corrected cell shows the interpreted value with the logged one in
-/// brackets; raw text, which a copy carries, is the interpreted value alone.
+/// brackets. An interval the site never logged says so after its from, and
+/// brackets the depths it was inserted at once they have moved, as they key
+/// its records; it has no logged values to show. Raw text, which a copy
+/// carries, is the interpreted value alone.
 fn drill_table_row(interval: &crate::model::drill_hole::DrillInterval, fields: &[crate::model::drill_hole::DrillField], raw: bool) -> Vec<String> {
     let (logged_from, logged_to, logged_values) = interval.logged();
+    let never_logged = !raw && interval.is_never_logged();
     let corrected = !raw && interval.is_corrected();
-    let beside = |shown: String, logged: String| if corrected && shown != logged { format!("{shown} ({logged})") } else { shown };
+    let beside = |corrected: bool, moved: bool, shown: String, logged: String| {
+        if corrected && (moved || shown != logged) {
+            format!("{shown} ({logged})")
+        } else {
+            shown
+        }
+    };
     let depth = |depth: f64| if raw { depth.to_string() } else { format!("{depth:.2}") };
     let value = |value: Option<&crate::model::drill_hole::DrillValue>| match value {
         Some(crate::model::drill_hole::DrillValue::Numeric(number)) => {
@@ -128,13 +225,17 @@ fn drill_table_row(interval: &crate::model::drill_hole::DrillInterval, fields: &
         None => String::new(),
     };
     let mut row = Vec::with_capacity(fields.len() + 2);
-    row.push(beside(depth(interval.from), depth(logged_from)));
-    row.push(beside(depth(interval.to), depth(logged_to)));
-    row.extend(
-        fields
-            .iter()
-            .map(|field| beside(value(interval.values.get(&field.key)), value(logged_values.get(&field.key)))),
-    );
+    let from = beside(corrected, interval.from != logged_from, depth(interval.from), depth(logged_from));
+    row.push(if never_logged {
+        format!("{from} ({})", tr!("drill-hole-interval-not-logged"))
+    } else {
+        from
+    });
+    row.push(beside(corrected, interval.to != logged_to, depth(interval.to), depth(logged_to)));
+    row.extend(fields.iter().map(|field| {
+        let (shown, logged) = (interval.values.get(&field.key), logged_values.get(&field.key));
+        beside(corrected && !never_logged, shown != logged, value(shown), value(logged))
+    }));
     row
 }
 
@@ -155,6 +256,16 @@ const STRAT_LABEL_INK: egui::Color32 = egui::Color32::WHITE;
 
 /// The halo under a strat run's code.
 const STRAT_LABEL_HALO: egui::Color32 = egui::Color32::from_black_alpha(210);
+
+/// How far seam names grow past the small style as the log zooms in.
+const STRAT_LABEL_GROWTH: f32 = 1.6;
+
+/// Zoom, in points per metre of hole, below which seam names stay at the
+/// small style (about a 200 m hole shown whole)...
+const STRAT_LABEL_GROW_FROM: f32 = 3.0;
+
+/// ...and at which they reach their full growth (about a 45 m window).
+const STRAT_LABEL_GROW_TO: f32 = 12.0;
 
 /// Width of the hole's ribbon in the log track; narrow, so readings can sit
 /// either side of it.
@@ -207,8 +318,6 @@ const LOG_SPIN_PER_POINT: f32 = 0.5;
 const LOG_MIN_DEPTH_SPAN: f64 = 0.25;
 /// Wheel points to one e-fold of zoom.
 const LOG_ZOOM_PER_POINT: f64 = 0.004;
-/// Column keys a lithology is usually written under, tried in order.
-const LOG_LITHOLOGY_KEYS: [&str; 6] = ["lith", "litho", "lithology", "lithtype", "lith_1", "rock"];
 /// Size of the azimuth compass in the log's header.
 const LOG_COMPASS_SIZE: f32 = 54.0;
 /// Size of the compass once the panel is too narrow to spare the full dial.
@@ -232,9 +341,17 @@ pub(crate) struct BoreholeLog<'a> {
     /// The drawn curves a hole being read has, by `LogKind::index`.
     reading: Option<[bool; 3]>,
     /// The depths the index says the hole's drawn curves have readings at,
-    /// while the hole is read.
+    /// while the hole is read. A chosen curve's are not in the index.
     logged: Option<[f64; 2]>,
+    /// See [`Self::curves`].
+    curves: [ColumnCurve<&'a str>; 2],
     well_log_style: WellLogStyle,
+    /// Where to draw the dashed guide, see [`Self::guide_depth`].
+    guide: Option<f64>,
+    /// See [`Self::corrections_locked`].
+    corrections_locked: bool,
+    /// See [`Self::previewing`].
+    previewing: Option<&'a crate::model::drill_hole::DrillHole>,
 }
 
 /// The depth window a log keeps from frame to frame and hole to hole.
@@ -287,7 +404,11 @@ impl<'a> BoreholeLog<'a> {
             logs_loaded: false,
             reading: None,
             logged: None,
+            curves: ColumnCurve::defaults(),
             well_log_style: WellLogStyle::default(),
+            guide: None,
+            corrections_locked: false,
+            previewing: None,
         }
     }
 
@@ -303,8 +424,9 @@ impl<'a> BoreholeLog<'a> {
         self
     }
 
-    /// Lay the trace columns out for a hole's curves while it is read, so
-    /// nothing moves when its readings land.
+    /// Lay the trace columns out for a hole's curves while it is read, so no
+    /// column moves when its readings land. A curve whose readings make no
+    /// trace drops its column then; the read says why in the console.
     pub(crate) fn reading(mut self, kinds: Option<[bool; 3]>) -> Self {
         self.reading = kinds;
         self
@@ -316,6 +438,33 @@ impl<'a> BoreholeLog<'a> {
         self
     }
 
+    /// What the left, then the right, trace column shows.
+    pub(crate) fn curves(mut self, curves: [ColumnCurve<&'a str>; 2]) -> Self {
+        self.curves = curves;
+        self
+    }
+
+    /// Whether the strat column offers no correction menu, while one is
+    /// being made and the log may be drawing its preview.
+    pub(crate) fn corrections_locked(mut self, locked: bool) -> Self {
+        self.corrections_locked = locked;
+        self
+    }
+
+    /// A dashed guide across the whole log at `depth`, every column and
+    /// trace included, to line a boundary being moved up with the curves.
+    pub(crate) fn guide_depth(mut self, depth: Option<f64>) -> Self {
+        self.guide = depth;
+        self
+    }
+
+    /// The hole the drawn one previews a change to: the log reaches at least
+    /// as deep as that hole does, as the change once made will.
+    pub(crate) fn previewing(mut self, hole: Option<&'a crate::model::drill_hole::DrillHole>) -> Self {
+        self.previewing = hole;
+        self
+    }
+
     pub(crate) fn well_log_style(mut self, style: WellLogStyle) -> Self {
         self.well_log_style = style;
         self
@@ -323,12 +472,11 @@ impl<'a> BoreholeLog<'a> {
 
     /// Draw the log into what the panel has left. Nothing here may report a
     /// width larger than the panel gave it, or the log would slide the scene.
-    /// Returns a trace style the reader finished editing, for the caller to
-    /// save.
-    pub(crate) fn show(self, ui: &mut egui::Ui) -> Option<WellLogStyle> {
+    /// Returns what the reader asked for, for the caller to act on.
+    pub(crate) fn show(self, ui: &mut egui::Ui) -> LogOutput {
         let Some(hole) = self.depth_range() else {
             ui.weak(tr!("viewport-hole-has-no-trace-draw"));
-            return None;
+            return LogOutput::default();
         };
 
         // The bearing and depth window live in egui's own per-id memory.
@@ -336,12 +484,15 @@ impl<'a> BoreholeLog<'a> {
         let view_id = self.id.with("depth_view");
         let squeeze_id = self.id.with("squeeze");
         let menu_id = self.id.with("trace_menu");
+        let seam_menu_id = self.id.with("seam_menu");
+        let gap_menu_id = self.id.with("gap_menu");
+        let quiet_id = self.id.with("chosen_curve_click");
         let mut azimuth = ui.data(|data| data.get_temp::<f32>(azimuth_id)).unwrap_or(0.0);
         let mut squeeze = ui.data(|data| data.get_temp::<LogSqueeze>(squeeze_id)).unwrap_or_default();
         // Re-clamped rather than trusted: the panel keeps its id while the
         // inspection moves, so the window may be from a different hole.
         let mut view = LogWindow::view(ui.data(|data| data.get_temp::<LogWindow>(view_id)), hole);
-        let [density, gamma] = self.trace_columns();
+        let [left, right] = self.trace_columns();
 
         let width = ui.available_width();
         let height = ui.available_height().max(LOG_MIN_HEIGHT);
@@ -377,9 +528,9 @@ impl<'a> BoreholeLog<'a> {
             notes_height,
             top_margin,
             plot,
-        } = self.layout([density, gamma], body, strat_field.is_some(), line_height);
+        } = self.layout([left, right], body, strat_field.is_some(), line_height);
         let lanes = columns.lanes(plot);
-        let trace_lanes = [(density, lanes.density), (gamma, lanes.gamma)];
+        let trace_lanes = [(left, lanes.left), (right, lanes.right)];
 
         // Over the plot: drag sideways spins, drag vertically walks the depth
         // window, wheel zooms around the depth under the cursor.
@@ -399,24 +550,142 @@ impl<'a> BoreholeLog<'a> {
             view = hole;
         }
 
-        // A right-click over a trace column opens that column's own menu,
-        // anywhere else the squeeze menu. Which one is settled at the click
-        // and held while the menu stays open, with the style being edited.
+        // A right-click over a seam in the strat column opens the seam's
+        // menu, over a stretch of it where nothing is logged the stretch's,
+        // over a trace column that column's own, over a chosen curve's column
+        // none, anywhere else the squeeze menu. Which one is settled at the
+        // click and held while the menu stays open, with the style being
+        // edited.
         if handle.secondary_clicked() {
-            let menu = handle
-                .interact_pointer_pos()
-                .and_then(|pointer| trace_column_at(pointer, plot, trace_lanes))
-                .map(|traces| TraceMenu {
+            let pointer = handle.interact_pointer_pos();
+            let strat_pointer = pointer
+                .zip(lanes.strat.zip(strat_field))
+                .filter(|(pointer, (strat, _))| strat.contains(*pointer))
+                .filter(|_| !self.corrections_locked)
+                .map(|(pointer, (_, field))| (field, depth_at(plot, view, pointer.y)));
+            let seam = strat_pointer.and_then(|(field, depth)| {
+                self.seam_at(field, depth).map(|(interval, name)| SeamMenu {
+                    field: field.key.clone(),
+                    name,
+                    interval,
+                    row: self.hole.intervals[interval].clone(),
+                })
+            });
+            let gap = strat_pointer.filter(|_| seam.is_none()).and_then(|(field, depth)| {
+                self.hole
+                    .unlogged_stretch(&field.key, depth, &self.dataset.dataset.derived_columns, self.dataset.dataset.end_of(self.hole))
+                    .map(|depths| InsertPick {
+                        field: field.key.clone(),
+                        depths: Some(depths),
+                    })
+            });
+            let click = pointer
+                .filter(|_| seam.is_none() && gap.is_none())
+                .map_or(TraceClick::Off, |pointer| trace_click(pointer, plot, trace_lanes));
+            let quiet = matches!(click, TraceClick::Chosen);
+            let menu = match click {
+                TraceClick::Scale(traces) => Some(TraceMenu {
                     column: traces.column,
                     draft: self.well_log_style,
                     custom: log_traces::column_range(&self.well_log_style, &traces),
-                });
-            ui.data_mut(|data| data.insert_temp(menu_id, menu));
+                }),
+                TraceClick::Off | TraceClick::Chosen => None,
+            };
+            ui.data_mut(|data| {
+                data.insert_temp(menu_id, menu);
+                data.insert_temp(seam_menu_id, seam);
+                data.insert_temp(gap_menu_id, gap);
+                data.insert_temp(quiet_id, quiet);
+            });
         }
-        let mut saved = None;
+        let mut output = LogOutput::default();
         let stored = ui.data(|data| data.get_temp::<Option<TraceMenu>>(menu_id)).flatten();
-        let open = stored.and_then(|menu| column_traces(menu.column, density, gamma).map(|traces| (menu, traces)));
-        let menu = if let Some((mut menu, traces)) = open {
+        // Either column showing the menu's curves: the scale is the curves'.
+        let open = stored.and_then(|menu| {
+            [left, right]
+                .into_iter()
+                .flatten()
+                .find(|traces| !traces.is_other() && traces.column == menu.column)
+                .map(|traces| (menu, traces))
+        });
+        let seam = ui.data(|data| data.get_temp::<Option<SeamMenu>>(seam_menu_id)).flatten();
+        let gap = ui.data(|data| data.get_temp::<Option<InsertPick>>(gap_menu_id)).flatten();
+        let quiet = ui.data(|data| data.get_temp::<bool>(quiet_id)).unwrap_or(false);
+        let menu = if let Some(seam) = seam {
+            context_menu_popup(&handle, seam.name.clone(), |ui| {
+                for (label, every_hole) in [(tr!("viewport-rename-seam-in-this-hole"), false), (tr!("viewport-rename-seam-in-every-hole"), true)] {
+                    if ContextMenuAction::new(label).show(ui).clicked() {
+                        output.rename = Some(SeamRename {
+                            field: seam.field.clone(),
+                            name: seam.name.clone(),
+                            interval: seam.interval,
+                            every_hole,
+                        });
+                        ui.close();
+                    }
+                }
+                for (label, side) in [(tr!("viewport-move-roof"), BoundarySide::Roof), (tr!("viewport-move-floor"), BoundarySide::Floor)] {
+                    if ContextMenuAction::new(label).show(ui).clicked() {
+                        output.boundary = Some(BoundaryPick {
+                            field: seam.field.clone(),
+                            interval: seam.interval,
+                            side,
+                        });
+                        ui.close();
+                    }
+                }
+                if ContextMenuAction::new(tr!("viewport-insert-interval")).show(ui).clicked() {
+                    // Only while the clicked seam is still in the hole.
+                    output.insert = self.hole.intervals.get(seam.interval).map(|_| InsertPick {
+                        field: seam.field.clone(),
+                        depths: None,
+                    });
+                    ui.close();
+                }
+                if ContextMenuAction::new(tr!("viewport-delete-interval")).show(ui).clicked() {
+                    output.delete = Some((seam.field.clone(), seam.interval, seam.row.clone()));
+                    ui.close();
+                }
+                // The hole's names slide one run, all of them or from the
+                // clicked horizon; with no column there is nothing to slide
+                // along, and from a name outside it there is no horizon.
+                let column = self.dataset.color.strat_column(&seam.field);
+                let in_column = seam.name != UNKNOWN_NAME && column.contains(&seam.name);
+                context_menu_separator(ui);
+                for (label, direction, from) in [
+                    (tr!("viewport-move-up-from-here"), ShiftDirection::Up, Some(seam.interval)),
+                    (tr!("viewport-move-all-up"), ShiftDirection::Up, None),
+                    (tr!("viewport-move-all-down"), ShiftDirection::Down, None),
+                    (tr!("viewport-move-down-from-here"), ShiftDirection::Down, Some(seam.interval)),
+                ] {
+                    let enabled = !column.is_empty() && (from.is_none() || in_column);
+                    let response = ContextMenuAction::new(label).enabled(enabled).show(ui);
+                    let response = match (enabled, column.is_empty()) {
+                        (true, _) => response,
+                        (false, true) => response.disabled_hint(tr!("viewport-field-has-no-strat-column")),
+                        (false, false) => response.disabled_hint(tr!("viewport-name-not-in-strat-column")),
+                    };
+                    if response.clicked() {
+                        output.shift = Some(NameShift {
+                            field: seam.field.clone(),
+                            direction,
+                            from,
+                        });
+                        ui.close();
+                    }
+                }
+                context_menu_separator(ui);
+            });
+            None
+        } else if let Some(gap) = gap {
+            context_menu_popup(&handle, tr!("viewport-not-logged"), |ui| {
+                if ContextMenuAction::new(tr!("viewport-insert-interval")).show(ui).clicked() {
+                    output.insert = Some(gap.clone());
+                    ui.close();
+                }
+            });
+            None
+        } else if let Some((mut menu, traces)) = open {
             let auto = log_traces::auto_range(menu.column, &traces);
             let shown = context_menu_popup_with_fields(&handle, log_traces::menu_title(menu.column), |ui| {
                 log_traces::menu(ui, menu.column, &mut menu.draft, &mut menu.custom, auto);
@@ -428,7 +697,7 @@ impl<'a> BoreholeLog<'a> {
                 // colour wheel saves once, on release.
                 menu.draft = menu.draft.sanitized();
                 if menu.draft != self.well_log_style && !ui.input(|input| input.pointer.any_down()) {
-                    saved = Some(menu.draft);
+                    output.saved = Some(menu.draft);
                 }
                 menu
             })
@@ -437,6 +706,13 @@ impl<'a> BoreholeLog<'a> {
             // hole changed underneath it). Close the popup outright rather
             // than switching its contents to the squeeze menu.
             egui::Popup::close_id(ui.ctx(), egui::Popup::default_response_id(&handle));
+            None
+        } else if quiet {
+            // A chosen curve is scaled to its readings: nothing to set, and
+            // the hole track's menu is not the column's. Closed once, here,
+            // in the frame of the click.
+            egui::Popup::close_id(ui.ctx(), egui::Popup::default_response_id(&handle));
+            ui.data_mut(|data| data.insert_temp(quiet_id, false));
             None
         } else {
             context_menu_popup(&handle, tr!("viewport-sideways-scale"), |ui| {
@@ -506,7 +782,7 @@ impl<'a> BoreholeLog<'a> {
         let (top, bottom) = view;
         if !plot.is_positive() {
             draw_azimuth_compass(ui, &painter, compass, azimuth);
-            return saved;
+            return output;
         }
         self.draw_scale(ui, &painter, plot, columns, top, bottom);
         if let (Some(strat), Some(field)) = (lanes.strat, strat_field) {
@@ -534,21 +810,31 @@ impl<'a> BoreholeLog<'a> {
         if let Some(recorded) = self.recorded_depth(hole).filter(|depth| (top..=bottom).contains(depth)) {
             draw_recorded_depth(ui, &painter, plot, view, recorded);
         }
+        if let Some(depth) = self.guide.filter(|depth| (top..=bottom).contains(depth)) {
+            draw_guide(ui, &painter, body.left()..=plot.right(), plot, view, depth);
+        }
         let area = egui::Rect::from_min_max(
             egui::pos2(body.left() + 4.0, plot.bottom() + LOG_AXIS_HEIGHT),
             egui::pos2(body.right() - LOG_EDGE_MARGIN, plot.bottom() + LOG_AXIS_HEIGHT + notes_height),
         );
         draw_trace_notes(ui, &painter, area, notes, line_height);
         draw_azimuth_compass(ui, &painter, compass, azimuth);
-        saved
+        output
     }
 
-    /// The density and gamma columns: as read, or laid out ahead while the
-    /// hole is read.
+    /// The left and right columns: as read, or laid out ahead while the
+    /// hole is read; `None` for a hidden one. Another curve takes a colour
+    /// the column beside it does not use.
     fn trace_columns(&self) -> [Option<ColumnTraces<'a>>; 2] {
-        [TraceColumn::Density, TraceColumn::Gamma].map(|column| match self.reading {
-            Some(kinds) => ColumnTraces::reading(column, kinds),
-            None => ColumnTraces::of(column, self.well_logs),
+        let link = self.dataset.geophysics.as_deref();
+        let [left, right] = self.curves;
+        let [left_colour, right_colour] = log_traces::other_colours(&self.curves);
+        [(left_colour, left), (right_colour, right)].map(|(colour, chosen)| match (chosen, self.reading) {
+            (ColumnCurve::Hidden, _) => None,
+            (ColumnCurve::Other(name), Some(_)) => ColumnTraces::reading_curve(colour, name, link.is_some_and(|link| link.has_curve(&self.hole.dhid, name))),
+            (ColumnCurve::Other(name), None) => ColumnTraces::of_curve(colour, name, self.well_logs),
+            (ColumnCurve::Own(column), Some(kinds)) => ColumnTraces::reading(column, kinds),
+            (ColumnCurve::Own(column), None) => ColumnTraces::of(column, self.well_logs),
         })
     }
 
@@ -556,17 +842,17 @@ impl<'a> BoreholeLog<'a> {
     /// reads which columns the hole has, never their readings, so it is the
     /// same while they are read.
     fn layout(&self, traces: [Option<ColumnTraces<'a>>; 2], body: egui::Rect, strat: bool, line_height: f32) -> LogLayout {
-        let [density, gamma] = traces.map(|traces| traces.is_some());
-        let columns = log_columns((body.width() - LOG_EDGE_MARGIN).max(0.0), strat, density, gamma);
+        let [left, right] = traces.map(|traces| traces.is_some());
+        let columns = log_columns((body.width() - LOG_EDGE_MARGIN).max(0.0), strat, left, right);
         // Each note gets a line of its own across the log, under the axis.
-        let notes = self.trace_notes([density, gamma], columns);
+        let notes = self.trace_notes([left, right], columns);
         let notes_height = notes.iter().flatten().count() as f32 * line_height;
         // Tall enough for the trace headers when there are any.
         let top_margin = traces
             .into_iter()
-            .zip([columns.density, columns.gamma])
+            .zip([columns.left, columns.right])
             .filter_map(|(traces, width)| traces.filter(|_| width > 0.0))
-            .map(|traces| log_traces::header_height(traces.column, line_height) + 4.0)
+            .map(|traces| log_traces::header_height(&traces, line_height) + 4.0)
             .fold(LOG_PLOT_TOP_MARGIN, f32::max);
         let plot = egui::Rect::from_min_max(
             egui::pos2(body.left() + columns.scale, body.top() + top_margin),
@@ -583,22 +869,66 @@ impl<'a> BoreholeLog<'a> {
 
     /// Quiet notes for under the log: a curve this hole has no log for,
     /// said only when the dataset has logs at all, and a column the panel is
-    /// too narrow for. `held` is whether the hole has density, then gamma.
+    /// too narrow for. `held` is whether the left, then the right, column
+    /// has its curve. A column is named by the curve it shows, one curve in
+    /// both once, a hidden one never; while no column shows anything, a hole
+    /// with other curves but no density or gamma points to the pickers; a
+    /// hole with no geophysics at all says so whatever the columns show.
     fn trace_notes(&self, held: [bool; 2], columns: LogColumns) -> [Option<String>; 2] {
-        let missing = match held {
-            _ if !self.logs_loaded => None,
-            [false, false] => Some(tr!("viewport-no-downhole-geophysics-hole")),
-            [false, true] => Some(tr!("viewport-no-density-log-hole")),
-            [true, false] => Some(tr!("viewport-no-gamma-log-hole")),
-            [true, true] => None,
+        let [left, right] = self.curves;
+        let same = match (left, right) {
+            (ColumnCurve::Other(a), ColumnCurve::Other(b)) => crate::model::geophysics::same_curve(a, b),
+            (a, b) => a == b,
         };
-        let narrow = match (held[0] && columns.density <= 0.0, held[1] && columns.gamma <= 0.0) {
-            (true, true) => Some(tr!("viewport-widen-panel-show-density-gamma")),
-            (true, false) => Some(tr!("viewport-widen-panel-show-density")),
-            (false, true) => Some(tr!("viewport-widen-panel-show-gamma")),
+        let (density, gamma) = (ColumnCurve::Own(TraceColumn::Density), ColumnCurve::Own(TraceColumn::Gamma));
+        let pair = (left, right) == (density, gamma) || (left, right) == (gamma, density);
+        let bare = self.well_logs.is_none() && self.reading.is_none();
+        let blank = !held.contains(&true) && !self.has_drawn_curves();
+        let lacks = |curve: ColumnCurve<&str>, held: bool| curve != ColumnCurve::Hidden && !held;
+        let missing = match [lacks(left, held[0]), lacks(right, held[1])] {
+            _ if !self.logs_loaded => None,
+            _ if bare => Some(tr!("viewport-no-downhole-geophysics-hole")),
+            _ if blank && self.has_other_curves() => Some(tr!("viewport-no-density-gamma-pick-curve")),
+            _ if blank => Some(tr!("viewport-no-downhole-geophysics-hole")),
+            [false, false] => None,
+            [true, true] if same => no_log_note(left),
+            [true, true] => Some(tr!("viewport-no-curves-log-hole", first = curve_word(left), second = curve_word(right))),
+            [true, false] => no_log_note(left),
+            [false, true] => no_log_note(right),
+        };
+        let narrow = match (held[0] && columns.left <= 0.0, held[1] && columns.right <= 0.0) {
+            (true, true) if pair => Some(tr!("viewport-widen-panel-show-density-gamma")),
+            (true, true) if same => widen_note(left),
+            (true, true) => Some(tr!("viewport-widen-panel-show-curves", first = curve_word(left), second = curve_word(right))),
+            (true, false) => widen_note(left),
+            (false, true) => widen_note(right),
             (false, false) => None,
         };
         [missing, narrow]
+    }
+
+    /// Whether the hole has curves beyond density and gamma: as read, or
+    /// while it is read, as the index says.
+    fn has_other_curves(&self) -> bool {
+        match (self.well_logs, self.reading) {
+            (Some(logs), _) => logs.traces().iter().any(|trace| trace.kind().is_none()),
+            (None, Some(_)) => self
+                .dataset
+                .geophysics
+                .as_deref()
+                .is_some_and(|link| link.curve_names().iter().any(|name| link.has_curve(&self.hole.dhid, name))),
+            (None, None) => false,
+        }
+    }
+
+    /// Whether the hole has density or gamma: as read, or while it is read,
+    /// as the index says.
+    fn has_drawn_curves(&self) -> bool {
+        match (self.well_logs, self.reading) {
+            (Some(logs), _) => logs.traces().iter().any(|trace| trace.kind().is_some()),
+            (None, Some(kinds)) => kinds.contains(&true),
+            (None, None) => false,
+        }
     }
 
     /// The strip above the plot: reset button, depth/bearing readout, compass.
@@ -644,16 +974,23 @@ impl<'a> BoreholeLog<'a> {
         reset
     }
 
-    /// The depths the log spans, widened to cover any interval or well log
-    /// past the trace: the index's depths while the hole is read, the
-    /// traces' once they are shown.
+    /// The depths the log spans: the hole to its end as corrections see it
+    /// (`end_of`), or the hole it previews if that goes deeper, widened to
+    /// cover any well log past it: the index's depths while the hole is
+    /// read, the traces' once they are shown. The index holds only the drawn
+    /// curves' depths, so a chosen curve running past them widens the log as
+    /// it lands.
     fn depth_range(&self) -> Option<(f64, f64)> {
         let first = self.hole.trace.first()?.depth;
-        let last = self.hole.trace.last()?.depth;
         let logs = || {
-            self.well_logs
-                .into_iter()
-                .flat_map(|logs| crate::model::geophysics::LogKind::ALL.into_iter().filter_map(|kind| logs.trace(kind)))
+            self.well_logs.into_iter().flat_map(|logs| {
+                let drawn = crate::model::geophysics::LogKind::ALL.into_iter().filter_map(|kind| logs.trace(kind));
+                let others = self.curves.into_iter().filter_map(|curve| match curve {
+                    ColumnCurve::Other(name) => logs.curve(name),
+                    _ => None,
+                });
+                drawn.chain(others)
+            })
         };
         let [shallowest, deepest] = self.logged.unwrap_or_else(|| {
             [
@@ -662,13 +999,18 @@ impl<'a> BoreholeLog<'a> {
             ]
         });
         let first = first.min(shallowest);
-        let deepest = self.hole.intervals.iter().map(|interval| interval.to).fold(last, f64::max).max(deepest);
+        let ends = self.dataset.dataset.end_of(self.hole);
+        let ends = self.previewing.map_or(ends, |hole| ends.max(self.dataset.dataset.end_of(hole)));
+        let deepest = ends.max(deepest);
         (deepest > first).then_some((first, deepest))
     }
 
-    /// Where the hole's trace ends, when the log in `range` runs on below
-    /// it. A collar alone has no length recorded to mark.
+    /// Its total depth if recorded, else where the hole's trace ends when the
+    /// log in `range` runs on below it. A collar alone has no length to mark.
     fn recorded_depth(&self, range: (f64, f64)) -> Option<f64> {
+        if let Some(depth) = self.hole.total_depth {
+            return Some(depth);
+        }
         let [first, .., last] = self.hole.trace.as_slice() else { return None };
         (last.depth > first.depth && range.1 > last.depth).then_some(last.depth)
     }
@@ -686,64 +1028,59 @@ impl<'a> BoreholeLog<'a> {
     /// still categorical: the panel holds one choice while the inspection
     /// moves, and a numeric field here would draw a block per number.
     fn lithology_field(&self) -> Option<&crate::model::drill_hole::DrillField> {
-        let fields = &self.dataset.dataset.fields;
-        let chosen = self
-            .strat_field
-            .as_deref()
-            .and_then(|key| self.dataset.dataset.field(key))
-            .filter(|field| matches!(field.kind, crate::model::drill_hole::DrillFieldKind::Categorical { .. }));
-        if chosen.is_some() {
-            return chosen;
-        }
-        fields
+        crate::model::strat_order::strat_field_of(self.dataset, self.strat_field.as_deref())
+    }
+
+    /// The seam name the strat column shows at `depth`, exactly as the
+    /// interval holds it: the first interval down the hole holding a value
+    /// of the field and covering the depth, as [`Self::lithology_runs`]
+    /// draws it. `None` exactly where the column is blank.
+    fn seam_at(&self, field: &crate::model::drill_hole::DrillField, depth: f64) -> Option<(usize, String)> {
+        self.hole
+            .intervals
             .iter()
-            .find(|field| LOG_LITHOLOGY_KEYS.contains(&field.key.to_ascii_lowercase().as_str()))
-            .or_else(|| {
-                fields
-                    .iter()
-                    .find(|field| matches!(field.kind, crate::model::drill_hole::DrillFieldKind::Categorical { .. }))
+            .enumerate()
+            .filter(|(_, interval)| holds_value(interval, &field.key) && interval.from <= depth && depth < interval.to)
+            .min_by(|a, b| a.1.from.total_cmp(&b.1.from))
+            .map(|(index, interval)| match interval.values.get(&field.key) {
+                Some(crate::model::drill_hole::DrillValue::Category(name)) => (index, name.clone()),
+                value => (index, value_name(value)),
             })
     }
 
-    /// Consecutive intervals reading the same lithology, merged into one
-    /// run, so forty abutting records of the same rock draw as one bed.
+    /// The hole's strat runs between `top` and `bottom`, see [`strat_runs`].
     fn lithology_runs(&self, field: &crate::model::drill_hole::DrillField, top: f64, bottom: f64) -> Vec<(f64, f64, Option<String>)> {
-        let mut runs: Vec<(f64, f64, Option<String>)> = Vec::new();
-        let mut cursor = top;
-        let mut sorted = self
-            .hole
-            .intervals
-            .iter()
-            .filter(|interval| interval.to > top && interval.from < bottom)
-            .collect::<Vec<_>>();
-        sorted.sort_by(|a, b| a.from.total_cmp(&b.from));
-
-        for interval in sorted {
-            let (from, to) = (interval.from.max(top), interval.to.min(bottom));
-            if to <= from {
-                continue;
-            }
-            let value = match interval.values.get(&field.key) {
-                Some(crate::model::drill_hole::DrillValue::Category(value)) if !value.trim().is_empty() => Some(value.trim().to_owned()),
-                Some(crate::model::drill_hole::DrillValue::Numeric(number)) => Some(format!("{number}")),
-                _ => None,
-            };
-            if from > cursor + 1.0e-9 {
-                push_run(&mut runs, cursor, from, None);
-            }
-            push_run(&mut runs, from.max(cursor), to, value);
-            cursor = cursor.max(to);
-        }
-        if cursor < bottom - 1.0e-9 {
-            push_run(&mut runs, cursor, bottom, None);
-        }
-        runs
+        strat_runs(self.hole, field, top, bottom)
     }
 
     fn draw_strat(&self, ui: &egui::Ui, painter: &egui::Painter, strat: egui::Rect, field: &crate::model::drill_hole::DrillField, top: f64, bottom: f64) {
         let visuals = ui.visuals();
         let font = egui::TextStyle::Small.resolve(ui.style());
-        for (from, to, value) in self.lithology_runs(field, top, bottom) {
+        let runs = self.lithology_runs(field, top, bottom);
+        // Every seam name in view shares one size, set by the zoom rather
+        // than by each block, so a thick and a thin seam read alike: the
+        // small style over the whole hole, growing to a ceiling as the view
+        // closes in, and never so big that the widest name overflows the
+        // column. A name too long even at the small style gets an ellipsis.
+        let room = strat.width() - 4.0;
+        let widest = runs
+            .iter()
+            .filter_map(|(_, _, value)| value.as_ref())
+            .map(|code| painter.layout_no_wrap(code.clone(), font.clone(), STRAT_LABEL_INK).size().x)
+            .fold(0.0_f32, f32::max);
+        let points_per_metre = strat.height() / ((bottom - top) as f32).max(f32::EPSILON);
+        let zoom = ((points_per_metre - STRAT_LABEL_GROW_FROM) / (STRAT_LABEL_GROW_TO - STRAT_LABEL_GROW_FROM)).clamp(0.0, 1.0);
+        let size = (font.size * (1.0 + (STRAT_LABEL_GROWTH - 1.0) * zoom))
+            .min(font.size * room / widest.max(1.0))
+            .max(font.size);
+        let label_font = egui::FontId::new(size, font.family.clone());
+        // The bottom of the last seam name drawn, so a thin seam's name that
+        // would land on its neighbour's is left out rather than stacked.
+        let mut named_to = f32::NEG_INFINITY;
+        // Names go on after every block, so a name taller than its seam runs
+        // over the neighbouring blocks instead of being cut by them.
+        let mut names = Vec::new();
+        for (from, to, value) in runs {
             let block = egui::Rect::from_x_y_ranges(strat.x_range(), Self::y_at(strat, top, bottom, from)..=Self::y_at(strat, top, bottom, to));
             if block.height() <= 0.0 {
                 continue;
@@ -763,18 +1100,29 @@ impl<'a> BoreholeLog<'a> {
                 }
             };
             painter.rect_stroke(block, 0.0, egui::Stroke::new(1.0, visuals.weak_text_color().gamma_multiply(0.45)), egui::StrokeKind::Inside);
-            // Only drawn once its galley is measured to fit; a squeezed
-            // strat column goes quiet rather than spilling onto the hole.
-            if block.height() >= font.size + 3.0 {
+            // Centred even on a block thinner than the text, so a thin seam
+            // is still named, but kept inside the column, clear of its heading.
+            if let Some(outline) = outline {
+                let mut galley = painter.layout_no_wrap(label.clone(), label_font.clone(), ink);
+                if galley.size().x > room {
+                    galley = elided(painter, label, label_font.clone(), ink, room);
+                }
+                let mut origin = block.center() - 0.5 * galley.size();
+                origin.y = origin.y.min(strat.bottom() - galley.size().y).max(strat.top());
+                if origin.y >= named_to + 1.0 {
+                    named_to = origin.y + galley.size().y;
+                    names.push((origin, galley, outline));
+                }
+            } else if block.height() >= font.size + 3.0 {
+                // An unlogged run's note is quiet: shown only where it fits.
                 let galley = painter.layout_no_wrap(label, font.clone(), ink);
                 if galley.size().x <= block.width() - 2.0 {
-                    let origin = block.center() - 0.5 * galley.size();
-                    match outline {
-                        Some(outline) => outlined_galley(painter, origin, egui::Align2::LEFT_TOP, galley, ink, outline),
-                        None => painter.galley(origin, galley, egui::Color32::PLACEHOLDER),
-                    }
+                    painter.galley(block.center() - 0.5 * galley.size(), galley, egui::Color32::PLACEHOLDER);
                 }
             }
+        }
+        for (origin, galley, outline) in names {
+            outlined_galley(painter, origin, egui::Align2::LEFT_TOP, galley, STRAT_LABEL_INK, outline);
         }
         // Elided to the column's own width, or a field named at length
         // would write itself across the top of the hole beside it.
@@ -1187,24 +1535,25 @@ struct LogReadout {
 }
 
 /// How a log's width is shared between its columns, left to right after the
-/// depth scale: strat, density, the hole, gamma. A width of zero means the
-/// column is dropped, for want of room or of data.
+/// depth scale: strat, the left trace column, the hole, the right trace
+/// column. A width of zero means the column is dropped, for want of room or
+/// of data.
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct LogColumns {
     scale: f32,
     strat: f32,
-    density: f32,
+    left: f32,
     track: f32,
-    gamma: f32,
+    right: f32,
 }
 
 /// The rects a log's columns take across its plot; `None` for one dropped.
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct LogLanes {
     strat: Option<egui::Rect>,
-    density: Option<egui::Rect>,
+    left: Option<egui::Rect>,
     track: egui::Rect,
-    gamma: Option<egui::Rect>,
+    right: Option<egui::Rect>,
 }
 
 impl LogColumns {
@@ -1213,45 +1562,45 @@ impl LogColumns {
         let lane = |left: f32, width: f32| (width > 0.0).then(|| egui::Rect::from_x_y_ranges(left..=left + width, plot.y_range()));
         let strat = lane(plot.left(), self.strat);
         let after = |lane: Option<egui::Rect>, from: f32| lane.map_or(from, |lane| lane.right() + LOG_TRACK_GAP);
-        let density = lane(after(strat, plot.left()), self.density);
-        let gamma = lane(plot.right() - self.gamma, self.gamma);
-        let track_left = after(density, after(strat, plot.left()));
-        let track_right = gamma.map_or(plot.right(), |gamma| gamma.left() - LOG_TRACK_GAP);
+        let left = lane(after(strat, plot.left()), self.left);
+        let right = lane(plot.right() - self.right, self.right);
+        let track_left = after(left, after(strat, plot.left()));
+        let track_right = right.map_or(plot.right(), |right| right.left() - LOG_TRACK_GAP);
         LogLanes {
             strat,
-            density,
+            left,
             track: egui::Rect::from_x_y_ranges(track_left..=track_right.max(track_left), plot.y_range()),
-            gamma,
+            right,
         }
     }
 }
 
 /// The columns a narrow log keeps, first to last, as indices into its
-/// (strat, density, gamma) columns: it gives up gamma first, then strat,
-/// then density. The depth scale is squeezed but never dropped, and the
-/// hole's own track never goes.
+/// (strat, left, right) columns: it gives up the right trace column first,
+/// then strat, then the left. The depth scale is squeezed but never dropped,
+/// and the hole's own track never goes.
 const LOG_KEEP_ORDER: [usize; 3] = [1, 0, 2];
 
 /// Share `width` between the depth scale, the strat column when there is a
 /// field to fill it, the trace columns the hole has data for, and the hole.
 /// Columns are kept in [`LOG_KEEP_ORDER`] while each still fits at its
 /// narrowest beside those already kept, so a strat column that lost its place
-/// to density comes back once density is gone; then each grows toward its own
-/// width and the hole takes whatever is left.
-fn log_columns(width: f32, strat: bool, density: bool, gamma: bool) -> LogColumns {
+/// to the left trace column comes back once that is gone; then each grows
+/// toward its own width and the hole takes whatever is left.
+fn log_columns(width: f32, strat: bool, left: bool, right: bool) -> LogColumns {
     let width = width.max(0.0);
     let scale = LOG_SCALE_WIDTH.min(width * 0.35).max(LOG_SCALE_MIN_WIDTH.min(width));
     let rest = (width - scale).max(0.0);
     let dropped = LogColumns {
         scale,
         strat: 0.0,
-        density: 0.0,
+        left: 0.0,
         track: rest,
-        gamma: 0.0,
+        right: 0.0,
     };
 
-    // Strat, density, gamma.
-    let wants = [strat, density, gamma];
+    // Strat, left, right.
+    let wants = [strat, left, right];
     let minimum = [LOG_STRAT_MIN_WIDTH, LOG_TRACE_MIN_WIDTH, LOG_TRACE_MIN_WIDTH];
     let track_minimum = |kept: &[bool; 3]| if kept[1] || kept[2] { LOG_TRACK_KEEP_WIDTH } else { LOG_TRACK_MIN_WIDTH };
     let need = |kept: &[bool; 3]| track_minimum(kept) + (0..3).filter(|&index| kept[index]).map(|index| minimum[index] + LOG_TRACK_GAP).sum::<f32>();
@@ -1284,15 +1633,85 @@ fn log_columns(width: f32, strat: bool, density: bool, gamma: bool) -> LogColumn
     let short: f32 = (0..3).filter(|&index| kept[index]).map(|index| wanted[index] - minimum[index]).sum::<f32>() + (LOG_TRACK_WIDTH - track_min);
     let share = if short > 0.0 { (spare / short).min(1.0) } else { 0.0 };
     let grown = |index: usize| if kept[index] { minimum[index] + (wanted[index] - minimum[index]) * share } else { 0.0 };
-    let [strat, density, gamma] = [grown(0), grown(1), grown(2)];
+    let [strat, left, right] = [grown(0), grown(1), grown(2)];
     let gaps = LOG_TRACK_GAP * kept.iter().filter(|kept| **kept).count() as f32;
     LogColumns {
         scale,
         strat,
-        density,
-        track: (rest - strat - density - gamma - gaps).max(track_min),
-        gamma,
+        left,
+        track: (rest - strat - left - right - gaps).max(track_min),
+        right,
     }
+}
+
+/// What the reader asked of the log this frame.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct LogOutput {
+    /// A trace style the reader finished editing, to save.
+    pub(crate) saved: Option<WellLogStyle>,
+    /// A seam the reader chose to rename.
+    pub(crate) rename: Option<SeamRename>,
+    /// The hole's names the reader chose to slide one run along the hole.
+    pub(crate) shift: Option<NameShift>,
+    /// A boundary the reader chose to move.
+    pub(crate) boundary: Option<BoundaryPick>,
+    /// An interval the reader chose to insert.
+    pub(crate) insert: Option<InsertPick>,
+    /// An interval the reader chose to delete: the field read, the interval
+    /// clicked by index in the hole, and the row as it stood at the click.
+    pub(crate) delete: Option<(String, usize, crate::model::drill_hole::DrillInterval)>,
+}
+
+/// An interval picked to insert from the strat column's menu: the field
+/// read, and the depths the dialog opens with: those of the stretch nothing
+/// is logged in, or none from a seam, whose own depths would only be
+/// refused, so the geologist types them.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct InsertPick {
+    pub(crate) field: String,
+    pub(crate) depths: Option<(f64, f64)>,
+}
+
+/// A boundary picked from the strat column's menu: the field read, the
+/// interval clicked, and whether its roof or its floor moves.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BoundaryPick {
+    pub(crate) field: String,
+    pub(crate) interval: usize,
+    pub(crate) side: BoundarySide,
+}
+
+/// A shift picked from the strat column's menu: the field read, which way
+/// its names move, and the interval clicked when only its run and those on
+/// that side move.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NameShift {
+    pub(crate) field: String,
+    pub(crate) direction: ShiftDirection,
+    pub(crate) from: Option<usize>,
+}
+
+/// A seam picked from the strat column's menu: the field and name it is
+/// read from, the interval clicked, and whether every hole of the set is
+/// meant or only the clicked horizon.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SeamRename {
+    pub(crate) field: String,
+    pub(crate) name: String,
+    pub(crate) interval: usize,
+    pub(crate) every_hole: bool,
+}
+
+/// The seam menu while it is open: the seam right-clicked in the strat column.
+#[derive(Clone, PartialEq, Debug)]
+struct SeamMenu {
+    field: String,
+    name: String,
+    /// The interval clicked, by index in the hole.
+    interval: usize,
+    /// The row clicked, as it stood at the click, for a deletion to check
+    /// it is still the one there.
+    row: crate::model::drill_hole::DrillInterval,
 }
 
 /// A trace column's right-click menu while it is open: the column, the
@@ -1304,6 +1723,24 @@ struct TraceMenu {
     custom: [f32; 2],
 }
 
+/// What a right-click at `pos` finds in the trace columns.
+enum TraceClick<'t> {
+    /// Neither column: the click is the hole track's.
+    Off,
+    /// A column drawing its own curves, which opens its scale menu.
+    Scale(ColumnTraces<'t>),
+    /// A column drawing a chosen curve, which opens no menu.
+    Chosen,
+}
+
+fn trace_click<'t>(pos: egui::Pos2, plot: egui::Rect, lanes: [(Option<ColumnTraces<'t>>, Option<egui::Rect>); 2]) -> TraceClick<'t> {
+    match trace_column_at(pos, plot, lanes) {
+        None => TraceClick::Off,
+        Some(traces) if traces.is_other() => TraceClick::Chosen,
+        Some(traces) => TraceClick::Scale(traces),
+    }
+}
+
 /// The trace column under `pos`, if any: inside a column's width and down
 /// the plot itself, so the headers and the axis below open no trace menu.
 fn trace_column_at<'t>(pos: egui::Pos2, plot: egui::Rect, lanes: [(Option<ColumnTraces<'t>>, Option<egui::Rect>); 2]) -> Option<ColumnTraces<'t>> {
@@ -1313,6 +1750,18 @@ fn trace_column_at<'t>(pos: egui::Pos2, plot: egui::Rect, lanes: [(Option<Column
     lanes
         .into_iter()
         .find_map(|(traces, lane)| traces.filter(|_| lane.is_some_and(|lane| lane.x_range().contains(pos.x))))
+}
+
+/// The thin dashed guide at `depth`, from `across.start()` to `across.end()`,
+/// drawn over every column so the curves can be read against it.
+fn draw_guide(ui: &egui::Ui, painter: &egui::Painter, across: std::ops::RangeInclusive<f32>, plot: egui::Rect, view: (f64, f64), depth: f64) {
+    let y = BoreholeLog::y_at(plot, view.0, view.1, depth);
+    painter.extend(egui::Shape::dashed_line(
+        &[egui::pos2(*across.start(), y), egui::pos2(*across.end(), y)],
+        egui::Stroke::new(1.0, ui.visuals().weak_text_color()),
+        4.0,
+        3.0,
+    ));
 }
 
 /// A dashed line across the plot where the hole ends, its label on a plate so
@@ -1337,6 +1786,37 @@ fn draw_recorded_depth(ui: &egui::Ui, painter: &egui::Painter, plot: egui::Rect,
     painter.galley(at, galley, egui::Color32::PLACEHOLDER);
 }
 
+/// A column's curve as a note's sentence names it.
+fn curve_word(curve: ColumnCurve<&str>) -> String {
+    match curve {
+        ColumnCurve::Own(TraceColumn::Density) => tr!("viewport-log-density"),
+        ColumnCurve::Own(TraceColumn::Gamma) => tr!("viewport-log-gamma"),
+        ColumnCurve::Other(name) => name.to_owned(),
+        ColumnCurve::Hidden => String::new(),
+    }
+}
+
+/// That the hole has no log of `curve`; nothing for a hidden column.
+fn no_log_note(curve: ColumnCurve<&str>) -> Option<String> {
+    match curve {
+        ColumnCurve::Own(TraceColumn::Density) => Some(tr!("viewport-no-density-log-hole")),
+        ColumnCurve::Own(TraceColumn::Gamma) => Some(tr!("viewport-no-gamma-log-hole")),
+        ColumnCurve::Other(name) => Some(tr!("viewport-no-curve-log-hole", curve = name.to_owned())),
+        ColumnCurve::Hidden => None,
+    }
+}
+
+/// That the panel is too narrow to show `curve`; nothing for a hidden
+/// column.
+fn widen_note(curve: ColumnCurve<&str>) -> Option<String> {
+    match curve {
+        ColumnCurve::Own(TraceColumn::Density) => Some(tr!("viewport-widen-panel-show-density")),
+        ColumnCurve::Own(TraceColumn::Gamma) => Some(tr!("viewport-widen-panel-show-gamma")),
+        ColumnCurve::Other(name) => Some(tr!("viewport-widen-panel-show-curve", curve = name.to_owned())),
+        ColumnCurve::Hidden => None,
+    }
+}
+
 /// The notes from [`BoreholeLog::trace_notes`], one weak line each across
 /// `area`, elided to its width.
 fn draw_trace_notes(ui: &egui::Ui, painter: &egui::Painter, area: egui::Rect, notes: [Option<String>; 2], line_height: f32) {
@@ -1348,18 +1828,10 @@ fn draw_trace_notes(ui: &egui::Ui, painter: &egui::Painter, area: egui::Rect, no
     }
 }
 
-/// The traces of whichever column `column` names.
-fn column_traces<'a>(column: TraceColumn, density: Option<ColumnTraces<'a>>, gamma: Option<ColumnTraces<'a>>) -> Option<ColumnTraces<'a>> {
-    match column {
-        TraceColumn::Density => density,
-        TraceColumn::Gamma => gamma,
-    }
-}
-
 /// Colour for one strat run, matched to the ribbon's own set: the ribbon's
 /// field reads through the same working-section mapping the ribbon does, so
 /// a code coloured by its section shows that colour in both.
-fn strat_run_color(color: &crate::model::drill_hole::DrillColorState, field: &crate::model::drill_hole::DrillField, code: &str) -> [f32; 3] {
+pub(crate) fn strat_run_color(color: &crate::model::drill_hole::DrillColorState, field: &crate::model::drill_hole::DrillField, code: &str) -> [f32; 3] {
     if color.active_field.as_deref() == Some(field.key.as_str()) {
         let value = crate::model::drill_hole::DrillValue::Category(code.to_owned());
         return crate::rendering::scene::drill_hole_cache::evaluate_color_for(&field.kind, &value, color);
@@ -1456,6 +1928,40 @@ fn draw_azimuth_compass(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect
         );
     }
     painter.line_segment([centre, centre + egui::vec2(0.0, -radius + 4.0)], egui::Stroke::new(2.0, visuals.strong_text_color()));
+}
+
+/// Consecutive intervals of `hole` reading the same lithology in `field`,
+/// merged into one run, so forty abutting records of the same rock draw as
+/// one bed; unlogged stretches between `top` and `bottom` are `None` runs.
+/// The Column tab reads the same runs the log draws.
+pub(crate) fn strat_runs(hole: &crate::model::drill_hole::DrillHole, field: &crate::model::drill_hole::DrillField, top: f64, bottom: f64) -> Vec<(f64, f64, Option<String>)> {
+    let mut runs: Vec<(f64, f64, Option<String>)> = Vec::new();
+    let mut cursor = top;
+    // Only rows holding the field: a row of another table drawn here would
+    // blank a stretch the field does log.
+    let mut sorted = hole
+        .intervals
+        .iter()
+        .filter(|interval| holds_value(interval, &field.key) && interval.to > top && interval.from < bottom)
+        .collect::<Vec<_>>();
+    sorted.sort_by(|a, b| a.from.total_cmp(&b.from));
+
+    for interval in sorted {
+        let (from, to) = (interval.from.max(top), interval.to.min(bottom));
+        if to <= from {
+            continue;
+        }
+        let value = Some(value_name(interval.values.get(&field.key)));
+        if from > cursor + 1.0e-9 {
+            push_run(&mut runs, cursor, from, None);
+        }
+        push_run(&mut runs, from.max(cursor), to, value);
+        cursor = cursor.max(to);
+    }
+    if cursor < bottom - 1.0e-9 {
+        push_run(&mut runs, cursor, bottom, None);
+    }
+    runs
 }
 
 /// Extend the last run rather than start a new one when values and depths abut.

@@ -308,6 +308,7 @@ impl Graphics<'_> {
                 scene.drill_holes,
                 scene.point_clouds,
                 scene.rasters,
+                self.drill_hole_gpu.content_key(),
             )
             .hash(&mut hasher);
             (requested.width, requested.height).hash(&mut hasher);

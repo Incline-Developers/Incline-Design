@@ -5,8 +5,8 @@
 //! constants.
 
 use super::optimization::{
-    EDITOR_WIDTH, MENU_ITEM_HEIGHT, SIDE_GAP, body_height, cell_combo, cell_text, constants_menu_item, field_row, form_choice, form_combo, form_toggle, form_value, menu_item,
-    model_fields, option_group, outline_fields, plain_rows, unit_per_tonne, unit_percent,
+    EDITOR_WIDTH, MENU_ITEM_HEIGHT, SIDE_GAP, body_height, cell_combo, constants_menu_item, field_row, form_choice, form_combo, form_toggle, form_value, menu_item, model_fields,
+    option_group, outline_fields, plain_rows, unit_per_tonne, unit_percent,
 };
 use crate::{
     i18n::tr,
@@ -18,7 +18,7 @@ use crate::{
     ui::{
         state::{NpvScheduleDraft, NpvScheduleGridSelections, NpvScheduleTab, OptimizationState, UiCommand},
         widgets::{
-            editable_grid::{DataGrid, GridAction, GridButtons, GridColumn, apply_flat},
+            editable_grid::{DataGrid, GridAction, GridButtons, GridColumn, apply_flat, cell_text},
             hint::Hint,
             menu::{self, DragableMenu, MenuButton, menu_note},
             value_field::{self, ValueField, edit_count, mark_invalid},

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 200" width="540" height="200" role="img" aria-label="Geology workspace, plan view, one string of three vertices replaced by three points at (1000, 1100, 79.0), (1100, 1100, 78.0) and (1200, 1100, 77.0).">
+  <line x1="100" y1="100" x2="380" y2="100" stroke="#888" stroke-width="1" stroke-dasharray="4 3"/>
+  <g fill="#d9622b" stroke="#d9622b"><circle cx="100" cy="100" r="4"/><circle cx="240" cy="100" r="4"/><circle cx="380" cy="100" r="4"/></g>
+  <g font-family="sans-serif" font-size="13" fill="#000" text-anchor="middle">
+    <text x="100" y="140">(1000, 1100, 79.0)</text><text x="240" y="140">(1100, 1100, 78.0)</text><text x="380" y="140">(1200, 1100, 77.0)</text>
+  </g>
+  <line x1="505" y1="52" x2="505" y2="24" stroke="#000" stroke-width="1"/>
+  <path d="M505 23 l-3 6 l6 0 z" fill="#000"/>
+  <text x="505" y="16" font-family="sans-serif" font-size="13" fill="#000" text-anchor="middle">N</text>
+</svg>

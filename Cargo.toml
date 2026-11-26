@@ -39,6 +39,7 @@ glam = { version = "0.34.3", features = ["serde"] }
 i18n-embed = { version = "0.16.0", features = ["fluent-system"] }
 i18n-embed-fl = "0.10.1"
 laz = { version = "0.14.0", features = ["parallel"] }
+libm = "0.2"
 log = "0.4.35"
 lyon = "1.0.19"
 mineflow = { path = "crates/mineflow" }

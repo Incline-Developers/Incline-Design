@@ -16,7 +16,6 @@ use crate::ui::widgets::hint::Hint;
 #[cfg(not(target_os = "macos"))]
 use crate::ui::{
     state::{UiProjectEntry, ViewToggle},
-    themed_icon,
     widgets::context_menu::{ContextMenuAction, MenuBarMenu, context_menu_separator, context_submenu},
 };
 use crate::{
@@ -25,7 +24,8 @@ use crate::{
     ui::{
         EditorState, UiCommand, UiProjectView,
         elements::title_bar,
-        state::{ActiveTool, Workspace},
+        state::{ActiveTool, Workspace, string_rework_live},
+        themed_icon, unthemed_icon,
         widgets::page_tabs::{PageTab, PageTabsPaint},
     },
 };
@@ -229,8 +229,8 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
 /// Open `workspace`, putting down anything the tools it does not carry had
 /// picked up.
 ///
-/// The drawing tools leave the window with production - see
-/// [`Workspace::has_production_tools`] - so a tool still armed after the switch
+/// The drawing tools leave the window with the workspaces that draw - see
+/// [`Workspace::has_drawing_tools`] - so a tool still armed after the switch
 /// would have nothing left to put it down. Entering a workspace without them
 /// hands the pointer back to plain picking first. Flying and the slice view are
 /// not among them: their buttons sit in the run every workspace carries - see
@@ -246,6 +246,10 @@ pub(crate) fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCo
     }
     let previous_workspace = editor.active_workspace;
     editor.active_workspace = workspace;
+    editor.vertex_edit_run = None;
+    // Only Geology reads a segment as Measure Distance hovers; the renderer
+    // sees the switch and takes the highlight down.
+    editor.measure_segment_hover = None;
     // The recent functions list is the workspace's own.
     if editor.canvas_context_menu_recent {
         editor.canvas_context_menu_open = false;
@@ -279,8 +283,14 @@ pub(crate) fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCo
         // Planning's Blasting step carries a run of the drawing tools of its
         // own, so one armed there is still armed when the user comes back to
         // it - the same rule, read against the page rather than the tab.
-        _ => workspace.has_production_tools() || editor.is_planning_cut_step(),
+        tool if tool.designs_pit() => workspace.has_production_tools() || editor.is_planning_cut_step(),
+        ActiveTool::InsertPoint | ActiveTool::FillSegment | ActiveTool::SplitAtCrossings | ActiveTool::RemoveBetweenCrossings | ActiveTool::ExplodePolylineToPoints => {
+            workspace.has_drawing_aids() || editor.is_planning_cut_step()
+        }
+        _ => workspace.has_drawing_tools() || editor.is_planning_cut_step(),
     };
+    // A tool one workspace edits with on a section, another may refuse there.
+    let survives = survives && !(editor.slice_mode_enabled && editor.active_tool.section_refuses(workspace));
     if !survives {
         commands.push(UiCommand::SetActiveTool(ActiveTool::None));
     }
@@ -449,11 +459,13 @@ fn draw_open_recent(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut V
 pub(crate) enum MenuRow {
     InsertAtIntersection,
     InsertAtElevation,
+    CleanStrings,
     SetAxis(Axis),
     CreateTriangulation,
     ClipSurfaceByPolyline,
     SliceSurfaceByZ,
     TrimTopology,
+    ClipToSurface,
     CutTopologyByPitShell,
     MergeShellIntoTopology,
     JoinSurfaces,
@@ -472,6 +484,50 @@ pub(crate) enum MenuRow {
     PointCloudTin,
     PointCloudJoin,
     PointCloudClassify,
+    // Geology Design: a tool it arms, a command it pushes, or one of the
+    // Design menu's functions as Geology offers it (a row belongs to one
+    // workspace, so these are Geology's own rows).
+    Tool(ActiveTool),
+    GeologyInsertAtCrossings,
+    GeologyInsertAtElevation,
+    GeologyCleanStrings,
+    GeologySetAxis(Axis),
+    GeologyCreateTriangulation,
+    SmoothSurface,
+    DifferenceSurfaces,
+    CleanSurface,
+    MergeSurfaces,
+    InsertAtSpacing,
+    Reverse,
+    DrapeAlongTriangles,
+    Thin,
+    Smooth,
+    RemoveLastVertex,
+    NextVertex,
+    CopyAlongString,
+    CarryOnString,
+    RedrawRun,
+    DragVertex,
+    NudgeRl,
+    SurfaceLines,
+    SaveSurfaceLines,
+    // Modelling.
+    ThicknessPoints,
+    ThicknessSurfaces,
+    ModellingClipToSurface,
+    BuildPrismoidGrid,
+    BuildStrata,
+    BlockModelFromPrismoidGrid,
+    RegularBlockModel,
+    PrismoidQualities,
+    PrismoidGridToSurface,
+    DifferencePrismoidGrids,
+    MisfitAtHoles,
+    MaskPrismoidGridByPolyline,
+    MaskPrismoids,
+    UnmaskAllPrismoids,
+    TrimPrismoidGrids,
+    NewLayer,
 }
 
 /// The name of a workspace menu, or of a submenu inside one.
@@ -486,6 +542,16 @@ pub(crate) enum MenuTitle {
     Drillholes,
     Coordinates,
     PointCloud,
+    GeologyDesign,
+    GeologyDraw,
+    GeologyEdit,
+    GeologyJoinSplit,
+    GeologyVertices,
+    GeologySurface,
+    Modelling,
+    ModellingPrismoidGrids,
+    ModellingMasks,
+    ModellingBlockModels,
 }
 
 impl MenuTitle {
@@ -500,6 +566,16 @@ impl MenuTitle {
             Self::Drillholes => tr!("ws-menubar-drillholes"),
             Self::Coordinates => tr!("survey-coordinates-menu"),
             Self::PointCloud => tr!("ws-menubar-point-cloud"),
+            Self::GeologyDesign => tr!("ws-menubar-geology-design"),
+            Self::GeologyDraw => tr!("ws-menubar-geology-draw"),
+            Self::GeologyEdit => tr!("ws-menubar-geology-edit"),
+            Self::GeologyJoinSplit => tr!("ws-menubar-geology-join-split"),
+            Self::GeologyVertices => tr!("ws-menubar-geology-vertices"),
+            Self::GeologySurface => tr!("ws-menubar-geology-surface"),
+            Self::Modelling => tr!("ws-menubar-modelling"),
+            Self::ModellingPrismoidGrids => tr!("ws-menubar-modelling-prismoid-grids"),
+            Self::ModellingMasks => tr!("ws-menubar-modelling-masks"),
+            Self::ModellingBlockModels => tr!("ws-menubar-modelling-block-models"),
         }
     }
 }
@@ -530,6 +606,7 @@ const PRODUCTION_MENUS: &[WorkspaceMenu] = &[
         title: MenuTitle::Design,
         groups: &[
             submenu(MenuTitle::InsertPoint, &[MenuRow::InsertAtIntersection, MenuRow::InsertAtElevation]),
+            rows(&[MenuRow::CleanStrings]),
             submenu(MenuTitle::MoveTo, &[MenuRow::SetAxis(Axis::X), MenuRow::SetAxis(Axis::Y), MenuRow::SetAxis(Axis::Z)]),
             rows(&[MenuRow::CreateTriangulation]),
         ],
@@ -537,7 +614,7 @@ const PRODUCTION_MENUS: &[WorkspaceMenu] = &[
     WorkspaceMenu {
         title: MenuTitle::Triangulation,
         groups: &[
-            rows(&[MenuRow::ClipSurfaceByPolyline, MenuRow::SliceSurfaceByZ, MenuRow::TrimTopology]),
+            rows(&[MenuRow::ClipSurfaceByPolyline, MenuRow::SliceSurfaceByZ, MenuRow::TrimTopology, MenuRow::ClipToSurface]),
             rows(&[
                 MenuRow::CutTopologyByPitShell,
                 MenuRow::MergeShellIntoTopology,
@@ -562,6 +639,89 @@ const PRODUCTION_MENUS: &[WorkspaceMenu] = &[
 ];
 
 const GEOLOGY_MENUS: &[WorkspaceMenu] = &[
+    // Leo's Design functions and every drawing tool, grouped by what each
+    // does to a string.
+    WorkspaceMenu {
+        title: MenuTitle::GeologyDesign,
+        groups: &[
+            rows(&[MenuRow::NewLayer]),
+            submenu(
+                MenuTitle::GeologyDraw,
+                &[
+                    MenuRow::Tool(ActiveTool::MakePoint),
+                    MenuRow::Tool(ActiveTool::MakeLine),
+                    MenuRow::Tool(ActiveTool::MakePoly),
+                    MenuRow::Tool(ActiveTool::MakeCircle),
+                    MenuRow::Tool(ActiveTool::MakeText),
+                    MenuRow::RemoveLastVertex,
+                    MenuRow::NextVertex,
+                    MenuRow::CopyAlongString,
+                    MenuRow::CarryOnString,
+                    MenuRow::RedrawRun,
+                ],
+            ),
+            submenu(
+                MenuTitle::GeologyEdit,
+                &[
+                    MenuRow::Tool(ActiveTool::Move),
+                    MenuRow::GeologySetAxis(Axis::X),
+                    MenuRow::GeologySetAxis(Axis::Y),
+                    MenuRow::GeologySetAxis(Axis::Z),
+                    MenuRow::Tool(ActiveTool::OffsetElement),
+                    MenuRow::Tool(ActiveTool::RelimitLine),
+                    MenuRow::Tool(ActiveTool::Bezier),
+                    MenuRow::Tool(ActiveTool::Chamfer),
+                    MenuRow::Reverse,
+                    MenuRow::GeologyCleanStrings,
+                ],
+            ),
+            submenu(
+                MenuTitle::GeologyJoinSplit,
+                &[
+                    MenuRow::Tool(ActiveTool::FuseIntoPolyline),
+                    MenuRow::Tool(ActiveTool::SplitAtPoints),
+                    MenuRow::Tool(ActiveTool::SplitAtCrossings),
+                    MenuRow::Tool(ActiveTool::RemoveBetweenCrossings),
+                    MenuRow::Tool(ActiveTool::ExplodePolyline),
+                    MenuRow::Tool(ActiveTool::ExplodePolylineToPoints),
+                ],
+            ),
+            submenu(
+                MenuTitle::GeologyVertices,
+                &[
+                    MenuRow::Tool(ActiveTool::EditVertex),
+                    MenuRow::Tool(ActiveTool::InsertPoint),
+                    MenuRow::Tool(ActiveTool::FillSegment),
+                    MenuRow::InsertAtSpacing,
+                    MenuRow::DragVertex,
+                    MenuRow::NudgeRl,
+                    MenuRow::Tool(ActiveTool::DeletePoints),
+                    MenuRow::GeologyInsertAtCrossings,
+                    MenuRow::GeologyInsertAtElevation,
+                    MenuRow::Thin,
+                    MenuRow::Smooth,
+                ],
+            ),
+            submenu(
+                MenuTitle::GeologySurface,
+                &[
+                    MenuRow::Tool(ActiveTool::DrapeToTopology),
+                    MenuRow::DrapeAlongTriangles,
+                    MenuRow::GeologyCreateTriangulation,
+                    MenuRow::SmoothSurface,
+                    MenuRow::DifferenceSurfaces,
+                    MenuRow::CleanSurface,
+                    MenuRow::MergeSurfaces,
+                ],
+            ),
+            rows(&[
+                MenuRow::Tool(ActiveTool::MeasureBatterAngle),
+                MenuRow::Tool(ActiveTool::MeasureDistance),
+                MenuRow::SurfaceLines,
+                MenuRow::SaveSurfaceLines,
+            ]),
+        ],
+    },
     // Thresholding runs on the block model, and estimation on the
     // drill holes, so each entry lives under its input's own menu.
     WorkspaceMenu {
@@ -570,7 +730,33 @@ const GEOLOGY_MENUS: &[WorkspaceMenu] = &[
     },
     WorkspaceMenu {
         title: MenuTitle::Drillholes,
-        groups: &[rows(&[MenuRow::CreateBlockModel]), rows(&[MenuRow::ReferencePoints, MenuRow::ReferenceSurface])],
+        groups: &[rows(&[MenuRow::CreateBlockModel])],
+    },
+    // The seam's surfaces, from the holes' reference points to its true
+    // thickness.
+    WorkspaceMenu {
+        title: MenuTitle::Modelling,
+        groups: &[
+            rows(&[MenuRow::ReferencePoints, MenuRow::ReferenceSurface]),
+            rows(&[MenuRow::ThicknessPoints, MenuRow::ThicknessSurfaces]),
+            rows(&[MenuRow::ModellingClipToSurface]),
+            submenu(
+                MenuTitle::ModellingPrismoidGrids,
+                &[MenuRow::BuildPrismoidGrid, MenuRow::BuildStrata, MenuRow::PrismoidQualities, MenuRow::TrimPrismoidGrids],
+            ),
+            submenu(
+                MenuTitle::ModellingMasks,
+                &[
+                    MenuRow::MaskPrismoidGridByPolyline,
+                    // One row masks the selected prismoids, or picks them first,
+                    // and, ticked when all are masked by hand, unmasks them.
+                    MenuRow::MaskPrismoids,
+                    MenuRow::UnmaskAllPrismoids,
+                ],
+            ),
+            submenu(MenuTitle::ModellingBlockModels, &[MenuRow::BlockModelFromPrismoidGrid, MenuRow::RegularBlockModel]),
+            rows(&[MenuRow::MisfitAtHoles, MenuRow::DifferencePrismoidGrids, MenuRow::PrismoidGridToSurface]),
+        ],
     },
 ];
 
@@ -634,11 +820,13 @@ impl MenuRow {
         match self {
             Self::InsertAtIntersection => tr!("ws-menubar-design-insert-point-at-intersection"),
             Self::InsertAtElevation => tr!("ws-menubar-design-insert-point-at-elevation"),
-            Self::SetAxis(axis) => tr!("common-set") + &format!(" {}...", axis.label()),
-            Self::CreateTriangulation => tr!("ws-menubar-design-create-triangulation"),
+            Self::CleanStrings | Self::GeologyCleanStrings => tr!("cmd-string-clean-clean-strings"),
+            Self::SetAxis(axis) | Self::GeologySetAxis(axis) => tr!("common-set") + &format!(" {}...", axis.label()),
+            Self::CreateTriangulation | Self::GeologyCreateTriangulation => tr!("ws-menubar-design-create-triangulation"),
             Self::ClipSurfaceByPolyline => tr!("common-clip-surface-polyline"),
             Self::SliceSurfaceByZ => tr!("common-slice-triangulation-z-range"),
             Self::TrimTopology => tr!("common-trim-topology"),
+            Self::ClipToSurface | Self::ModellingClipToSurface => tr!("common-clip-to-surface-ellipsis"),
             Self::CutTopologyByPitShell => tr!("common-cut-topology-pit-shell"),
             Self::MergeShellIntoTopology => tr!("common-merge-shell-into-topology-ellipsis"),
             Self::JoinSurfaces => tr!("tri-join-surfaces-ellipsis"),
@@ -657,7 +845,98 @@ impl MenuRow {
             Self::PointCloudTin => tr!("common-create-triangulation"),
             Self::PointCloudJoin => tr!("common-join"),
             Self::PointCloudClassify => tr!("common-classify"),
+            Self::Tool(tool) => match tool {
+                ActiveTool::MakePoint => tr!("common-create-point"),
+                ActiveTool::MakeLine => tr!("common-create-line"),
+                ActiveTool::MakePoly => tr!("common-create-polyline"),
+                ActiveTool::MakeCircle => tr!("common-create-circle"),
+                ActiveTool::MakeText => tr!("toolbars-create-text"),
+                ActiveTool::Move => tr!("common-move-design"),
+                ActiveTool::OffsetElement => tr!("common-offset"),
+                ActiveTool::RelimitLine => tr!("common-relimit-line"),
+                ActiveTool::Bezier => tr!("toolbars-bezier-polyline"),
+                ActiveTool::Chamfer => tr!("toolbars-chamfer-polyline-corners"),
+                ActiveTool::FuseIntoPolyline => tr!("toolbars-fuse-polylines"),
+                ActiveTool::SplitAtPoints => tr!("toolbars-split-polyline-points"),
+                ActiveTool::SplitAtCrossings => tr!("ws-menubar-geology-split-at-crossings"),
+                ActiveTool::RemoveBetweenCrossings => tr!("ws-menubar-geology-remove-between-crossings"),
+                ActiveTool::ExplodePolyline => tr!("toolbars-explode-polyline-lines"),
+                ActiveTool::ExplodePolylineToPoints => tr!("ws-menubar-geology-explode-to-points"),
+                ActiveTool::DeletePoints => tr!("toolbars-delete-points"),
+                ActiveTool::EditVertex => tr!("toolbars-edit-vertex"),
+                ActiveTool::InsertPoint => tr!("ws-menubar-geology-insert-point"),
+                ActiveTool::FillSegment => tr!("ws-menubar-geology-fill-segment"),
+                ActiveTool::DrapeToTopology => tr!("common-drape-topology"),
+                ActiveTool::MeasureDistance => tr!("toolbars-measure-distance"),
+                _ => tr!("toolbars-strike-dip"),
+            },
+            Self::GeologyInsertAtCrossings => tr!("toolbars-insert-points-crossings"),
+            Self::GeologyInsertAtElevation => tr!("ws-menubar-geology-insert-at-elevation"),
+            Self::InsertAtSpacing => tr!("ws-menubar-geology-insert-at-spacing"),
+            Self::Reverse => tr!("toolbars-reverse-strings"),
+            Self::DrapeAlongTriangles => tr!("ws-menubar-geology-drape-along-triangles"),
+            Self::Thin => tr!("ws-menubar-geology-thin"),
+            Self::Smooth => tr!("ws-menubar-geology-smooth"),
+            Self::SmoothSurface => tr!("ws-menubar-geology-smooth-surface"),
+            Self::DifferenceSurfaces => tr!("ws-menubar-geology-difference-surfaces"),
+            Self::CleanSurface => tr!("ws-menubar-geology-clean-surface"),
+            Self::MergeSurfaces => tr!("ws-menubar-geology-merge-surfaces"),
+            Self::RemoveLastVertex => tr!("ws-menubar-geology-remove-last-vertex"),
+            Self::NextVertex => tr!("ws-menubar-geology-next-vertex"),
+            Self::CopyAlongString => tr!("ws-menubar-geology-copy-along-string"),
+            Self::CarryOnString => tr!("ws-menubar-geology-carry-on-string"),
+            Self::RedrawRun => tr!("ws-menubar-geology-redraw-run"),
+            Self::DragVertex => tr!("ws-menubar-geology-drag-vertex"),
+            Self::NudgeRl => tr!("ws-menubar-geology-nudge-rl"),
+            Self::SurfaceLines => tr!("ws-menubar-geology-surface-lines"),
+            Self::SaveSurfaceLines => tr!("ws-menubar-geology-save-surface-lines"),
+            Self::ThicknessPoints => tr!("common-thickness-points-ellipsis"),
+            Self::ThicknessSurfaces => tr!("common-thickness-surfaces-ellipsis"),
+            Self::BuildPrismoidGrid => tr!("common-build-prismoid-grid-ellipsis"),
+            Self::BuildStrata => tr!("common-build-strata-ellipsis"),
+            Self::BlockModelFromPrismoidGrid => tr!("common-create-block-model-from-prismoid-grid-ellipsis"),
+            Self::RegularBlockModel => tr!("common-create-regular-block-model-from-prismoid-grids-ellipsis"),
+            Self::PrismoidQualities => tr!("common-add-prismoid-qualities-ellipsis"),
+            Self::PrismoidGridToSurface => tr!("common-prismoid-grid-to-surface-ellipsis"),
+            Self::DifferencePrismoidGrids => tr!("common-difference-prismoid-grids-ellipsis"),
+            Self::MisfitAtHoles => tr!("common-misfit-at-holes-ellipsis"),
+            Self::MaskPrismoidGridByPolyline => tr!("common-mask-prismoid-grid-polyline"),
+            Self::MaskPrismoids => tr!("common-mask-prismoids"),
+            Self::UnmaskAllPrismoids => tr!("common-unmask-all-prismoids"),
+            Self::TrimPrismoidGrids => tr!("common-trim-prismoid-grids-topology-ellipsis"),
+            Self::NewLayer => tr!("ws-menubar-geology-new-layer"),
         }
+    }
+
+    /// The icon of the cell on the row's own workspace's toolbar that runs the
+    /// same function; `None` for a row no cell runs.
+    pub(crate) fn icon(self, ui: &egui::Ui) -> Option<egui::ImageSource<'static>> {
+        Some(match self {
+            Self::NewLayer => unthemed_icon!("layer_tool.svg"),
+            Self::Tool(ActiveTool::MakePoint) => themed_icon!(ui, "create_point.svg"),
+            Self::Tool(ActiveTool::MakeLine) => themed_icon!(ui, "create_line.svg"),
+            Self::Tool(ActiveTool::MakePoly) => themed_icon!(ui, "create_polyline.svg"),
+            Self::Tool(ActiveTool::MakeCircle) => themed_icon!(ui, "create_circle.svg"),
+            Self::Tool(ActiveTool::MakeText) => unthemed_icon!("create_text.svg"),
+            Self::Tool(ActiveTool::Move) => themed_icon!(ui, "move_element.svg"),
+            Self::GeologySetAxis(Axis::Z) => themed_icon!(ui, "set_z.svg"),
+            Self::Tool(ActiveTool::OffsetElement) => themed_icon!(ui, "offset_element.svg"),
+            Self::Tool(ActiveTool::RelimitLine) => themed_icon!(ui, "relimit_line.svg"),
+            Self::Tool(ActiveTool::Bezier) => themed_icon!(ui, "create_bezier.svg"),
+            Self::Tool(ActiveTool::Chamfer) => themed_icon!(ui, "chamfer_corners.svg"),
+            Self::Reverse => themed_icon!(ui, "reverse_string.svg"),
+            Self::Tool(ActiveTool::FuseIntoPolyline) => themed_icon!(ui, "fuse_lines.svg"),
+            Self::Tool(ActiveTool::SplitAtPoints) => themed_icon!(ui, "split_at_points.svg"),
+            Self::Tool(ActiveTool::ExplodePolyline) => unthemed_icon!("explode_polyline.svg"),
+            Self::Tool(ActiveTool::EditVertex) => themed_icon!(ui, "edit_vertex.svg"),
+            Self::Tool(ActiveTool::DeletePoints) => unthemed_icon!("delete_element.svg"),
+            Self::GeologyInsertAtCrossings => themed_icon!(ui, "insert_crossings.svg"),
+            Self::Thin => themed_icon!(ui, "thin_string.svg"),
+            Self::Tool(ActiveTool::DrapeToTopology) => themed_icon!(ui, "drape_element.svg"),
+            Self::Tool(ActiveTool::MeasureBatterAngle) => unthemed_icon!("measure_batter_angle.svg"),
+            Self::Tool(ActiveTool::MeasureDistance) => unthemed_icon!("measure_distance.svg"),
+            _ => return None,
+        })
     }
 
     pub(crate) fn command(self) -> UiCommand {
@@ -687,6 +966,46 @@ impl MenuRow {
             Self::PointCloudTin => UiCommand::OpenPointCloudTin,
             Self::PointCloudJoin => UiCommand::OpenPointCloudJoin,
             Self::PointCloudClassify => UiCommand::OpenPointCloudClassify,
+            Self::CleanStrings | Self::GeologyCleanStrings => UiCommand::CleanStrings,
+            Self::ClipToSurface | Self::ModellingClipToSurface => UiCommand::OpenCutTriangulationToSurface,
+            Self::Tool(tool) => UiCommand::SetActiveTool(tool),
+            Self::GeologyInsertAtCrossings => UiCommand::InsertPointsAtIntersections,
+            Self::GeologyInsertAtElevation => UiCommand::OpenInsertPointAtElevationDialog,
+            Self::GeologySetAxis(axis) => UiCommand::OpenMoveToAxisDialog(axis),
+            Self::GeologyCreateTriangulation => UiCommand::OpenCreateTriangulation,
+            Self::InsertAtSpacing => UiCommand::OpenInsertPointAtSpacingDialog,
+            Self::Reverse => UiCommand::ReverseSelectedStrings,
+            Self::DrapeAlongTriangles => UiCommand::ArmDrapeAlongTriangles,
+            Self::Thin => UiCommand::OpenThinStringsDialog,
+            Self::Smooth => UiCommand::OpenSmoothStringsDialog,
+            Self::SmoothSurface => UiCommand::OpenSmoothSurface,
+            Self::DifferenceSurfaces => UiCommand::OpenDifferenceSurfaces,
+            Self::CleanSurface => UiCommand::OpenCleanSurface,
+            Self::MergeSurfaces => UiCommand::OpenMergeSurfaces,
+            Self::RemoveLastVertex => UiCommand::RemoveLastStrokeVertex,
+            Self::NextVertex => UiCommand::OpenNextVertexPanel,
+            Self::CopyAlongString => UiCommand::ArmCopyAlongString,
+            Self::CarryOnString => UiCommand::ArmCarryOnString,
+            Self::RedrawRun => UiCommand::ArmRedrawRun,
+            Self::DragVertex => UiCommand::ArmDragVertex,
+            Self::NudgeRl => UiCommand::OpenNudgePanel,
+            Self::SurfaceLines => UiCommand::ToggleSectionSurfaceLines,
+            Self::SaveSurfaceLines => UiCommand::SaveSectionSurfaceLines,
+            Self::ThicknessPoints => UiCommand::OpenThicknessPoints,
+            Self::ThicknessSurfaces => UiCommand::OpenSeamSurface,
+            Self::BuildPrismoidGrid => UiCommand::OpenBuildPrismoidGrid,
+            Self::BuildStrata => UiCommand::OpenBuildStrata,
+            Self::BlockModelFromPrismoidGrid => UiCommand::OpenCreateBlockModelFromPrismoidGrid,
+            Self::RegularBlockModel => UiCommand::OpenCreateRegularBlockModel,
+            Self::PrismoidQualities => UiCommand::OpenAddPrismoidQualities,
+            Self::PrismoidGridToSurface => UiCommand::OpenPrismoidGridToSurface,
+            Self::DifferencePrismoidGrids => UiCommand::OpenDifferencePrismoidGrids,
+            Self::MisfitAtHoles => UiCommand::OpenHoleMisfit,
+            Self::MaskPrismoidGridByPolyline => UiCommand::OpenMaskPrismoidGridByPolyline,
+            Self::MaskPrismoids => UiCommand::TogglePrismoidMask,
+            Self::UnmaskAllPrismoids => UiCommand::UnmaskAllPrismoids,
+            Self::TrimPrismoidGrids => UiCommand::OpenTrimPrismoidGrids,
+            Self::NewLayer => UiCommand::OpenNewLayer,
         }
     }
 
@@ -699,7 +1018,7 @@ impl MenuRow {
             // dialog states and changes with Pick. Insert at Intersection has
             // no dialog, and opens straight into the pick when the selection
             // has nothing to cross.
-            Self::InsertAtIntersection | Self::InsertAtElevation | Self::SetAxis(_) | Self::CreateTriangulation | Self::ReferencePoints | Self::ReferenceSurface => true,
+            Self::InsertAtIntersection | Self::InsertAtElevation | Self::SetAxis(_) | Self::CreateTriangulation => true,
             // The tools taking two surfaces pick both in their dialog.
             Self::TrimTopology
             | Self::CutTopologyByPitShell
@@ -719,8 +1038,154 @@ impl MenuRow {
             | Self::PointCloudTin
             | Self::PointCloudJoin
             | Self::PointCloudClassify => true,
-            Self::CreateOreTriangulation | Self::CreateBlockModel | Self::SurveyTransform => project.has_active_project,
+            Self::CreateOreTriangulation | Self::CreateBlockModel | Self::SurveyTransform | Self::NewLayer => project.has_active_project,
+            // Their commands refuse to run with no project open.
+            Self::ReferencePoints
+            | Self::ReferenceSurface
+            | Self::CleanStrings
+            | Self::ClipToSurface
+            | Self::GeologyCleanStrings
+            | Self::GeologyCreateTriangulation
+            | Self::SmoothSurface
+            | Self::DifferenceSurfaces
+            | Self::CleanSurface
+            | Self::MergeSurfaces
+            | Self::ThicknessPoints
+            | Self::ThicknessSurfaces
+            | Self::ModellingClipToSurface
+            | Self::BuildPrismoidGrid
+            | Self::BuildStrata
+            | Self::BlockModelFromPrismoidGrid
+            | Self::RegularBlockModel
+            | Self::PrismoidQualities
+            | Self::PrismoidGridToSurface
+            | Self::DifferencePrismoidGrids
+            | Self::MisfitAtHoles
+            | Self::MaskPrismoidGridByPolyline
+            | Self::MaskPrismoids
+            | Self::UnmaskAllPrismoids
+            | Self::TrimPrismoidGrids => project.has_active_project,
+            // Geology's own rows wait on the editor instead; see
+            // [`MenuRow::ready`].
+            Self::Tool(_)
+            | Self::GeologyInsertAtCrossings
+            | Self::GeologyInsertAtElevation
+            | Self::GeologySetAxis(_)
+            | Self::InsertAtSpacing
+            | Self::Reverse
+            | Self::DrapeAlongTriangles
+            | Self::Thin
+            | Self::Smooth
+            | Self::RemoveLastVertex
+            | Self::NextVertex
+            | Self::CopyAlongString
+            | Self::CarryOnString
+            | Self::RedrawRun
+            | Self::DragVertex
+            | Self::NudgeRl
+            | Self::SurfaceLines
+            | Self::SaveSurfaceLines => true,
         }
+    }
+
+    /// Whether the row is greyed, and not kept as a recent function, with no
+    /// project open: its command refuses to run without one, or, as for
+    /// Survey Transform, its enabled rule asks for one.
+    pub(crate) fn needs_project(self) -> bool {
+        matches!(
+            self,
+            Self::CreateOreTriangulation
+                | Self::CreateBlockModel
+                | Self::SurveyTransform
+                | Self::NewLayer
+                | Self::ReferencePoints
+                | Self::ReferenceSurface
+                | Self::CleanStrings
+                | Self::ClipToSurface
+                | Self::GeologyCleanStrings
+                | Self::GeologyCreateTriangulation
+                | Self::SmoothSurface
+                | Self::DifferenceSurfaces
+                | Self::CleanSurface
+                | Self::MergeSurfaces
+                | Self::ThicknessPoints
+                | Self::ThicknessSurfaces
+                | Self::ModellingClipToSurface
+                | Self::BuildPrismoidGrid
+                | Self::BuildStrata
+                | Self::BlockModelFromPrismoidGrid
+                | Self::RegularBlockModel
+                | Self::PrismoidQualities
+                | Self::PrismoidGridToSurface
+                | Self::DifferencePrismoidGrids
+                | Self::MisfitAtHoles
+                | Self::MaskPrismoidGridByPolyline
+                | Self::MaskPrismoids
+                | Self::UnmaskAllPrismoids
+                | Self::TrimPrismoidGrids
+        )
+    }
+
+    /// Whether the row can run as the editor stands, beside
+    /// [`MenuRow::enabled`]: a tool as its toolbar cell is (layer, fly,
+    /// section), and a row on the stroke being drawn. No row waits on the
+    /// selection but Unmask All Prismoids, which has no dialog to choose
+    /// grids in. The Design menu's functions Geology offers run as that menu
+    /// runs them.
+    pub(crate) fn ready(self, editor: &EditorState) -> bool {
+        match self {
+            Self::Tool(tool) => {
+                !editor.fly_mode_enabled
+                    && (!tool.requires_active_layer() || editor.active_layer.is_some())
+                    && !(editor.slice_mode_enabled && tool.section_refuses(editor.active_workspace))
+            }
+            // Carrying on, the string's end is not the stroke's to give back.
+            Self::RemoveLastVertex => {
+                !editor.pending_stroke.is_empty() && !editor.poly_finish_dialog && !(editor.pending_stroke.len() == 1 && string_rework_live(editor).is_some())
+            }
+            Self::NextVertex => matches!(editor.active_tool, ActiveTool::MakeLine | ActiveTool::MakePoly),
+            Self::CopyAlongString => !editor.poly_finish_dialog,
+            Self::CarryOnString | Self::RedrawRun => editor.pending_stroke.is_empty() && !editor.poly_finish_dialog,
+            // Move works on a section in Geology and needs no layer.
+            Self::DragVertex | Self::NudgeRl => !editor.fly_mode_enabled,
+            // Saved only while drawn: the switch on and a section up.
+            Self::SaveSurfaceLines => editor.slice_mode_enabled && editor.section_surface_lines_on(),
+            Self::UnmaskAllPrismoids => editor.selection_counts.grid_masked_cells > 0,
+            _ => true,
+        }
+    }
+
+    /// A switch row's tick; `None` for a row that is not a switch.
+    pub(crate) fn checked(self, editor: &EditorState) -> Option<bool> {
+        match self {
+            Self::SurfaceLines => Some(editor.section_surface_lines),
+            Self::MaskPrismoids => {
+                let cells = editor.selection_counts.prismoid_cells;
+                Some(cells > 0 && editor.selection_counts.masked_prismoid_cells == cells)
+            }
+            _ => None,
+        }
+    }
+
+    /// The row of `workspace` that pushes `command`, so a toolbar cell
+    /// running the same function as a menu row counts as a use of it.
+    pub(crate) fn running(workspace: Workspace, command: &UiCommand) -> Option<Self> {
+        Self::all().find(|row| row.workspace() == Some(workspace) && row.command() == *command)
+    }
+
+    /// Whether the row, just run, was used: a tool row's command toggles, so
+    /// a click that put its tool down, or that the tool refused, is not.
+    pub(crate) fn was_used(self, editor: &EditorState) -> bool {
+        match self {
+            Self::Tool(tool) => editor.active_tool == tool,
+            _ => true,
+        }
+    }
+
+    /// Whether the row, just run, joins the recent functions: used, and not
+    /// refused for want of a project.
+    pub(crate) fn kept_as_recent(self, editor: &EditorState, project_open: bool) -> bool {
+        self.was_used(editor) && (project_open || !self.needs_project())
     }
 
     /// The row's name in a saved recent list: fixed words rather than the
@@ -755,6 +1220,86 @@ impl MenuRow {
             Self::PointCloudTin => "ws-menubar-point-cloud-create-triangulation",
             Self::PointCloudJoin => "ws-menubar-point-cloud-join",
             Self::PointCloudClassify => "ws-menubar-point-cloud-classify",
+            Self::CleanStrings => "cmd-string-clean-clean-strings",
+            Self::ClipToSurface => "ws-menubar-triangulation-clip-to-surface",
+            Self::Tool(tool) => match tool {
+                ActiveTool::MakePoint => "common-create-point",
+                ActiveTool::MakeLine => "common-create-line",
+                ActiveTool::MakePoly => "common-create-polyline",
+                ActiveTool::MakeCircle => "common-create-circle",
+                ActiveTool::MakeText => "toolbars-create-text",
+                ActiveTool::Move => "common-move-design",
+                ActiveTool::OffsetElement => "common-offset",
+                ActiveTool::RelimitLine => "common-relimit-line",
+                ActiveTool::Bezier => "toolbars-bezier-polyline",
+                ActiveTool::Chamfer => "toolbars-chamfer-polyline-corners",
+                ActiveTool::FuseIntoPolyline => "toolbars-fuse-polylines",
+                ActiveTool::SplitAtPoints => "toolbars-split-polyline-points",
+                ActiveTool::SplitAtCrossings => "ws-menubar-geology-split-at-crossings",
+                ActiveTool::RemoveBetweenCrossings => "ws-menubar-geology-remove-between-crossings",
+                ActiveTool::ExplodePolyline => "toolbars-explode-polyline-lines",
+                ActiveTool::ExplodePolylineToPoints => "ws-menubar-geology-explode-to-points",
+                ActiveTool::DeletePoints => "toolbars-delete-points",
+                ActiveTool::EditVertex => "toolbars-edit-vertex",
+                ActiveTool::InsertPoint => "ws-menubar-geology-insert-point",
+                ActiveTool::FillSegment => "ws-menubar-geology-fill-segment",
+                ActiveTool::DrapeToTopology => "common-drape-topology",
+                ActiveTool::MeasureDistance => "toolbars-measure-distance",
+                ActiveTool::MeasureBatterAngle => "toolbars-strike-dip",
+                // No row arms these; a tool joining the table needs its own
+                // key here, so the match names every tool.
+                ActiveTool::None
+                | ActiveTool::Hide
+                | ActiveTool::MoveCollar
+                | ActiveTool::RotateCollar
+                | ActiveTool::TieHoles
+                | ActiveTool::SetInitiationPoint
+                | ActiveTool::ChargeHoles
+                | ActiveTool::PickRotationCentre
+                | ActiveTool::PitDesign
+                | ActiveTool::VerticalSlice => "",
+            },
+            Self::GeologyInsertAtCrossings => "ws-menubar-geology-insert-at-crossings",
+            Self::GeologyInsertAtElevation => "ws-menubar-geology-insert-at-elevation",
+            Self::GeologyCleanStrings => "ws-menubar-geology-clean-strings",
+            Self::GeologySetAxis(Axis::X) => "ws-menubar-geology-move-to-x",
+            Self::GeologySetAxis(Axis::Y) => "ws-menubar-geology-move-to-y",
+            Self::GeologySetAxis(Axis::Z) => "ws-menubar-geology-move-to-z",
+            Self::GeologyCreateTriangulation => "ws-menubar-geology-create-triangulation",
+            Self::InsertAtSpacing => "ws-menubar-geology-insert-at-spacing",
+            Self::Reverse => "toolbars-reverse-strings",
+            Self::DrapeAlongTriangles => "ws-menubar-geology-drape-along-triangles",
+            Self::Thin => "ws-menubar-geology-thin",
+            Self::Smooth => "ws-menubar-geology-smooth",
+            Self::SmoothSurface => "ws-menubar-geology-smooth-surface",
+            Self::DifferenceSurfaces => "ws-menubar-geology-difference-surfaces",
+            Self::CleanSurface => "ws-menubar-geology-clean-surface",
+            Self::MergeSurfaces => "ws-menubar-geology-merge-surfaces",
+            Self::RemoveLastVertex => "ws-menubar-geology-remove-last-vertex",
+            Self::NextVertex => "ws-menubar-geology-next-vertex",
+            Self::CopyAlongString => "ws-menubar-geology-copy-along-string",
+            Self::CarryOnString => "ws-menubar-geology-carry-on-string",
+            Self::RedrawRun => "ws-menubar-geology-redraw-run",
+            Self::DragVertex => "ws-menubar-geology-drag-vertex",
+            Self::NudgeRl => "ws-menubar-geology-nudge-rl",
+            Self::SurfaceLines => "ws-menubar-geology-surface-lines",
+            Self::SaveSurfaceLines => "ws-menubar-geology-save-surface-lines",
+            Self::ThicknessPoints => "ws-menubar-modelling-thickness-points",
+            Self::ThicknessSurfaces => "ws-menubar-modelling-thickness-surfaces",
+            Self::ModellingClipToSurface => "ws-menubar-modelling-clip-to-surface",
+            Self::BuildPrismoidGrid => "ws-menubar-modelling-build-prismoid-grid",
+            Self::BuildStrata => "ws-menubar-modelling-build-strata",
+            Self::BlockModelFromPrismoidGrid => "ws-menubar-modelling-block-model-from-prismoid-grid",
+            Self::RegularBlockModel => "ws-menubar-modelling-regular-block-model",
+            Self::PrismoidQualities => "ws-menubar-modelling-prismoid-qualities",
+            Self::PrismoidGridToSurface => "ws-menubar-modelling-prismoid-grid-to-surface",
+            Self::DifferencePrismoidGrids => "ws-menubar-modelling-difference-prismoid-grids",
+            Self::MisfitAtHoles => "ws-menubar-modelling-misfit-at-holes",
+            Self::MaskPrismoidGridByPolyline => "ws-menubar-modelling-mask-prismoid-grid-polyline",
+            Self::MaskPrismoids => "ws-menubar-modelling-mask-prismoids",
+            Self::UnmaskAllPrismoids => "ws-menubar-modelling-unmask-all-prismoids",
+            Self::TrimPrismoidGrids => "ws-menubar-modelling-trim-prismoid-grids",
+            Self::NewLayer => "ws-menubar-geology-new-layer",
         }
     }
 
@@ -810,7 +1355,14 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
         // Every row is noted as it is run, for the workspace's recent
         // functions list.
         let draw_row = |ui: &mut egui::Ui, row: MenuRow, commands: &mut Vec<UiCommand>| {
-            if ContextMenuAction::new(row.label()).enabled(row.enabled(project)).show(ui).clicked() {
+            let mut action = ContextMenuAction::new(row.label()).enabled(row.enabled(project) && row.ready(editor));
+            if let Some(checked) = row.checked(editor) {
+                action = action.checked(checked);
+            }
+            if let Some(icon) = row.icon(ui) {
+                action = action.icon(icon);
+            }
+            if action.show(ui).clicked() {
                 commands.push(row.command());
                 commands.push(UiCommand::NoteRecentFunction(row));
                 ui.close();
@@ -824,7 +1376,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     }
                     match group.submenu {
                         Some(title) => {
-                            let enabled = group.rows.iter().any(|row| row.enabled(project));
+                            let enabled = group.rows.iter().any(|row| row.enabled(project) && row.ready(editor));
                             context_submenu(ui, &title.label(), enabled, |ui| group.rows.iter().for_each(|row| draw_row(ui, *row, commands)));
                         }
                         None => group.rows.iter().for_each(|row| draw_row(ui, *row, commands)),

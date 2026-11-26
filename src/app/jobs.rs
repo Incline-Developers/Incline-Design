@@ -160,7 +160,16 @@ pub(crate) enum JobKey {
         runtime_id: u32,
     },
     Raster(crate::model::raster::RasterTextureId),
+    /// The drawing of the prismoid grid with this id.
+    PrismoidGrid(crate::model::prismoid_grid::PrismoidGridId),
     Project {
+        runtime_id: u32,
+        document_revision: u64,
+    },
+    /// A Clean Strings or Join run on the active project. Stale once that
+    /// project is not the active one or its document has been edited, so the
+    /// batch it would write never lands on strings that have moved on.
+    StringClean {
         runtime_id: u32,
         document_revision: u64,
     },
@@ -352,6 +361,7 @@ impl<'a> App<'a> {
             JobKey::DrillHoleLoad { runtime_id, .. } => self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id),
             JobKey::ProjectOpen { runtime_id } => self.workspace.projects.iter().any(|project| project.runtime_id == runtime_id),
             JobKey::Raster(id) => self.raster_textures.iter().any(|item| item.id == id),
+            JobKey::PrismoidGrid(id) => self.prismoid_grids.iter().any(|item| item.id == id),
             // Its result is a finished video, wanted whatever moved.
             JobKey::VideoExport => true,
             JobKey::WaterRun(id) => self.water.has(id),
@@ -365,6 +375,10 @@ impl<'a> App<'a> {
                 .iter()
                 .find(|project| project.runtime_id == runtime_id)
                 .is_some_and(|project| project.project.document.revision() == document_revision),
+            JobKey::StringClean { runtime_id, document_revision } => self
+                .workspace
+                .active_project()
+                .is_some_and(|project| project.runtime_id == runtime_id && project.project.document.revision() == document_revision),
             JobKey::HistoryResidency { runtime_id, .. } => self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id),
             JobKey::LayerResidency {
                 layer, runtime_id, content_hash, ..

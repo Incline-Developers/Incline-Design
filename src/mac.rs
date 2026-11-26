@@ -38,6 +38,8 @@ struct MenuState {
     has_project: bool,
     /// Whether each workspace menu row can run, in [`MenuRow::all`] order.
     menu_rows: Vec<bool>,
+    /// Each switch row's tick, in the same order; `None` for the others.
+    menu_checks: Vec<Option<bool>>,
     /// Whether the active project is a file that can be shown in Finder.
     has_project_file: bool,
     /// The workspace decides which discipline menus are visible and active.
@@ -442,7 +444,8 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     let state = MenuState {
         can_save: project.projects.iter().any(crate::ui::state::UiProjectEntry::needs_save),
         has_project: project.projects.iter().any(|entry| entry.is_active),
-        menu_rows: MenuRow::all().map(|row| row.enabled(project)).collect(),
+        menu_rows: MenuRow::all().map(|row| row.enabled(project) && row.ready(editor)).collect(),
+        menu_checks: MenuRow::all().map(|row| row.checked(editor)).collect(),
         has_project_file: project.active_path.is_some(),
         active_workspace: editor.active_workspace,
         view_toggles: VIEW_TOGGLES.map(|toggle| toggle.get(editor)),
@@ -477,6 +480,11 @@ pub(crate) fn sync_menu_state(editor: &EditorState, project: &UiProjectView) {
     set_enabled(&root, MacMenuAction::ShowProjectInFileManager, state.has_project_file);
     for (index, enabled) in state.menu_rows.iter().enumerate() {
         set_enabled(&root, MacMenuAction::MenuRow(index), *enabled);
+    }
+    for (index, checked) in state.menu_checks.iter().enumerate() {
+        if let Some(checked) = checked {
+            set_checked(&root, MacMenuAction::MenuRow(index), *checked);
+        }
     }
     for (index, checked) in state.view_toggles.iter().enumerate() {
         set_checked(&root, MacMenuAction::ToggleView(index), *checked);

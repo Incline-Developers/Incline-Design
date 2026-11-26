@@ -1138,6 +1138,45 @@ impl<'a> Graphics<'a> {
             editor.tri_create_diagnostic_segments_screen_px.clear();
         }
 
+        // The Next Vertex panel tests a typed point where it would land on
+        // the section.
+        if let Some(panel) = editor.next_vertex_panel.as_mut() {
+            panel.section = self.section_slab();
+        }
+
+        // Rings follow the edits of their strings and their strings' hiding
+        // before they are drawn, then are projected again only when the view
+        // or the rings changed: thousands of them must not cost a frame.
+        editor.settle_string_rings(document);
+        if !editor.string_rings.is_empty() {
+            use std::hash::{Hash, Hasher};
+            let vp = self.view_proj();
+            let slab = self.section_slab();
+            let pixels_per_point = self.scale_factor() as f32 * (editor.ui_size_percent as f32 / 100.0);
+            let ring_px = crate::ui::state::STRING_RING_RADIUS * pixels_per_point;
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            vp.to_cols_array().map(f64::to_bits).hash(&mut hasher);
+            slab.map(|slab| [slab.point.x, slab.point.y, slab.point.z, slab.normal.x, slab.normal.y, slab.normal.z, slab.half_width].map(f64::to_bits))
+                .hash(&mut hasher);
+            (
+                self.size.width,
+                self.size.height,
+                self.viewport_rect.x,
+                self.viewport_rect.y,
+                self.viewport_rect.width,
+                self.viewport_rect.height,
+            )
+                .hash(&mut hasher);
+            ring_px.to_bits().hash(&mut hasher);
+            // Off the window by more than a ring, a ring paints nothing.
+            let margin = ring_px + 4.0;
+            let bounds = [-margin, -margin, self.size.width as f32 + margin, self.size.height as f32 + margin];
+            // A section shows the rings inside its slab.
+            editor.project_string_rings(hasher.finish(), ring_px, bounds, |at| {
+                slab.is_none_or(|slab| slab.contains(at)).then(|| self.world_to_window_px(&vp, at)).flatten()
+            });
+        }
+
         if editor.offset_awaiting_side_pick {
             let vp = self.view_proj();
             // A clipped vertex must keep its slot so preview ranges stay index-aligned.
@@ -1231,8 +1270,11 @@ impl<'a> Graphics<'a> {
         }
 
         if editor.active_tool == ActiveTool::Chamfer {
-            use crate::app::commands::drawing::chamfer::chamfer_corner;
+            use crate::app::commands::drawing::chamfer::{chamfer_corner_on, chamfers_corner};
             let vp = self.view_proj();
+            let slab = (editor.slice_mode_enabled && editor.active_workspace.edits_in_slice_view())
+                .then(|| self.section_slab())
+                .flatten();
             // Preview + gizmo geometry is a foreground overlay offset from the
             // source corner, so keep it drawable even when a tightly-fitted
             // depth slab would reject the displaced point.
@@ -1240,18 +1282,18 @@ impl<'a> Graphics<'a> {
 
             let corner_data = editor.chamfer_poly_id.and_then(|oid| {
                 let ci = editor.chamfer_corner_index?;
-                if let Some(Object::Polyline { verts, closed: true, .. }) = document.get_object(oid) {
-                    (verts.len() >= 3 && ci < verts.len()).then(|| (verts.clone(), ci))
+                if let Some(Object::Polyline { verts, closed, .. }) = document.get_object(oid) {
+                    chamfers_corner(verts, *closed, ci, slab.is_some()).then(|| (verts.clone(), ci))
                 } else {
                     None
                 }
             });
 
             if let Some((ref verts, ci)) = corner_data {
-                use crate::app::commands::drawing::chamfer::chamfer_max_radius;
-                editor.chamfer_max_radius = chamfer_max_radius(verts, ci);
+                use crate::app::commands::drawing::chamfer::chamfer_max_radius_on;
+                editor.chamfer_max_radius = chamfer_max_radius_on(verts, ci, slab);
                 editor.chamfer_radius = editor.chamfer_radius.min(editor.chamfer_max_radius);
-                let chamfered = chamfer_corner(verts, ci, editor.chamfer_radius, editor.chamfer_segments);
+                let chamfered = chamfer_corner_on(verts, ci, editor.chamfer_radius, editor.chamfer_segments, slab);
                 editor.chamfer_preview_screen_px = chamfered.iter().map(|v| project(v.pos)).collect();
                 editor.chamfer_hover_corner_px = None;
 
@@ -1270,11 +1312,14 @@ impl<'a> Graphics<'a> {
                 };
                 editor.chamfer_gizmo_bisector_px = edge_stub_dir;
 
-                let edge_2d = DVec2::new(next.x - corner.x, next.y - corner.y);
+                // The handle runs along the edge, in the radius's plane.
+                let (corner_k, next_k) = slab.map_or((corner, next), |slab| (slab.frame_coords(corner), slab.frame_coords(next)));
+                let edge_2d = DVec2::new(next_k.x - corner_k.x, next_k.y - corner_k.y);
                 let edge_len = edge_2d.length();
                 if edge_len > 1e-10 {
                     let edge_dir = edge_2d / edge_len;
-                    let handle_world = DVec3::new(corner.x + edge_dir.x * editor.chamfer_radius, corner.y + edge_dir.y * editor.chamfer_radius, corner.z);
+                    let handle_k = DVec3::new(corner_k.x + edge_dir.x * editor.chamfer_radius, corner_k.y + edge_dir.y * editor.chamfer_radius, corner_k.z);
+                    let handle_world = slab.map_or(handle_k, |slab| slab.world_from_frame(handle_k));
                     editor.chamfer_gizmo_corner_px = c_px;
                     editor.chamfer_gizmo_handle_px = project(handle_world);
                     if let (Some(cp), Some(np)) = (c_px, n_px) {
@@ -1324,7 +1369,11 @@ impl<'a> Graphics<'a> {
                     let n = verts.len();
                     editor.bezier_poly_closed = *closed;
 
-                    editor.bezier_poly_verts_screen_px = verts.iter().map(|v| project(v.pos)).collect();
+                    let slab = self.section_slab();
+                    editor.bezier_poly_verts_screen_px = verts
+                        .iter()
+                        .map(|v| slab.is_none_or(|slab| slab.contains(v.pos)).then(|| project(v.pos)).flatten())
+                        .collect();
 
                     if let [Some(vi), Some(vj)] = editor.bezier_selected_verts
                         && vi < n
@@ -1379,9 +1428,13 @@ impl<'a> Graphics<'a> {
 
         if editor.active_tool == ActiveTool::SplitAtPoints {
             let vp = self.view_proj();
+            let slab = self.section_slab();
             if let Some(oid) = editor.split_poly_id {
                 if let Some(Object::Polyline { verts, .. }) = document.get_object(oid) {
-                    editor.split_poly_verts_screen_px = verts.iter().map(|v| self.world_to_window_px(&vp, v.pos)).collect();
+                    editor.split_poly_verts_screen_px = verts
+                        .iter()
+                        .map(|v| slab.is_none_or(|slab| slab.contains(v.pos)).then(|| self.world_to_window_px(&vp, v.pos)).flatten())
+                        .collect();
                 } else {
                     editor.split_poly_verts_screen_px.clear();
                 }

@@ -24,6 +24,7 @@ pub(crate) mod main_menu;
 pub(crate) mod panel_window;
 pub(crate) mod planning_setup;
 pub(crate) mod planning_tabs;
+pub(crate) mod prismoid_inspector;
 pub(crate) mod products;
 pub(crate) mod properties;
 pub(crate) mod schedule_animation;

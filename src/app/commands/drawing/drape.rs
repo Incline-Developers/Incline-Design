@@ -1,17 +1,20 @@
 use std::collections::HashSet;
 
-use glam::DVec3;
+use glam::{DVec2, DVec3};
 
 use crate::{
-    app::App,
+    app::{App, jobs::JobKey},
     i18n::tr,
     logging::CommandReportSpec,
     model::{
-        Command, Object, ObjectId, SceneEntityId,
+        Command, Object, ObjectId, PolyVertex, SceneEntityId,
+        formats::mesh_data::Triangulation,
+        kernel::{self, SegSeg},
+        spatial::TriangleBvh,
         triangulation::{OpenTriangulation, TriangulationId},
     },
     ui::state::{ActiveTool, DrapePhase},
-    userspace_warn,
+    userspace_log, userspace_warn,
 };
 
 impl<'a> App<'a> {
@@ -48,7 +51,7 @@ impl<'a> App<'a> {
                 self.invalidate_geometry();
             }
             DrapePhase::Topologies => {
-                let loaded_ids: HashSet<_> = self.triangulations.iter().map(|topology| topology.id).collect();
+                let loaded_ids: HashSet<_> = self.triangulations.iter().filter(|topology| topology.state.loaded).map(|topology| topology.id).collect();
                 let topology_ids: Vec<_> = self
                     .editor
                     .selected_handles
@@ -67,7 +70,20 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Arm Drape so that each string also follows the surface between its
+    /// vertices; a Drape already armed keeps its selection step.
+    pub(crate) fn arm_drape_along_triangles(&mut self) {
+        if self.editor.active_tool != ActiveTool::DrapeToTopology {
+            self.set_active_tool_from_toolbar(ActiveTool::DrapeToTopology);
+        }
+        if self.editor.active_tool == ActiveTool::DrapeToTopology {
+            self.editor.drape_along_triangles = true;
+        }
+    }
+
     pub(crate) fn cancel_drape(&mut self) {
+        self.editor.drape_along_triangles = false;
+        self.drape_waiting_on.clear();
         self.editor.drape_phase = DrapePhase::Designs;
         self.editor.drape_object_ids.clear();
         self.editor.selection_box_start_px = None;
@@ -77,9 +93,148 @@ impl<'a> App<'a> {
         self.invalidate_geometry();
     }
 
+    /// A big surface has no tree until asked, and building one here would
+    /// hold the frame. Build the chosen surfaces' trees in the background, all
+    /// but those another job or a query is already building, and wait on all
+    /// of them to drape. The build's job resumes the drape when it lands; a
+    /// tree built elsewhere is looked for by `poll_drape_waiting_elsewhere`.
+    /// True while it waits.
+    fn index_surfaces_for_drape(&mut self, selected_ids: &HashSet<TriangulationId>) -> bool {
+        let unbuilt: Vec<_> = self
+            .triangulations
+            .iter()
+            .filter(|topology| selected_ids.contains(&topology.id) && !topology.spatial.is_built())
+            .map(|topology| (topology.id, (*topology.spatial).clone()))
+            .collect();
+        if unbuilt.is_empty() {
+            return false;
+        }
+        let unbuilt_count = unbuilt.len();
+        let claimed: Vec<_> = unbuilt
+            .into_iter()
+            .filter_map(|(id, spatial)| spatial.claim_build().map(|claim| (id, spatial, claim)))
+            .collect();
+        self.drape_waits_elsewhere = claimed.len() < unbuilt_count;
+        if !claimed.is_empty() {
+            let ids: Vec<_> = claimed.iter().map(|(id, _, _)| *id).collect();
+            let keys: Vec<_> = ids.iter().map(|id| JobKey::Triangulation(*id)).collect();
+            self.spawn_job(
+                tr!("cmd-drape-indexing-surfaces"),
+                keys,
+                move |_cancel| {
+                    for (_, spatial, claim) in claimed {
+                        spatial.ensure_built();
+                        drop(claim);
+                    }
+                    Ok(())
+                },
+                move |app, result| match result {
+                    Ok(()) => app.resume_waiting_drape(),
+                    Err(error) => {
+                        userspace_warn!("{error}");
+                        if app.drape_waiting_on.iter().any(|id| ids.contains(id)) {
+                            app.drape_waiting_on.clear();
+                        }
+                    }
+                },
+            );
+        }
+        let mut waiting: Vec<_> = selected_ids.iter().copied().collect();
+        waiting.sort_by_key(|id| id.0);
+        self.drape_waiting_on = waiting;
+        // A tree built elsewhere wakes nothing when it lands: one frame to
+        // start looking.
+        if self.drape_waits_elsewhere {
+            self.redraw_requested = true;
+        }
+        true
+    }
+
+    /// A Drape Following Triangles waiting on its surfaces' trees drapes once
+    /// they are all built, and is dropped, with a line in the console, if its
+    /// tool or the surfaces chosen changed meanwhile. Called when the drape's
+    /// build job lands, and by [`App::poll_drape_waiting_elsewhere`].
+    pub(crate) fn resume_waiting_drape(&mut self) {
+        if self.drape_waiting_on.is_empty() {
+            return;
+        }
+        let chosen = std::mem::take(&mut self.drape_waiting_on);
+        let loaded: HashSet<_> = self.triangulations.iter().filter(|topology| topology.state.loaded).map(|topology| topology.id).collect();
+        // An unloaded surface in the selection was never one the drape took.
+        let selected = self.editor.selected_handles.iter().filter(|handle| match handle {
+            SceneEntityId::Triangulation(id) => loaded.contains(id),
+            _ => true,
+        });
+        let still_chosen = self.editor.active_tool == ActiveTool::DrapeToTopology
+            && self.editor.drape_phase == DrapePhase::Topologies
+            && self.editor.drape_along_triangles
+            && chosen.iter().all(|id| loaded.contains(id))
+            && same_surfaces_selected(selected, &chosen);
+        if !still_chosen {
+            userspace_log!("{}", tr!("cmd-drape-dropped-while-indexing"));
+            return;
+        }
+        self.apply_drape_to_topologies(&chosen);
+    }
+
+    /// Once a frame: the one wait kept beside the job queue. A tree this drape
+    /// builds itself resumes it from the job. Leo's background build for a
+    /// query has no job whose apply could, so while the drape waits on a tree
+    /// another builder claimed, or on one no job builds any more (its own job
+    /// cancelled, as unloading or deleting the surface does), this looks again
+    /// each frame, as it does once the tool is put down without the drape
+    /// being cancelled. A tree no job is building shows the wait in the status
+    /// bar.
+    pub(crate) fn poll_drape_waiting_elsewhere(&mut self) {
+        if self.drape_waiting_on.is_empty() && self.drape_wait_shown.is_none() {
+            return;
+        }
+        // A waiting surface gone or unloaded, or unbuilt with no job building
+        // it; or no job left on any, as after a cancelled job built its tree.
+        // A job still running on a waiting surface leaves the rest to it.
+        let has_job = |id: &TriangulationId| self.job_pending(&JobKey::Triangulation(*id));
+        let unworked = self.drape_waiting_on.iter().any(|id| {
+            self.triangulations
+                .iter()
+                .find(|topology| topology.id == *id)
+                .is_none_or(|topology| !topology.state.loaded || (!has_job(id) && !topology.spatial.is_built()))
+        });
+        let stalled = unworked || !self.drape_waiting_on.iter().any(has_job);
+        // Put down by a project switch, which does not cancel the drape.
+        let abandoned = !self.drape_waiting_on.is_empty()
+            && (self.editor.active_tool != ActiveTool::DrapeToTopology || self.editor.drape_phase != DrapePhase::Topologies || !self.editor.drape_along_triangles);
+        if self.drape_waits_elsewhere || stalled || abandoned {
+            self.resume_waiting_drape();
+        }
+        let quiet = self
+            .triangulations
+            .iter()
+            .any(|topology| self.drape_waiting_on.contains(&topology.id) && !topology.spatial.is_built() && !self.job_pending(&JobKey::Triangulation(topology.id)));
+        let shown = self.drape_wait_shown.take();
+        self.drape_wait_shown = self.show_build_wait(shown, quiet, || tr!("cmd-drape-indexing-surfaces"));
+    }
+
     fn apply_drape_to_topologies(&mut self, topology_ids: &[TriangulationId]) {
+        // This confirm stands in for any earlier one still waiting; it waits
+        // again below if a tree is still missing.
+        self.drape_waiting_on.clear();
+        let selected_ids: HashSet<_> = topology_ids.iter().copied().collect();
+        if !self.triangulations.iter().any(|topology| selected_ids.contains(&topology.id)) {
+            userspace_warn!("{}", tr!("cmd-drape-selected-topologies-no-longer-loaded"));
+            return;
+        }
+
+        let along_triangles = self.editor.drape_along_triangles;
+        if along_triangles && self.index_surfaces_for_drape(&selected_ids) {
+            return;
+        }
         let object_ids = self.editor.drape_object_ids.clone();
-        let Some((changed_objects, intersected_vertices, changed_vertices)) = self.drape_objects(&object_ids, topology_ids) else {
+        let draped = if along_triangles {
+            self.drape_objects_following(&object_ids, topology_ids, true)
+        } else {
+            self.drape_objects(&object_ids, topology_ids)
+        };
+        let Some((changed_objects, intersected_vertices, changed_vertices)) = draped else {
             userspace_warn!("{}", tr!("cmd-drape-selected-topologies-no-longer-loaded"));
             return;
         };
@@ -117,6 +272,15 @@ impl<'a> App<'a> {
     /// step: the objects changed, the vertices that met a surface and the
     /// vertices that moved. `None` if none of the surfaces is loaded.
     pub(crate) fn drape_objects(&mut self, object_ids: &[ObjectId], topology_ids: &[TriangulationId]) -> Option<(usize, usize, usize)> {
+        self.drape_objects_following(object_ids, topology_ids, false)
+    }
+
+    /// [`App::drape_objects`], and with `along_triangles` each polyline also
+    /// gets a vertex wherever a span crosses a triangle edge, so it follows
+    /// the surface between its vertices. The surfaces' trees must be built
+    /// first (see `index_surfaces_for_drape`) or the crossings are found the
+    /// slow way.
+    fn drape_objects_following(&mut self, object_ids: &[ObjectId], topology_ids: &[TriangulationId], along_triangles: bool) -> Option<(usize, usize, usize)> {
         let selected_ids: HashSet<_> = topology_ids.iter().copied().collect();
         let surfaces: Vec<_> = self.triangulations.iter().filter(|topology| selected_ids.contains(&topology.id)).collect();
         if surfaces.is_empty() {
@@ -125,11 +289,15 @@ impl<'a> App<'a> {
 
         let mut intersected_vertices = 0usize;
         let mut changed_vertices = 0usize;
+        let meshes: Vec<_> = surfaces.iter().map(|surface| (&*surface.mesh, &*surface.spatial)).collect();
         let replacements: Vec<_> = object_ids
             .iter()
             .filter_map(|id| {
                 let before = self.active_document().get_object(*id)?.clone();
                 let mut after = before.clone();
+                if along_triangles && let Object::Polyline { verts, closed, .. } = &mut after {
+                    *verts = with_triangle_edge_vertices(verts, *closed, &meshes);
+                }
                 let (intersected, changed) = drape_object(&mut after, &surfaces);
                 intersected_vertices += intersected;
                 changed_vertices += changed;
@@ -143,6 +311,58 @@ impl<'a> App<'a> {
         }
         Some((changed_objects, intersected_vertices, changed_vertices))
     }
+}
+
+/// `verts` with a vertex added wherever a straight span crosses a triangle
+/// edge of `surfaces` in plan, so a drape lays the string on the surface
+/// everywhere rather than only at its vertices. Bulged spans are left as
+/// they are. The new vertices sit on the span; the drape sets their height.
+fn with_triangle_edge_vertices(verts: &[PolyVertex], closed: bool, surfaces: &[(&Triangulation, &TriangleBvh)]) -> Vec<PolyVertex> {
+    let count = verts.len();
+    if count < 2 {
+        return verts.to_vec();
+    }
+    let spans = if closed { count } else { count - 1 };
+    let mut result = Vec::with_capacity(count);
+    let mut stack = Vec::new();
+    for index in 0..spans {
+        let start = verts[index];
+        let end = verts[(index + 1) % count];
+        result.push(start);
+        if start.bulge.abs() > f64::EPSILON {
+            continue;
+        }
+        let (a, b) = (start.pos.truncate(), end.pos.truncate());
+        let mut crossings = Vec::new();
+        for (mesh, spatial) in surfaces {
+            let mesh_vertices = mesh.vertices();
+            let corner = |vertex: usize| DVec2::new(mesh_vertices[vertex].x, mesh_vertices[vertex].y);
+            spatial.for_each_xy_bounds_candidate_index_with_stack(a.min(b), a.max(b), &mut stack, |triangle| {
+                let Some(face) = mesh.face(triangle) else {
+                    return;
+                };
+                let [p, q, r] = face.indices_zero_based();
+                for (c, d) in [(p, q), (q, r), (r, p)] {
+                    if let SegSeg::Crossing { t, .. } | SegSeg::Touching { t, .. } = kernel::segment_segment(a, b, corner(c), corner(d)) {
+                        crossings.push(t);
+                    }
+                }
+            });
+        }
+        // Kept apart by the ground distance two points count as one.
+        let length = (b - a).length();
+        crossings.retain(|t| *t * length > kernel::XY_TOL && (1.0 - *t) * length > kernel::XY_TOL);
+        crossings.sort_by(f64::total_cmp);
+        crossings.dedup_by(|later, earlier| (*later - *earlier).abs() * length <= kernel::XY_TOL);
+        result.extend(crossings.into_iter().map(|t| PolyVertex {
+            pos: start.pos.lerp(end.pos, t),
+            bulge: 0.0,
+        }));
+    }
+    if !closed {
+        result.push(verts[count - 1]);
+    }
+    result
 }
 
 /// Move every stored design vertex vertically to the uppermost selected
@@ -189,4 +409,17 @@ pub(crate) fn uppermost_topology_z(point: DVec3, surfaces: &[&OpenTriangulation]
             surface.spatial.ray_hit(&surface.mesh, DVec3::new(point.x, point.y, origin_z), -DVec3::Z).map(|hit| hit.z)
         })
         .max_by(f64::total_cmp)
+}
+
+/// Whether the selected surfaces are exactly `chosen`: a surface added to the
+/// selection while the trees build is not one the drape was asked for.
+fn same_surfaces_selected<'h>(selected: impl IntoIterator<Item = &'h SceneEntityId>, chosen: &[TriangulationId]) -> bool {
+    let selected: HashSet<_> = selected
+        .into_iter()
+        .filter_map(|handle| match handle {
+            SceneEntityId::Triangulation(id) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    selected == chosen.iter().copied().collect()
 }

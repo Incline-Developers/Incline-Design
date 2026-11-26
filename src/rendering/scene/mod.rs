@@ -13,6 +13,7 @@ pub(crate) mod overlays;
 pub(crate) mod point_buffer_arena;
 pub(crate) mod point_cloud_cache;
 pub(crate) mod raster_cache;
+pub(crate) mod section_surface_lines;
 pub(crate) mod static_strokes;
 
 pub(crate) use design_points::DesignPointGpuCache;

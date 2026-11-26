@@ -1,25 +1,36 @@
 //! Docked panel on the window's right edge, showing everything known about
 //! the currently inspected hole.
 //!
-//! Has a Data tab (summary and interval table) and a Log tab (strip log);
-//! the Log tab's widget lives in [`crate::ui::widgets::borehole_log::BoreholeLog`].
+//! Has a Data tab (summary and interval table), a Log tab (strip log) and a
+//! Column tab (the hole's seams beside the set's strat column and its
+//! working sections); the Log tab's widget lives in
+//! [`crate::ui::widgets::borehole_log::BoreholeLog`].
 
 use crate::{
     i18n::tr,
     model::{
         SceneEntityId,
-        drill_hole::{DrillHoleId, OpenDrillHoleDataset},
+        drill_hole::{
+            BoundaryMove, BoundarySide, CorrectionNote, DrillField, DrillFieldKind, DrillHole, DrillHoleId, DrillHoleRef, OpenDrillHoleDataset, RenameScope, UNKNOWN_NAME,
+            WorkingSection, field_codes, offered_codes, section_color_key,
+        },
         geophysics::{HoleView, LinkState},
+        strat_order::{FlagKind, FlagLevel, HoleFlag, flagged_holes, is_repeat_code},
     },
     ui::{
         EditorState,
-        state::{BoreholeInspectorTab, UiCommand},
+        elements::properties::read_only_row,
+        state::{
+            BoreholeInspectorTab, BoundaryMoveDraft, DepthField, InsertCodeField, InsertSiblingField, IntervalDeleteDraft, IntervalInsertDraft, NameShiftDraft, SeamRenameDraft,
+            StratCheckReport, UiCommand,
+        },
         themed_icon, unthemed_icon,
         widgets::{
-            borehole_log::DrillHoleProperties,
+            borehole_log::{BoundaryPick, DrillHoleProperties, InsertPick, NameShift, SeamRename, strat_runs},
             collapsible_section::CollapsibleSection,
             hint::Hint,
-            menu::{self, MenuButton, MenuFieldCombo},
+            menu::{self, MenuButton, MenuField, MenuFieldCombo},
+            toolbar::GROUP_CORNER_RADIUS,
         },
     },
 };
@@ -116,11 +127,13 @@ fn draw_body(
     match editor.borehole_inspector_tab {
         BoreholeInspectorTab::Data => {
             // Columns come from the dataset, so every hole shows the same.
-            let properties = DrillHoleProperties::new(("borehole_inspector", dataset.id, hole_index), hole, &dataset.dataset.fields);
+            let properties = DrillHoleProperties::new(("borehole_inspector", dataset.id, hole_index), hole, &dataset.dataset.fields)
+                .deleted_rows(dataset.dataset.deleted_logged_rows(hole_index))
+                .total_depth_row(dataset.dataset.records_total_depth());
             CollapsibleSection::new(egui::Id::unique("borehole_inspector_summary"), tr!("borehole-inspector-summary"))
                 .default_open(true)
                 .show(ui, |ui| ui.push_id((dataset.id, hole_index), |ui| properties.show_summary(ui)));
-            if !hole.intervals.is_empty() {
+            if properties.has_rows() {
                 ui.add_space(4.0);
                 CollapsibleSection::new(egui::Id::unique("borehole_inspector_intervals"), tr!("viewport-interval-data"))
                     .default_open(true)
@@ -133,9 +146,10 @@ fn draw_body(
             }
         }
         BoreholeInspectorTab::Log => {
+            let curve_names = dataset.geophysics.as_deref().map(crate::model::geophysics::GeophysicsLink::curve_names);
             CollapsibleSection::new(egui::Id::unique("borehole_inspector_log_display"), tr!("borehole-inspector-display"))
                 .default_open(true)
-                .show(ui, |ui| draw_log_field_pickers(ui, editor, dataset, commands));
+                .show(ui, |ui| draw_log_field_pickers(ui, editor, dataset, curve_names, commands));
             ui.add_space(4.0);
             // Matched on the hole id exactly as the dataset spells it.
             let view = well_logs.view(dataset, &hole.dhid);
@@ -161,18 +175,688 @@ fn draw_body(
             draw_geophysics_note(ui, &view, dataset.id, commands);
             // The log's wheel zooms rather than scrolling an enclosing area,
             // so it takes the rest of the panel instead of sitting in one.
-            let saved = crate::ui::widgets::borehole_log::BoreholeLog::new(("borehole_log", dataset.id), hole, dataset)
+            // While a roof or floor of this hole is being moved, the log
+            // draws the move at the depth typed, and a guide across it there;
+            // while any correction dialog is open, it offers no other.
+            let moving = editor
+                .boundary_move_dialog
+                .as_ref()
+                .filter(|draft| draft.dataset == dataset.id && draft.revision == dataset.state.revision() && draft.edit.hole == hole_index && draft.edit.dhid == hole.dhid);
+            let preview = moving.and_then(|draft| draft.preview.clone());
+            let guide = moving.map(|draft| draft.edit.to);
+            let output = crate::ui::widgets::borehole_log::BoreholeLog::new(("borehole_log", dataset.id), preview.as_deref().unwrap_or(hole), dataset)
                 .strat_field(strat_choice_for(editor, dataset))
                 .well_logs(logs, linked)
                 .reading(reading)
                 .logged_depths(logged)
+                .curves(curve_choice_for(editor, dataset.id, curve_names.unwrap_or_default()))
                 .well_log_style(editor.well_log_style)
+                .guide_depth(guide)
+                .previewing(preview.as_ref().map(|_| hole))
+                .corrections_locked(editor.correction_dialog_open())
                 .show(ui);
-            if let Some(style) = saved {
+            if let Some(style) = output.saved {
                 commands.push(UiCommand::SetWellLogStyle(style));
+            }
+            if let Some(rename) = output.rename {
+                editor.seam_rename_dialog = Some(seam_rename_draft(dataset, hole_index, rename));
+            }
+            if let Some(shift) = output.shift {
+                editor.name_shift_dialog = Some(name_shift_draft(dataset, hole_index, shift));
+            }
+            if let Some(pick) = output.boundary {
+                editor.boundary_move_dialog = boundary_move_draft(dataset, hole_index, &pick);
+            }
+            if let Some(pick) = output.insert {
+                editor.interval_insert_dialog = interval_insert_draft(dataset, hole_index, pick);
+            }
+            // Built from the row as it stood at the right click, which the
+            // dialog then checks is still the one there.
+            if let Some((field, interval, row)) = output.delete {
+                editor.interval_delete_dialog = Some(IntervalDeleteDraft {
+                    dataset: dataset.id,
+                    revision: dataset.state.revision(),
+                    hole: hole_index,
+                    dhid: hole.dhid.clone(),
+                    interval,
+                    description: crate::ui::dialogs::drill_hole::interval_description(&row, &field),
+                    row,
+                    field,
+                    reason: String::new(),
+                });
+            }
+        }
+        BoreholeInspectorTab::Column => {
+            CollapsibleSection::new(egui::Id::unique("borehole_inspector_column_display"), tr!("borehole-inspector-display"))
+                .default_open(true)
+                .show(ui, |ui| draw_strat_field_picker(ui, editor, dataset));
+            ui.add_space(4.0);
+            let chosen = strat_choice_for(editor, dataset);
+            match crate::model::strat_order::strat_field_of(dataset, chosen.as_deref()) {
+                // Scrolls in what the panel has left, so a long column never
+                // runs off the bottom of the window.
+                Some(field) => {
+                    egui::ScrollArea::vertical()
+                        .id_salt(("borehole_inspector_column_scroll", dataset.id))
+                        .max_height(ui.available_height().max(0.0))
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            draw_strat_check(ui, editor, dataset, field, commands);
+                            ui.add_space(4.0);
+                            draw_strat_column(ui, editor, dataset, hole, hole_index, field, commands);
+                            draw_strat_flags(ui, editor, dataset, field, commands);
+                        });
+                }
+                None => {
+                    ui.label(egui::RichText::new(tr!("borehole-inspector-no-categorical-field")).weak());
+                }
             }
         }
     }
+}
+
+/// Most flagged holes listed at once; the count covers them all.
+const FLAG_LIST_LIMIT: usize = 500;
+/// Tallest the flagged holes' list grows before it scrolls on its own.
+const FLAG_LIST_HEIGHT: f32 = 240.0;
+
+/// The last check of `field` in `dataset`, when it read the holes as they
+/// are now; a check of holes since edited is no answer.
+fn current_strat_check<'a>(editor: &'a EditorState, dataset: &OpenDrillHoleDataset, field: &DrillField) -> (Option<&'a StratCheckReport>, bool) {
+    let report = editor.strat_check(dataset.id, &field.key);
+    let current = report.is_some_and(|report| std::ptr::eq(report.checked.as_ptr(), std::sync::Arc::as_ptr(&dataset.dataset)));
+    (report, current)
+}
+
+/// The Check section: the button, what the last check found, and when the
+/// order most holes give differs from the column, the two side by side
+/// with an Accept that sets the column, one undo step.
+fn draw_strat_check(ui: &mut egui::Ui, editor: &mut EditorState, dataset: &OpenDrillHoleDataset, field: &DrillField, commands: &mut Vec<UiCommand>) {
+    let column = dataset.color.strat_column(&field.key);
+    let (report, current) = current_strat_check(editor, dataset, field);
+    let flags = report.filter(|_| current).and_then(|report| report.flags_for(column));
+    let title = match flags {
+        Some(flags) => tr!("borehole-inspector-check-flagged", count = flagged_holes(flags).to_string()),
+        None => tr!("borehole-inspector-check"),
+    };
+    let mut comparing: Option<bool> = None;
+    CollapsibleSection::new(egui::Id::unique("borehole_inspector_check"), title)
+        .default_open(true)
+        .show(ui, |ui| {
+            if ui
+                .add(MenuButton::new(tr!("borehole-inspector-check-column")))
+                .hint(tr!("borehole-inspector-check-column-hint"))
+                .clicked()
+            {
+                commands.push(UiCommand::CheckStratColumn {
+                    id: dataset.id,
+                    field: field.key.clone(),
+                });
+            }
+            let Some(report) = report else {
+                menu::menu_note(ui, tr!("borehole-inspector-check-not-run"));
+                return;
+            };
+            if !current {
+                menu::menu_note(ui, tr!("borehole-inspector-check-stale"));
+                return;
+            }
+            let Some(order) = &report.order else {
+                menu::menu_note(ui, tr!("borehole-inspector-check-too-many-codes"));
+                return;
+            };
+            let mut summary = match flags {
+                Some(flags) => tr!(
+                    "borehole-inspector-check-summary",
+                    holes = report.holes.to_string(),
+                    flagged = flagged_holes(flags).to_string()
+                ),
+                None => tr!("borehole-inspector-check-column-changed"),
+            };
+            if report.overruled > 0 {
+                summary = format!("{summary} {}", tr!("borehole-inspector-check-overruled", count = report.overruled.to_string()));
+            }
+            menu::menu_note(ui, summary);
+            if column.is_empty() || order.as_slice() == column {
+                return;
+            }
+            if !report.comparing {
+                menu::menu_note(ui, tr!("borehole-inspector-check-order-differs"));
+                if ui.add(MenuButton::new(tr!("borehole-inspector-check-show-differences"))).clicked() {
+                    comparing = Some(true);
+                }
+                return;
+            }
+            draw_order_differences(ui, dataset, column, order);
+            ui.horizontal(|ui| {
+                if ui.add(MenuButton::new(tr!("borehole-inspector-check-accept")).primary()).clicked() {
+                    commands.push(UiCommand::SetStratColumn {
+                        id: dataset.id,
+                        field: field.key.clone(),
+                        codes: order.clone(),
+                    });
+                    comparing = Some(false);
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() {
+                    comparing = Some(false);
+                }
+            });
+        });
+    if let Some(open) = comparing
+        && let Some(report) = editor.strat_checks.iter_mut().find(|report| report.dataset == dataset.id && report.field == field.key)
+    {
+        report.comparing = open;
+    }
+}
+
+/// The column as it is beside the order proposed, place by place, with each
+/// proposed code that would move marked.
+fn draw_order_differences(ui: &mut egui::Ui, dataset: &OpenDrillHoleDataset, column: &[String], order: &[String]) {
+    menu::menu_note(ui, tr!("borehole-inspector-check-differences-note"));
+    let header = [
+        tr!("borehole-inspector-check-place"),
+        tr!("borehole-inspector-check-now"),
+        tr!("borehole-inspector-check-proposed"),
+        String::new(),
+    ];
+    let moved = tr!("borehole-inspector-check-moved");
+    let cells = |row: usize| {
+        let now = column.get(row).cloned().unwrap_or_default();
+        let proposed = order.get(row).cloned().unwrap_or_default();
+        let mark = if !proposed.is_empty() && column.get(row) != order.get(row) {
+            moved.clone()
+        } else {
+            String::new()
+        };
+        vec![(row + 1).to_string(), now, proposed, mark]
+    };
+    let fingerprint = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        column.hash(&mut hasher);
+        order.hash(&mut hasher);
+        hasher.finish()
+    };
+    crate::ui::widgets::data_table::DataTable::new(("strat_check_differences", dataset.id), &header, column.len().max(order.len()), &cells)
+        .fingerprint(fingerprint)
+        .max_height(FLAG_LIST_HEIGHT)
+        .show(ui);
+}
+
+/// The holes the last check found disagreeing with the column, each with
+/// what kind and the codes involved; inspecting one sends it to this panel.
+fn draw_strat_flags(ui: &mut egui::Ui, editor: &EditorState, dataset: &OpenDrillHoleDataset, field: &DrillField, commands: &mut Vec<UiCommand>) {
+    let (report, current) = current_strat_check(editor, dataset, field);
+    let Some(flags) = report.filter(|_| current).and_then(|report| report.flags_for(dataset.color.strat_column(&field.key))) else {
+        return;
+    };
+    ui.add_space(4.0);
+    CollapsibleSection::new(
+        egui::Id::unique("borehole_inspector_flagged_holes"),
+        tr!("borehole-inspector-flagged-holes", count = flagged_holes(flags).to_string()),
+    )
+    .default_open(true)
+    .show(ui, |ui| {
+        if flags.is_empty() {
+            menu::menu_note(ui, tr!("borehole-inspector-no-holes-flagged"));
+            return;
+        }
+        if flags.len() > FLAG_LIST_LIMIT {
+            menu::menu_note(
+                ui,
+                tr!("borehole-inspector-flags-first-shown", shown = FLAG_LIST_LIMIT.to_string(), count = flags.len().to_string()),
+            );
+        }
+        egui::ScrollArea::vertical()
+            .id_salt(("borehole_inspector_flags_scroll", dataset.id))
+            .max_height(FLAG_LIST_HEIGHT)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for (row, flag) in flags.iter().take(FLAG_LIST_LIMIT).enumerate() {
+                    let dhid = dataset.dataset.holes.get(flag.hole).map_or("", |hole| hole.dhid.as_str());
+                    let label = format!("{dhid}  {}", flag_label(flag));
+                    ui.push_id(("strat_flag", row), |ui| {
+                        MenuField::new(label).show(ui, |ui, _, _| {
+                            if ui.add(MenuButton::new(tr!("borehole-inspector-inspect-hole"))).clicked() {
+                                commands.push(UiCommand::InspectDrillHole(DrillHoleRef {
+                                    dataset: dataset.id,
+                                    hole: flag.hole,
+                                }));
+                            }
+                        });
+                    });
+                }
+            });
+    });
+}
+
+/// A flag as the list words it: kind, then the codes top to bottom as the
+/// hole has them.
+fn flag_label(flag: &HoleFlag) -> String {
+    let kind = match flag.level {
+        FlagLevel::Group => tr!("borehole-inspector-flag-of-groups", kind = flag_kind_label(flag.kind)),
+        FlagLevel::Name => flag_kind_label(flag.kind),
+    };
+    format!("{kind}: {}", flag.codes.join(", "))
+}
+
+/// What a flag's kind is called in the list.
+fn flag_kind_label(kind: FlagKind) -> String {
+    match kind {
+        FlagKind::OutOfPlace => tr!("borehole-inspector-flag-out-of-place"),
+        FlagKind::Overturned => tr!("borehole-inspector-flag-overturned"),
+        FlagKind::Repeat => tr!("borehole-inspector-flag-repeat"),
+    }
+}
+
+/// Height of one code's row in the Column tab, the house button's and the
+/// section blocks' unit.
+const COLUMN_ROW_HEIGHT: f32 = 24.0;
+/// Width of the working sections beside the column, at most.
+const SECTION_LANE_WIDTH: f32 = 96.0;
+/// Height of the Hole and Set column headings above the rows.
+const COLUMN_HEADER_HEIGHT: f32 = 16.0;
+/// Share of the row beside the sections that the hole's cell takes.
+const HOLE_CELL_SHARE: f32 = 0.45;
+/// Width of a set row's drag handle, the data grid's.
+const COLUMN_HANDLE_WIDTH: f32 = 18.0;
+
+/// A set row being dragged to a new place in its column.
+struct ColumnRowDrag {
+    id: DrillHoleId,
+    field: String,
+    from: usize,
+}
+
+/// The slot a row dropped at height `y` lands in, counted in rows from `top`:
+/// 0 above the first of `len` rows, `len` below the last.
+fn column_drop_slot(y: f32, top: f32, len: usize) -> usize {
+    ((y - top) / COLUMN_ROW_HEIGHT).round().clamp(0.0, len as f32) as usize
+}
+
+/// The Column tab: the dataset's working sections of `field` beside its strat
+/// column, top to bottom, with `hole`'s seams laid row by row against it,
+/// then the hole's seams no row takes and the field's codes the column does
+/// not list. The hole's side only reports; every change to the column goes
+/// out as the whole new column, one undo step each.
+fn draw_strat_column(
+    ui: &mut egui::Ui,
+    editor: &EditorState,
+    dataset: &OpenDrillHoleDataset,
+    hole: &DrillHole,
+    hole_index: usize,
+    field: &DrillField,
+    commands: &mut Vec<UiCommand>,
+) {
+    let column = dataset.color.strat_column(&field.key);
+    let codes: &[String] = match &field.kind {
+        DrillFieldKind::Categorical { categories } => categories,
+        _ => &[],
+    };
+    let in_set: std::collections::HashSet<&str> = codes.iter().map(String::as_str).collect();
+    let in_column: std::collections::HashSet<&str> = column.iter().map(String::as_str).collect();
+    // The runs the log draws, over the whole hole.
+    let finite = || hole.intervals.iter().filter(|interval| interval.from.is_finite() && interval.to.is_finite());
+    let top = finite().map(|interval| interval.from).fold(f64::INFINITY, f64::min);
+    let bottom = finite().map(|interval| interval.to).fold(f64::NEG_INFINITY, f64::max);
+    let runs = if top < bottom { strat_runs(hole, field, top, bottom) } else { Vec::new() };
+    let laid = hole_column_rows(&runs, column);
+    // Order marks come from the last check alone, while it is current.
+    let (report, current) = current_strat_check(editor, dataset, field);
+    let flags = report.filter(|_| current).and_then(|report| report.flags_for(column)).map_or(&[][..], |flags| {
+        &flags[flags.partition_point(|flag| flag.hole < hole_index)..flags.partition_point(|flag| flag.hole <= hole_index)]
+    });
+    let mut edited: Option<Vec<String>> = None;
+    CollapsibleSection::new(egui::Id::unique("borehole_inspector_column"), tr!("borehole-inspector-strat-column"))
+        .default_open(true)
+        .show(ui, |ui| {
+            if column.is_empty() {
+                menu::menu_note(ui, tr!("borehole-inspector-column-empty-check"));
+                return;
+            }
+            let lane = SECTION_LANE_WIDTH.min(ui.available_width() * 0.3);
+            let (header, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), COLUMN_HEADER_HEIGHT), egui::Sense::hover());
+            let height = COLUMN_ROW_HEIGHT * column.len() as f32;
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
+            let sections = egui::Rect::from_min_size(rect.min, egui::vec2(lane, height));
+            draw_section_blocks(ui, sections, dataset, &field.key, column);
+            let rows = egui::Rect::from_min_max(egui::pos2(sections.right() + 6.0, rect.top()), rect.max);
+            let hole_width = rows.width() * HOLE_CELL_SHARE;
+            let set_left = rows.left() + hole_width + 6.0;
+            let font = egui::TextStyle::Small.resolve(ui.style());
+            let weak = ui.visuals().weak_text_color();
+            for (left, heading) in [(rows.left(), tr!("borehole-inspector-hole-side")), (set_left, tr!("borehole-inspector-set-side"))] {
+                ui.painter()
+                    .text(egui::pos2(left, header.center().y), egui::Align2::LEFT_CENTER, heading, font.clone(), weak);
+            }
+            for (place, code) in column.iter().enumerate() {
+                let top = rows.top() + COLUMN_ROW_HEIGHT * place as f32;
+                let cell = egui::Rect::from_min_size(egui::pos2(rows.left(), top), egui::vec2(hole_width, COLUMN_ROW_HEIGHT));
+                draw_hole_cell(ui, cell, dataset, field, (place, code), laid.rows[place], flags);
+                let row = egui::Rect::from_min_max(egui::pos2(set_left, top), egui::pos2(rows.right(), top + COLUMN_ROW_HEIGHT));
+                let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(row).layout(egui::Layout::right_to_left(egui::Align::Center)));
+                row_ui.push_id(("strat_column_row", place), |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    if ui
+                        .add(MenuButton::new(tr!("common-minus-sign")).min_width(24.0))
+                        .hint(tr!("borehole-inspector-remove-from-column"))
+                        .clicked()
+                    {
+                        let mut codes = column.to_vec();
+                        codes.remove(place);
+                        edited = Some(codes);
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        let (handle, handle_response) = ui.allocate_exact_size(egui::vec2(COLUMN_HANDLE_WIDTH, COLUMN_ROW_HEIGHT), egui::Sense::drag());
+                        ui.painter()
+                            .text(handle.center(), egui::Align2::CENTER_CENTER, "≡", egui::TextStyle::Button.resolve(ui.style()), weak);
+                        if handle_response.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                        }
+                        if handle_response.drag_started() {
+                            handle_response.dnd_set_drag_payload(ColumnRowDrag {
+                                id: dataset.id,
+                                field: field.key.clone(),
+                                from: place,
+                            });
+                        }
+                        handle_response.hint(tr!("borehole-inspector-drag-to-reorder"));
+                        // The colour the log and the scene give this code.
+                        let [red, green, blue] = crate::ui::widgets::borehole_log::strat_run_color(&dataset.color, field, code);
+                        let (swatch, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                        ui.painter()
+                            .rect_filled(swatch, GROUP_CORNER_RADIUS, crate::rendering::color::rgba_to_color32([red, green, blue, 1.0]));
+                        let text = format!("{}  {code}", place + 1);
+                        if in_set.contains(code.as_str()) {
+                            ui.add(egui::Label::new(text).truncate());
+                        } else {
+                            // Listed by the geologist but held by no interval
+                            // of this set: kept, and shown as such.
+                            ui.add(egui::Label::new(egui::RichText::new(text).weak()).truncate())
+                                .hint(tr!("borehole-inspector-code-not-in-set"));
+                        }
+                    });
+                });
+            }
+            // Where a dragged row would land: a line between rows, and the
+            // move on release.
+            let dragging = egui::DragAndDrop::payload::<ColumnRowDrag>(ui.ctx()).filter(|drag| drag.id == dataset.id && drag.field == field.key);
+            if let Some(drag) = dragging {
+                let half = COLUMN_ROW_HEIGHT / 2.0;
+                let zone = egui::Rect::from_x_y_ranges(set_left..=rows.right(), rows.top() - half..=rows.bottom() + half).intersect(ui.clip_rect());
+                // Not hover_pos: a finger's release clears it in that frame.
+                if let Some(pointer) = ui.input(|input| input.pointer.interact_pos()).filter(|pointer| zone.contains(*pointer)) {
+                    let slot = column_drop_slot(pointer.y, rows.top(), column.len());
+                    // Either edge of the dragged row leaves it where it is.
+                    if slot != drag.from && slot != drag.from + 1 {
+                        let line_y = rows.top() + COLUMN_ROW_HEIGHT * slot as f32;
+                        ui.painter().hline(set_left..=rows.right(), line_y, egui::Stroke::new(2.0, menu::accent_fill(ui.visuals())));
+                        if ui.input(|input| input.pointer.any_released()) {
+                            let mut codes = column.to_vec();
+                            crate::ui::widgets::editable_grid::move_to_slot(&mut codes, drag.from, slot);
+                            if codes != column {
+                                edited = Some(codes);
+                            }
+                        }
+                    }
+                }
+            }
+            if runs.iter().all(|run| run.2.is_none()) {
+                menu::menu_note(ui, tr!("borehole-inspector-hole-no-values", hole = hole.dhid.clone(), field = field.label.clone()));
+            }
+            let groups = flags.iter().filter(|flag| flag.level == FlagLevel::Group).map(flag_label).collect::<Vec<_>>();
+            if !groups.is_empty() {
+                menu::menu_note(ui, groups.join("\n"));
+            }
+        });
+    ui.add_space(4.0);
+    if !laid.extra.is_empty() {
+        CollapsibleSection::new(
+            egui::Id::unique("borehole_inspector_hole_extras"),
+            tr!("borehole-inspector-hole-not-in-column", count = laid.extra.len().to_string()),
+        )
+        .default_open(true)
+        .show(ui, |ui| {
+            for run in &laid.extra {
+                let kind = match run.kind {
+                    ExtraKind::Repeat => tr!("borehole-inspector-flag-repeat"),
+                    ExtraKind::NotInColumn => tr!("borehole-inspector-hole-code-not-in-column"),
+                };
+                read_only_row(ui, &format!("{}  {}", run.code, seam_depths(run.from, run.to)), &kind);
+            }
+        });
+        ui.add_space(4.0);
+    }
+    // A repeat (a code with a trailing R beside the code it repeats) and UNK
+    // are never offered: the column is the abstract stack.
+    let present = |base: &str| in_set.contains(base) || in_column.contains(base);
+    let mut missing = codes
+        .iter()
+        .filter(|code| !in_column.contains(code.as_str()) && code.as_str() != crate::model::drill_hole::UNKNOWN_NAME && !crate::model::strat_order::is_repeat_code(code, present))
+        .collect::<Vec<_>>();
+    missing.sort_by(|a, b| crate::natural_sort::natural_cmp(a, b));
+    CollapsibleSection::new(
+        egui::Id::unique("borehole_inspector_column_missing"),
+        tr!("borehole-inspector-not-in-column", count = missing.len().to_string()),
+    )
+    .default_open(true)
+    .show(ui, |ui| {
+        if missing.is_empty() {
+            menu::menu_note(ui, tr!("borehole-inspector-every-code-placed"));
+            return;
+        }
+        menu::menu_note(ui, tr!("borehole-inspector-place-codes-note"));
+        // Appended in name order: nothing about their order is guessed here.
+        if ui.add(MenuButton::new(tr!("borehole-inspector-add-every-code"))).clicked() {
+            let mut codes = column.to_vec();
+            codes.extend(missing.iter().map(|code| (*code).clone()));
+            edited = Some(codes);
+        }
+        egui::ScrollArea::vertical()
+            .id_salt(("borehole_inspector_missing_scroll", dataset.id))
+            .max_height(FLAG_LIST_HEIGHT)
+            .auto_shrink([false, true])
+            .show_rows(ui, COLUMN_ROW_HEIGHT, missing.len(), |ui, range| {
+                for code in &missing[range] {
+                    MenuField::new(code.as_str()).show(ui, |ui, _, _| {
+                        if ui.add(MenuButton::new(tr!("borehole-inspector-add-to-column"))).clicked() {
+                            let mut codes = column.to_vec();
+                            codes.push((*code).clone());
+                            edited = Some(codes);
+                        }
+                    });
+                }
+            });
+    });
+    if let Some(codes) = edited {
+        commands.push(UiCommand::SetStratColumn {
+            id: dataset.id,
+            field: field.key.clone(),
+            codes,
+        });
+    }
+}
+
+/// A seam's depths and downhole thickness, `to - from` as logged.
+fn seam_depths(from: f64, to: f64) -> String {
+    tr!(
+        "borehole-inspector-seam-depths",
+        from = format!("{from:.2}"),
+        to = format!("{to:.2}"),
+        thickness = format!("{:.2}", to - from)
+    )
+}
+
+/// One row's hole cell: the hole's topmost run of the row's code with its
+/// depths, or a quiet dot where the hole lacks it, and a mark where a
+/// current check flagged the code in this hole. Display only.
+fn draw_hole_cell(
+    ui: &mut egui::Ui,
+    cell: egui::Rect,
+    dataset: &OpenDrillHoleDataset,
+    field: &DrillField,
+    (place, code): (usize, &str),
+    depths: Option<(f64, f64)>,
+    flags: &[HoleFlag],
+) {
+    let mut cell_ui = ui.new_child(egui::UiBuilder::new().max_rect(cell).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    cell_ui.push_id(("hole_column_row", place), |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        // Both seams of a swapped pair are named by its flag, so both marked.
+        let flagged = flags
+            .iter()
+            .filter(|flag| flag.level == FlagLevel::Name && flag.codes.iter().any(|named| named == code))
+            .map(flag_label)
+            .collect::<Vec<_>>();
+        if !flagged.is_empty() {
+            let mark = egui::RichText::new(tr!("borehole-inspector-order-mark")).strong().color(ui.visuals().warn_fg_color);
+            ui.label(mark).hint(format!("{}\n{}", flagged.join("\n"), tr!("borehole-inspector-order-mark-hint")));
+        }
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            let Some((from, to)) = depths else {
+                ui.label(egui::RichText::new(tr!("borehole-inspector-seam-gap")).weak())
+                    .hint(tr!("borehole-inspector-seam-missing"));
+                return;
+            };
+            let [red, green, blue] = crate::ui::widgets::borehole_log::strat_run_color(&dataset.color, field, code);
+            let (swatch, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+            ui.painter()
+                .rect_filled(swatch, GROUP_CORNER_RADIUS, crate::rendering::color::rgba_to_color32([red, green, blue, 1.0]));
+            let depths = seam_depths(from, to);
+            let style = ui.style();
+            let mut text = egui::text::LayoutJob::simple_singleline(code.to_owned(), egui::TextStyle::Body.resolve(style), ui.visuals().text_color());
+            text.append(&depths, 8.0, egui::TextFormat::simple(egui::TextStyle::Small.resolve(style), ui.visuals().text_color()));
+            ui.add(egui::Label::new(text).truncate()).hint(format!("{code}  {depths}"));
+        });
+    });
+}
+
+/// The working sections of `field` as blocks beside the column rows they
+/// hold, in `rect`; a section whose codes do not sit together in the column
+/// is drawn in pieces, so the gap shows. Display only: sections are edited
+/// in the colour dialog.
+fn draw_section_blocks(ui: &egui::Ui, rect: egui::Rect, dataset: &OpenDrillHoleDataset, field: &str, column: &[String]) {
+    let painter = ui.painter_at(rect);
+    let visuals = ui.visuals();
+    let text_color = visuals.strong_text_color();
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    for span in section_spans(&dataset.color.working_sections, field, column) {
+        let section = &dataset.color.working_sections[span.section];
+        let colour = dataset
+            .color
+            .category_color(&section_color_key(&section.name))
+            .map_or(visuals.widgets.inactive.bg_fill, |[r, g, b]| {
+                egui::Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
+            });
+        for run in &span.runs {
+            let block = egui::Rect::from_min_max(
+                egui::pos2(rect.left(), rect.top() + COLUMN_ROW_HEIGHT * run.start as f32 + 1.0),
+                egui::pos2(rect.right(), rect.top() + COLUMN_ROW_HEIGHT * run.end as f32 - 1.0),
+            );
+            painter.rect(
+                block,
+                GROUP_CORNER_RADIUS,
+                colour.gamma_multiply(0.35),
+                egui::Stroke::new(1.0, colour),
+                egui::StrokeKind::Inside,
+            );
+            let galley = painter.layout(section.name.clone(), font.clone(), text_color, block.width() - 6.0);
+            painter
+                .with_clip_rect(block.shrink(1.0))
+                .galley(block.left_top() + egui::vec2(3.0, 3.0), galley, text_color);
+        }
+    }
+}
+
+/// One working section's place beside the strat column: the index of the
+/// section and each run of consecutive column rows it holds, end exclusive.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SectionSpan {
+    section: usize,
+    runs: Vec<std::ops::Range<usize>>,
+}
+
+/// Where each working section of `field` sits beside `column`: one run for a
+/// section whose codes sit together, more than one for a section broken by
+/// a code it does not hold. A section holding no listed code has no span,
+/// and a row held by no section lies in none.
+fn section_spans(sections: &[WorkingSection], field: &str, column: &[String]) -> Vec<SectionSpan> {
+    sections
+        .iter()
+        .enumerate()
+        .filter(|(_, section)| section.field == field)
+        .filter_map(|(index, section)| {
+            let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+            for (row, code) in column.iter().enumerate() {
+                if !section.codes.contains(code) {
+                    continue;
+                }
+                match runs.last_mut() {
+                    Some(run) if run.end == row => run.end = row + 1,
+                    _ => runs.push(row..row + 1),
+                }
+            }
+            (!runs.is_empty()).then_some(SectionSpan { section: index, runs })
+        })
+        .collect()
+}
+
+/// Why a seam of the hole has no row of its own beside the column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExtraKind {
+    /// A listed code met again lower down, or a trailing-R repeat of one.
+    Repeat,
+    NotInColumn,
+}
+
+/// A seam of the hole listed under the rows, top down.
+#[derive(Clone, Debug, PartialEq)]
+struct ExtraRun {
+    from: f64,
+    to: f64,
+    code: String,
+    kind: ExtraKind,
+}
+
+/// The hole's seams laid against the strat column: for each row, the depths
+/// of the hole's topmost run of that code, `None` where the hole lacks it;
+/// then the runs no row takes, in depth order.
+#[derive(Clone, Debug, PartialEq)]
+struct HoleColumn {
+    rows: Vec<Option<(f64, f64)>>,
+    extra: Vec<ExtraRun>,
+}
+
+/// Lay a hole's `runs`, top down as [`strat_runs`] gives them, against
+/// `column`. Unlogged runs and UNK are no seam. A run takes its code's row
+/// while the row is empty; a later run of that code, or a trailing-R repeat
+/// of a listed code, is an extra repeat; any other code is an extra not in
+/// the column. Rows of a repeat parent value are laid out like any other,
+/// though the check passes over them, since the log shows them.
+fn hole_column_rows(runs: &[(f64, f64, Option<String>)], column: &[String]) -> HoleColumn {
+    let mut rows = vec![None; column.len()];
+    let mut extra = Vec::new();
+    for (from, to, code) in runs {
+        let Some(code) = code.as_deref().filter(|code| *code != UNKNOWN_NAME) else {
+            continue;
+        };
+        let kind = match column.iter().position(|listed| listed == code) {
+            Some(place) if rows[place].is_none() => {
+                rows[place] = Some((*from, *to));
+                continue;
+            }
+            Some(_) => ExtraKind::Repeat,
+            None if is_repeat_code(code, |base| column.iter().any(|listed| listed == base)) => ExtraKind::Repeat,
+            None => ExtraKind::NotInColumn,
+        };
+        extra.push(ExtraRun {
+            from: *from,
+            to: *to,
+            code: code.to_owned(),
+            kind,
+        });
+    }
+    HoleColumn { rows, extra }
 }
 
 /// The Data and Log tabs as a pair of held-down buttons, with the lock and
@@ -183,6 +867,7 @@ fn draw_tab_strip(ui: &mut egui::Ui, editor: &mut EditorState) {
         for (tab, label) in [
             (BoreholeInspectorTab::Data, tr!("borehole-inspector-data")),
             (BoreholeInspectorTab::Log, tr!("borehole-inspector-log")),
+            (BoreholeInspectorTab::Column, tr!("borehole-inspector-column")),
         ] {
             if ui.add(MenuButton::new(label).selected(editor.borehole_inspector_tab == tab)).clicked() {
                 editor.borehole_inspector_tab = tab;
@@ -214,20 +899,20 @@ fn draw_tab_strip(ui: &mut egui::Ui, editor: &mut EditorState) {
 /// The strat field chosen for this dataset: the two conditions the log itself
 /// applies, so the picker never names a column the log is not reading.
 fn strat_choice_for(editor: &EditorState, dataset: &OpenDrillHoleDataset) -> Option<String> {
-    let (id, key) = editor.borehole_log_strat_field.as_ref()?;
-    (*id == dataset.id)
-        .then(|| dataset.dataset.field(key))
-        .flatten()
+    let key = editor.borehole_log_strat_field.get(&dataset.id)?;
+    dataset
+        .dataset
+        .field(key)
         .filter(|field| matches!(field.kind, crate::model::drill_hole::DrillFieldKind::Categorical { .. }))
         .map(|field| field.key.clone())
 }
 
-/// Two pickers above the log: what the ribbon is coloured by, and what the
-/// strat column reads. Colour drives the dataset's own field, the one the
-/// scene is drawn by, because a categorical field's colours are held per
-/// dataset for that field alone. Strat is the panel's own, since which
-/// column names the rock is about this log.
-fn draw_log_field_pickers(ui: &mut egui::Ui, editor: &mut EditorState, dataset: &OpenDrillHoleDataset, commands: &mut Vec<UiCommand>) {
+/// The pickers above the log: what the ribbon is coloured by, what the strat
+/// column reads, and what the trace columns draw. Colour drives the dataset's
+/// own field, the one the scene is drawn by, because a categorical field's
+/// colours are held per dataset for that field alone. Strat is the panel's
+/// own, since which column names the rock is about this log.
+fn draw_log_field_pickers(ui: &mut egui::Ui, editor: &mut EditorState, dataset: &OpenDrillHoleDataset, curve_names: Option<&[String]>, commands: &mut Vec<UiCommand>) {
     let fields = &dataset.dataset.fields;
     let label_of = |key: Option<&str>, fallback: &str| {
         key.and_then(|key| dataset.dataset.field(key))
@@ -244,23 +929,110 @@ fn draw_log_field_pickers(ui: &mut egui::Ui, editor: &mut EditorState, dataset: 
     {
         commands.push(UiCommand::SetDrillHoleColorField { id: dataset.id, field: chosen });
     }
+    draw_strat_field_picker(ui, editor, dataset);
+    draw_curve_pickers(ui, editor, dataset.id, curve_names);
+}
 
+/// What dataset `id`'s left and right trace columns show, another curve as
+/// `names`, its link's curve names, spell it; the defaults until chosen,
+/// and a column's default for a curve the link no longer has.
+fn curve_choice_for<'d>(editor: &EditorState, id: DrillHoleId, names: &'d [String]) -> [crate::ui::widgets::log_traces::ColumnCurve<&'d str>; 2] {
+    use crate::ui::widgets::log_traces::ColumnCurve;
+    let defaults = ColumnCurve::defaults();
+    let Some(chosen) = editor.borehole_log_curves.get(&id) else {
+        return defaults;
+    };
+    let resolve = |chosen: &ColumnCurve<String>, default| match chosen {
+        ColumnCurve::Other(chosen) => names
+            .iter()
+            .find(|name| crate::model::geophysics::same_curve(name, chosen))
+            .map_or(default, |name| ColumnCurve::Other(name.as_str())),
+        ColumnCurve::Own(column) => ColumnCurve::Own(*column),
+        ColumnCurve::Hidden => ColumnCurve::Hidden,
+    };
+    [resolve(&chosen[0], defaults[0]), resolve(&chosen[1], defaults[1])]
+}
+
+/// What either trace column can show, as the pickers list it: density,
+/// gamma, each other curve the linked files carry, then nothing. Another
+/// curve named like a fixed entry is marked as the file's, so no two
+/// entries read alike.
+fn curve_options<'d>(names: &'d [String]) -> Vec<(crate::ui::widgets::log_traces::ColumnCurve<&'d str>, std::borrow::Cow<'d, str>)> {
+    use std::borrow::Cow;
+
+    use crate::ui::widgets::log_traces::{ColumnCurve, TraceColumn};
+    let fixed = [
+        (ColumnCurve::Own(TraceColumn::Density), tr!("log-traces-density")),
+        (ColumnCurve::Own(TraceColumn::Gamma), tr!("log-traces-gamma")),
+        (ColumnCurve::Hidden, tr!("common-none")),
+    ];
+    let others = names
+        .iter()
+        .map(|name| {
+            let label = if fixed.iter().any(|(_, label)| crate::model::geophysics::same_curve(label, name)) {
+                Cow::Owned(tr!("borehole-inspector-curve-from-file", curve = name.clone()))
+            } else {
+                Cow::Borrowed(name.as_str())
+            };
+            (ColumnCurve::Other(name.as_str()), label)
+        })
+        .collect::<Vec<_>>();
+    let [density, gamma, none] = fixed.map(|(curve, label)| (curve, Cow::Owned(label)));
+    [density, gamma].into_iter().chain(others).chain([none]).collect()
+}
+
+/// What the two trace columns show, the panel's own choice like strat,
+/// offered whenever the dataset has geophysics linked; `names` are its
+/// link's curve names, `None` without a link.
+fn draw_curve_pickers(ui: &mut egui::Ui, editor: &mut EditorState, id: DrillHoleId, names: Option<&[String]>) {
+    let Some(names) = names else {
+        return;
+    };
+    // Borrowed from the link: owned names only once a choice is kept.
+    let mut chosen = curve_choice_for(editor, id, names);
+    let options = curve_options(names);
+    let mut changed = false;
+    for (index, label) in [tr!("borehole-inspector-left-curve"), tr!("borehole-inspector-right-curve")].into_iter().enumerate() {
+        let selected = options
+            .iter()
+            .find(|(curve, _)| *curve == chosen[index])
+            .map_or_else(String::new, |(_, text)| text.to_string());
+        let entries = options.iter().map(|(curve, text)| (*curve, text.as_ref().into()));
+        changed |= MenuFieldCombo::new(("borehole_log_curve", id, index), label, &mut chosen[index], selected, entries)
+            .show(ui)
+            .changed();
+    }
+    if changed {
+        editor.borehole_log_curves.insert(id, chosen.map(|curve| curve.map(str::to_owned)));
+    }
+}
+
+/// What the strat column reads, the panel's own choice: the Log and Column
+/// tabs share it, so both read the same field.
+fn draw_strat_field_picker(ui: &mut egui::Ui, editor: &mut EditorState, dataset: &OpenDrillHoleDataset) {
+    let fields = &dataset.dataset.fields;
+    let label_of = |key: Option<&str>, fallback: &str| {
+        key.and_then(|key| dataset.dataset.field(key))
+            .map_or_else(|| fallback.to_owned(), |field| field.label.clone())
+    };
     let guessed = tr!("borehole-inspector-guessed-name");
     let selected = label_of(strat_choice_for(editor, dataset).as_deref(), &guessed);
     let options = std::iter::once((None, guessed.into())).chain(
         fields
             .iter()
             .filter(|field| matches!(field.kind, crate::model::drill_hole::DrillFieldKind::Categorical { .. }))
-            .map(|field| (Some((dataset.id, field.key.clone())), field.label.clone().into())),
+            .map(|field| (Some(field.key.clone()), field.label.clone().into())),
     );
-    MenuFieldCombo::new(
-        ("borehole_log_strat_field", dataset.id),
-        tr!("borehole-inspector-strat"),
-        &mut editor.borehole_log_strat_field,
-        selected,
-        options,
-    )
-    .show(ui);
+    let mut chosen = strat_choice_for(editor, dataset);
+    if MenuFieldCombo::new(("borehole_log_strat_field", dataset.id), tr!("borehole-inspector-strat"), &mut chosen, selected, options)
+        .show(ui)
+        .changed()
+    {
+        match chosen {
+            Some(key) => editor.borehole_log_strat_field.insert(dataset.id, key),
+            None => editor.borehole_log_strat_field.remove(&dataset.id),
+        };
+    }
 }
 
 /// A short note above the log for the states between a link existing and its
@@ -296,6 +1068,135 @@ fn draw_geophysics_note(ui: &mut egui::Ui, view: &HoleView, dataset_id: DrillHol
         commands.push(UiCommand::LinkGeophysics(dataset_id));
     }
     ui.add_space(4.0);
+}
+
+/// The shift dialog's opening state for the hole's names: what the shift
+/// would do, counted once, here, against the column as it stands.
+fn name_shift_draft(dataset: &OpenDrillHoleDataset, hole_index: usize, shift: NameShift) -> NameShiftDraft {
+    let column = dataset.color.strat_column(&shift.field);
+    let worked = dataset
+        .dataset
+        .column_shift(hole_index, &shift.field, column, shift.direction, shift.from, &CorrectionNote::default());
+    NameShiftDraft {
+        dataset: dataset.id,
+        revision: dataset.state.revision(),
+        hole: hole_index,
+        dhid: dataset.dataset.holes.get(hole_index).map(|hole| hole.dhid.clone()).unwrap_or_default(),
+        field: shift.field,
+        direction: shift.direction,
+        from: shift.from,
+        moved: worked.corrections.len() - worked.unknown,
+        unknown: worked.unknown,
+        untouched: worked.untouched,
+        reason: String::new(),
+    }
+}
+
+/// The move boundary dialog's opening state for a roof or floor picked in
+/// the log, with the intervals either side of it as they stand.
+fn boundary_move_draft(dataset: &OpenDrillHoleDataset, hole_index: usize, pick: &BoundaryPick) -> Option<BoundaryMoveDraft> {
+    let data = &dataset.dataset;
+    let hole = data.holes.get(hole_index)?;
+    let clicked = hole.intervals.get(pick.interval)?;
+    let (above, below, at) = match pick.side {
+        BoundarySide::Roof => (data.interval_above(hole_index, pick.interval), Some(pick.interval), clicked.from),
+        BoundarySide::Floor => (Some(pick.interval), data.interval_below(hole_index, pick.interval), clicked.to),
+    };
+    let describe = |index: usize| crate::ui::dialogs::drill_hole::interval_description(&hole.intervals[index], &pick.field);
+    Some(BoundaryMoveDraft {
+        dataset: dataset.id,
+        revision: dataset.state.revision(),
+        edit: BoundaryMove {
+            hole: hole_index,
+            dhid: hole.dhid.clone(),
+            interval: pick.interval,
+            side: pick.side,
+            at,
+            to: at,
+        },
+        above: above.map(describe),
+        below: below.map(describe),
+        end: data.end_of(hole),
+        preview: None,
+        previewed: None,
+        reason: String::new(),
+    })
+}
+
+/// The insert interval dialog's opening state for an interval picked in the
+/// log: the field picked and every other code field of its table, each with
+/// its codes to choose from, all blank until typed or, for the others, filled
+/// from an interval the insertion splits.
+fn interval_insert_draft(dataset: &OpenDrillHoleDataset, hole_index: usize, pick: InsertPick) -> Option<IntervalInsertDraft> {
+    let hole = dataset.dataset.holes.get(hole_index)?;
+    let data = &dataset.dataset;
+    let code_field = |key: &str, label: &str| InsertCodeField {
+        key: key.to_owned(),
+        label: label.to_owned(),
+        codes: offered_codes(dataset.color.strat_column(key), field_codes(&data.fields, key)),
+        value: String::new(),
+    };
+    let label = data
+        .fields
+        .iter()
+        .find(|field| field.key == pick.field)
+        .map_or(pick.field.as_str(), |field| field.label.as_str());
+    Some(IntervalInsertDraft {
+        dataset: dataset.id,
+        revision: dataset.state.revision(),
+        hole: hole_index,
+        dhid: hole.dhid.clone(),
+        from: pick.depths.map_or_else(DepthField::default, |(from, _)| DepthField::prefilled(from)),
+        to: pick.depths.map_or_else(DepthField::default, |(_, to)| DepthField::prefilled(to)),
+        picked: code_field(&pick.field, label),
+        siblings: data
+            .table_fields(hole_index, &pick.field)
+            .into_iter()
+            .map(|field| InsertSiblingField {
+                field: code_field(&field.key, &field.label),
+                follows_split: true,
+            })
+            .collect(),
+        reason: String::new(),
+        out_of_sequence: None,
+    })
+}
+
+/// The rename dialog's opening state for a seam picked in the log: its
+/// reach counted once, here, rather than every frame the dialog is up.
+fn seam_rename_draft(dataset: &OpenDrillHoleDataset, hole_index: usize, rename: SeamRename) -> SeamRenameDraft {
+    let scope = if rename.every_hole {
+        RenameScope::Set
+    } else {
+        RenameScope::Horizon {
+            hole: hole_index,
+            interval: rename.interval,
+        }
+    };
+    let reached = dataset
+        .dataset
+        .intervals_named(&rename.field, &rename.name, scope)
+        .map(|((hole, _), _, _)| hole)
+        .collect::<Vec<_>>();
+    let mut holes = reached.clone();
+    holes.dedup();
+    let place = match scope {
+        RenameScope::Set => dataset.name.clone(),
+        RenameScope::Horizon { hole, .. } => dataset.dataset.holes.get(hole).map(|hole| hole.dhid.clone()).unwrap_or_default(),
+    };
+    SeamRenameDraft {
+        dataset: dataset.id,
+        revision: dataset.state.revision(),
+        scope,
+        field: rename.field,
+        to: rename.name.clone(),
+        from: rename.name,
+        place,
+        intervals: reached.len(),
+        holes: holes.len(),
+        reason: String::new(),
+        out_of_sequence: None,
+    }
 }
 
 /// Resolve the currently inspected hole to its dataset, the hole itself, and

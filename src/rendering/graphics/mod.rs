@@ -31,6 +31,7 @@ use crate::{
             bounds::visible_object_aabbs,
             build::{DocumentDrawBatch, DocumentObjectRanges, DocumentPrimitive, DocumentRenderStage, PolylineFillCache, TextDrawBatch},
             document_style::{DocumentStyleGpu, DocumentStyleSlots},
+            section_surface_lines::{SectionCells, SectionCellsOfGrid, SectionSurfaceStrokes, SurfaceLines},
         },
         snap::SNAP_THRESHOLD_PX,
         text::TextSystem,
@@ -402,6 +403,7 @@ pub(crate) struct Graphics<'a> {
     pub(super) lyon_index_gpu: wgpu::Buffer,
     pub(super) stroke_gpu: wgpu::Buffer,
     pub(super) overlay_stroke_gpu: wgpu::Buffer,
+    pub(super) section_surface_gpu: wgpu::Buffer,
     pub(super) dynamic_stroke_gpu: wgpu::Buffer,
     pub(super) flow_stroke_gpu: wgpu::Buffer,
     pub(super) text_vertex_gpu: wgpu::Buffer,
@@ -559,8 +561,22 @@ pub(crate) struct Graphics<'a> {
     pub(super) cached_object_aabbs: Vec<(DVec3, DVec3)>,
     pub(super) overlay_dirty: bool,
     pub(super) cached_scale_factor: f32,
-    pub(super) cached_measurement_state: (bool, Option<DVec3>, Option<DVec3>, Vec<DVec3>),
+    pub(super) cached_measurement_state: (bool, Option<DVec3>, Option<DVec3>, Vec<DVec3>, bool),
     pub(super) cached_poly_finish_dialog: bool,
+    /// Which Thin Strings preview the overlay last drew, if one was open.
+    pub(super) cached_thin_preview: Option<u64>,
+    /// Where each shown surface cuts the section, as the App last cut them,
+    /// with its own stroke stream so a cursor-driven overlay rebuild leaves
+    /// it alone.
+    pub(super) section_surface: SectionSurfaceStrokes,
+    pub(super) section_surface_capacity: usize,
+    /// The prismoids a 2D section crosses, as the App last cut them, filled
+    /// from their own buffers.
+    pub(super) section_cells: SectionCells,
+    pub(super) section_cell_vertex_gpu: wgpu::Buffer,
+    pub(super) section_cell_index_gpu: wgpu::Buffer,
+    pub(super) section_cell_vertex_capacity: usize,
+    pub(super) section_cell_index_capacity: usize,
     pub(super) pick_records: Vec<PickRecord>,
     pub(super) text_pick_records: Vec<TextPickRecord>,
     pub(super) document_draw_batches: Vec<DocumentDrawBatch>,
@@ -589,6 +605,25 @@ pub(crate) struct Graphics<'a> {
     /// scene pass while the developer chunk-bounds view is on and drawn,
     /// depth-tested, by the editor overlay pass.
     pub(super) chunk_bounds_outline: Option<passes::ChunkBoundsOutline>,
+    /// The model envelope's twelve edges in Geology, with the key they were
+    /// built for, rebuilt only when it changes.
+    pub(super) model_envelope_outline: Option<(u64, Vec<passes::ChunkBoundsOutline>)>,
+    /// The rim round the picked prismoids, keyed by the selection's revision.
+    pub(super) cell_selection_outline: Option<(u64, Vec<passes::ChunkBoundsOutline>)>,
+    /// The rim round the prismoids masked by hand, keyed by the App's key.
+    pub(super) masked_cell_outline: Option<(u64, Vec<passes::ChunkBoundsOutline>)>,
+    /// The lines between the section's crossed prismoids, and round the
+    /// selected ones, keyed by the cells' revision.
+    pub(super) section_cell_lines: Option<(u64, Vec<passes::ChunkBoundsOutline>)>,
+    pub(super) section_cell_rim: Option<(u64, Vec<passes::ChunkBoundsOutline>)>,
+    /// The prismoid grids whose lattice lines draw in their own colours, and
+    /// the key the App handed them over for.
+    pub(super) prismoid_lattices: (Option<u64>, Vec<PrismoidLattice>),
+    /// Each of those grids' wire strokes, keyed by its revision, held while
+    /// the grid is handed over, however it is selected or hidden. Selection
+    /// and translucency are applied at draw time by `prismoid_wire_styles`.
+    pub(super) prismoid_lattice_lines: Vec<(SceneEntityId, u64, Vec<passes::ChunkBoundsOutline>)>,
+    pub(super) prismoid_wire_styles: passes::PrismoidWireStyles,
     /// Destination for a one-shot viewport image export; consumed by the next
     /// `render` call (see `screenshot.rs`).
     pub(super) pending_screenshot: Option<screenshot::ScreenshotTarget>,
@@ -607,6 +642,20 @@ impl Graphics<'_> {
     pub(crate) fn max_raster_texture_dimension(&self) -> u32 {
         self.device.limits().max_texture_dimension_2d
     }
+}
+
+/// A prismoid grid's lattice lines, each in its own colour, as the App hands
+/// them over; drawn as strokes by the editor overlay pass.
+pub(crate) struct PrismoidLattice {
+    pub(crate) entity: SceneEntityId,
+    pub(crate) mesh: Arc<crate::model::formats::mesh_data::Triangulation>,
+    pub(crate) lattice: Arc<Vec<[u32; 2]>>,
+    /// One per line of `lattice`.
+    pub(crate) colors: Arc<Vec<[f32; 4]>>,
+    /// In logical pixels, as the grid's edges would draw.
+    pub(crate) width: f32,
+    /// Changes whenever the mesh or the colours do.
+    pub(crate) revision: u64,
 }
 
 /// Held-key state for slice navigation: W/S moves the slab along its normal,
@@ -1033,6 +1082,38 @@ impl<'a> Graphics<'a> {
         self.overlay_dirty = true;
     }
 
+    pub(crate) fn set_section_surface_lines(&mut self, surfaces: Vec<SurfaceLines>) {
+        self.section_surface.set(surfaces);
+    }
+
+    /// The prismoids the section crosses, filled by the next scene pass,
+    /// which the dropped cache key forces; the document is left alone.
+    pub(crate) fn set_section_cells(&mut self, grids: Vec<SectionCellsOfGrid>) {
+        self.section_cells.set(grids);
+        self.scene_cache_key = None;
+    }
+
+    /// The key the coloured lattices were last handed over for.
+    pub(crate) fn prismoid_lattices_key(&self) -> Option<u64> {
+        self.prismoid_lattices.0
+    }
+
+    /// The prismoid grids whose lattice lines draw in their own colours,
+    /// stroked by the next scene pass, which the dropped cache key forces.
+    pub(crate) fn set_prismoid_lattices(&mut self, key: u64, lattices: Vec<PrismoidLattice>) {
+        self.prismoid_lattices = (Some(key), lattices);
+        self.scene_cache_key = None;
+    }
+
+    pub(crate) fn recolor_section_surface_lines(&mut self, colors: impl Iterator<Item = [f32; 4]>) {
+        self.section_surface.recolor(colors);
+    }
+
+    /// The surface lines the section draws, in their colours.
+    pub(crate) fn section_surface_lines(&self) -> &[SurfaceLines] {
+        self.section_surface.surfaces()
+    }
+
     /// Whether a floating egui surface - a tile, card or menu over the canvas -
     /// covers this window position, in physical pixels.
     pub(crate) fn overlay_at_physical_position(&self, x: f32, y: f32) -> bool {
@@ -1336,6 +1417,12 @@ impl<'a> Graphics<'a> {
 
     pub(crate) fn section_slab(&self) -> Option<SectionSlab> {
         self.slice_view.as_ref().map(SliceViewState::slab)
+    }
+
+    /// Whether the section is seen from the side it was entered on, where
+    /// screen right runs along the section; `None` with no section up.
+    pub(crate) fn section_viewed_from_front(&self) -> Option<bool> {
+        self.slice_view.as_ref().map(|slice| slice.viewing_from_front)
     }
 
     /// Turn the section camera to a standard view: the section line itself

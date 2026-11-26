@@ -1,15 +1,17 @@
 use crate::{
     i18n::tr,
     model::drill_hole::{
-        ColorRow, DrillCategoryColor, DrillColorPreset, DrillFieldKind, DrillHoleId, DrillHoleStyle, MAX_DRILL_COLOR_STOPS, OpenDrillHoleDataset, SectionProblem, WorkingSection,
-        default_category_colors, suggested_working_sections, working_section_name_problem,
+        BoundaryProblem, BoundarySide, ColorRow, CorrectionKind, CorrectionNote, DrillCategoryColor, DrillColorPreset, DrillFieldKind, DrillHoleId, DrillHoleStyle, DrillInterval,
+        IntervalDelete, MAX_DRILL_COLOR_STOPS, MIN_DRILL_COLOR_STOPS, OpenDrillHoleDataset, RenameScope, SectionProblem, ShiftDirection, WorkingSection, default_category_colors,
+        holds_value, insertion_named_apart, name_is_code_message, same_interval, shown_depth, suggested_working_sections, value_name, working_section_name_problem,
     },
     ui::{
-        state::{EditorState, UiCommand},
+        elements::properties::read_only_row,
+        state::{EditorState, InsertCodeField, IntervalInsertDraft, SeamRenameDraft, TypedDepth, UiCommand},
         widgets::{
             collapsible_section::CollapsibleSection,
             hint::Hint,
-            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldText},
+            menu::{self, DragableMenu, MenuButton, MenuField, MenuFieldBool, MenuFieldCombo, MenuFieldF64, MenuFieldText},
         },
     },
 };
@@ -73,6 +75,589 @@ pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut Edito
     };
     if !open || dismissed {
         editor.drill_hole_color_dialog = None;
+    }
+}
+
+/// The rename seam dialog: the seam picked in the borehole log, its new name
+/// and why. Renaming proposes one value correction per interval renamed; the
+/// name as logged is kept beside it.
+pub(crate) fn draw_seam_rename_dialog(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
+    let Some(draft) = editor.seam_rename_dialog.as_mut() else {
+        return;
+    };
+    // A rename in one horizon holds an interval by index, which any edit to
+    // the dataset since it opened may have moved.
+    let horizon = matches!(draft.scope, RenameScope::Horizon { .. });
+    let Some(dataset) = datasets
+        .iter()
+        .find(|dataset| dataset.id == draft.dataset && dataset.state.loaded && (!horizon || dataset.state.revision() == draft.revision))
+    else {
+        editor.seam_rename_dialog = None;
+        return;
+    };
+    if let Some(holes) = draft.out_of_sequence {
+        draw_out_of_sequence_warning(ui, editor, holes, commands);
+        return;
+    }
+    let mut open = true;
+    let mut rename = false;
+    // Read after the menu closes: `open` is borrowed by the window for as
+    // long as its body runs.
+    let mut cancel = false;
+    let to = draft.to.trim().to_owned();
+    let reason = draft.reason.trim().to_owned();
+    let can_rename = !to.is_empty() && to != draft.from && !reason.is_empty();
+    DragableMenu::new("seam_rename_dialog", tr!("drill-hole-rename-seam-title"))
+        .open(&mut open)
+        .min_width(360.0)
+        .max_width(440.0)
+        .show(ui.ctx(), |ui| {
+            read_only_row(ui, &tr!("drill-hole-rename-seam-seam"), &draft.from);
+            let place = match draft.scope {
+                RenameScope::Horizon { .. } => tr!("drill-hole-rename-seam-hole"),
+                RenameScope::Set => tr!("drill-hole-rename-seam-every-hole-of"),
+            };
+            read_only_row(ui, &place, &draft.place);
+            let counted = match draft.scope {
+                RenameScope::Horizon { .. } => tr!("drill-hole-rename-seam-horizon-intervals"),
+                RenameScope::Set => tr!("drill-hole-rename-seam-intervals"),
+            };
+            read_only_row(ui, &counted, &draft.intervals.to_string());
+            if draft.scope == RenameScope::Set {
+                read_only_row(ui, &tr!("drill-hole-rename-seam-holes"), &draft.holes.to_string());
+            }
+            ui.add_space(4.0);
+            MenuFieldText::new(tr!("dialog-rename-field"), &mut draft.to).width(220.0).show(ui);
+            MenuFieldText::new(tr!("drill-hole-rename-seam-reason"), &mut draft.reason)
+                .width(220.0)
+                .hint_text(tr!("drill-hole-rename-seam-reason-hint"))
+                .show(ui);
+            menu::menu_note(ui, tr!("drill-hole-rename-seam-logged-name-kept"));
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("dialog-rename-submit")).primary().enabled(can_rename)).clicked() || confirm) && can_rename {
+                    rename = true;
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    cancel = true;
+                }
+            });
+        });
+    if rename {
+        // Out of the column's order is allowed, as overturned strata are,
+        // but only after a warning.
+        let column = dataset.color.strat_column(&draft.field);
+        let holes = dataset.dataset.rename_out_of_sequence(&draft.field, &draft.from, &to, draft.scope, column);
+        if holes > 0 {
+            draft.out_of_sequence = Some(holes);
+            return;
+        }
+        commands.push(seam_rename_command(draft));
+        open = false;
+    }
+    if !open || cancel {
+        editor.seam_rename_dialog = None;
+    }
+}
+
+/// The rename the dialog holds, as typed.
+fn seam_rename_command(draft: &SeamRenameDraft) -> UiCommand {
+    UiCommand::RenameSeam {
+        dataset: draft.dataset,
+        field: draft.field.clone(),
+        from: draft.from.clone(),
+        to: draft.to.trim().to_owned(),
+        scope: draft.scope,
+        reason: draft.reason.trim().to_owned(),
+    }
+}
+
+/// The warning a rename out of the strat column's order raises: OK renames
+/// anyway, Cancel goes back to the rename.
+fn draw_out_of_sequence_warning(ui: &mut egui::Ui, editor: &mut EditorState, holes: usize, commands: &mut Vec<UiCommand>) {
+    let Some(draft) = editor.seam_rename_dialog.as_mut() else {
+        return;
+    };
+    let to = draft.to.trim().to_owned();
+    let text = match draft.scope {
+        RenameScope::Horizon { .. } => tr!("drill-hole-rename-out-of-sequence-hole", from = draft.from.clone(), to = to),
+        RenameScope::Set => tr!("drill-hole-rename-out-of-sequence-holes", from = draft.from.clone(), to = to, count = holes.to_string()),
+    };
+    match out_of_sequence_warning(ui.ctx(), "seam_rename_out_of_sequence", text, tr!("drill-hole-rename-out-of-sequence-note")) {
+        Some(true) => {
+            commands.push(seam_rename_command(draft));
+            editor.seam_rename_dialog = None;
+        }
+        Some(false) => draft.out_of_sequence = None,
+        None => {}
+    }
+}
+
+/// The warning a correction out of the strat column's order raises, `text`
+/// saying what moves out of order and `note` why it is no block, as
+/// overturned strata are out of order by nature: `Some(true)` on OK,
+/// `Some(false)` on Cancel or closing, `None` while it waits.
+fn out_of_sequence_warning(ctx: &egui::Context, id: &str, text: String, note: String) -> Option<bool> {
+    let mut open = true;
+    let mut answer = None;
+    DragableMenu::new(id, tr!("drill-hole-rename-out-of-sequence-title"))
+        .open(&mut open)
+        .min_width(360.0)
+        .max_width(440.0)
+        .show(ctx, |ui| {
+            menu::menu_note(ui, text);
+            menu::menu_note(ui, note);
+            menu::menu_actions(ui, |ui| {
+                if ui.add(MenuButton::new(tr!("common-ok")).primary()).clicked() || menu::dialog_confirmed(ui.ctx()) {
+                    answer = Some(true);
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    answer = answer.or(Some(false));
+                }
+            });
+        });
+    if open { answer } else { answer.or(Some(false)) }
+}
+
+/// The move roof and move floor dialog: the boundary picked in the borehole
+/// log, the intervals either side of it, its new depth and why. Moving
+/// proposes one boundary correction; a touching interval on the other side
+/// follows and the depths as logged are kept beside them. Any edit to the
+/// dataset while it is open closes it.
+pub(crate) fn draw_boundary_move_dialog(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
+    let Some(draft) = editor.boundary_move_dialog.as_mut() else {
+        return;
+    };
+    let Some(dataset) = datasets
+        .iter()
+        .find(|dataset| dataset.id == draft.dataset && dataset.state.loaded && dataset.state.revision() == draft.revision)
+    else {
+        editor.boundary_move_dialog = None;
+        return;
+    };
+    // As in the colour dialog: Enter in a field only finishes the field, so
+    // the move is never sent on a depth the dialog has not judged yet.
+    let text_field_focused = ui
+        .ctx()
+        .memory(|memory| memory.focused())
+        .is_some_and(|focused_id| egui::TextEdit::load_state(ui.ctx(), focused_id).is_some());
+    let mut open = true;
+    let mut move_it = false;
+    let mut cancel = false;
+    let roof = draft.edit.side == BoundarySide::Roof;
+    let title = if roof { tr!("drill-hole-move-roof-title") } else { tr!("drill-hole-move-floor-title") };
+    DragableMenu::new("boundary_move_dialog", title)
+        .open(&mut open)
+        .min_width(360.0)
+        .max_width(440.0)
+        .show(ui.ctx(), |ui| {
+            let nothing = || tr!("drill-hole-move-boundary-nothing-touches");
+            read_only_row(ui, &tr!("drill-hole-rename-seam-hole"), &draft.edit.dhid);
+            read_only_row(ui, &tr!("drill-hole-move-boundary-above"), &draft.above.clone().unwrap_or_else(nothing));
+            read_only_row(ui, &tr!("drill-hole-move-boundary-below"), &draft.below.clone().unwrap_or_else(nothing));
+            let at = if roof { tr!("drill-hole-move-roof-at") } else { tr!("drill-hole-move-floor-at") };
+            read_only_row(ui, &at, &format!("{:.2} m", draft.edit.at));
+            ui.add_space(4.0);
+            MenuFieldF64::new(tr!("drill-hole-move-boundary-depth"), &mut draft.edit.to, 0.0..=draft.end)
+                .speed(0.01)
+                .max_decimals(3)
+                .suffix(" m")
+                .show(ui);
+            MenuFieldText::new(tr!("drill-hole-rename-seam-reason"), &mut draft.reason)
+                .width(220.0)
+                .hint_text(tr!("drill-hole-move-boundary-reason-hint"))
+                .show(ui);
+            // The log draws the preview a frame behind, so it is asked to
+            // draw again whenever the depth changes.
+            if draft.previewed != Some(draft.edit.to) {
+                draft.preview = dataset.dataset.boundary_preview(&draft.edit).map(std::sync::Arc::new);
+                draft.previewed = Some(draft.edit.to);
+                ui.ctx().request_repaint();
+            }
+            // Judged after the fields, on what they hold this frame.
+            let problem = dataset
+                .dataset
+                .boundary_corrections(draft.edit.hole, draft.edit.interval, draft.edit.side, draft.edit.to, &CorrectionNote::default())
+                .err();
+            let can_move = problem.is_none() && !draft.reason.trim().is_empty();
+            let alone = if roof { draft.above.is_none() } else { draft.below.is_none() };
+            match &problem {
+                Some(problem) if *problem != BoundaryProblem::Unmoved => menu::menu_note(ui, problem.message()),
+                _ if alone && roof => menu::menu_note(ui, tr!("drill-hole-move-roof-moves-alone")),
+                _ if alone => menu::menu_note(ui, tr!("drill-hole-move-floor-moves-alone")),
+                _ => menu::menu_note(ui, tr!("drill-hole-move-boundary-logged-kept")),
+            }
+            menu::menu_actions(ui, |ui| {
+                let confirm = !text_field_focused && menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("drill-hole-move-boundary-submit")).primary().enabled(can_move)).clicked() || confirm) && can_move {
+                    move_it = true;
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    cancel = true;
+                }
+            });
+        });
+    if move_it {
+        commands.push(UiCommand::MoveBoundary {
+            dataset: draft.dataset,
+            edit: draft.edit.clone(),
+            reason: draft.reason.trim().to_owned(),
+        });
+        open = false;
+    }
+    if !open || cancel {
+        editor.boundary_move_dialog = None;
+    }
+}
+
+/// The insert interval dialog: the hole and field picked in the borehole
+/// log, the new interval's depths, a code for that field and for any other
+/// code field of its table, and why. Inserting proposes one insertion
+/// correction per field given a code, marks the row never logged, and trims
+/// or splits any interval of the field it overlaps. Any edit to the dataset
+/// while it is open closes it.
+pub(crate) fn draw_interval_insert_dialog(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
+    let Some(draft) = editor.interval_insert_dialog.as_mut() else {
+        return;
+    };
+    let Some(dataset) = datasets
+        .iter()
+        .find(|dataset| dataset.id == draft.dataset && dataset.state.loaded && dataset.state.revision() == draft.revision)
+    else {
+        editor.interval_insert_dialog = None;
+        return;
+    };
+    // The hole's end, the deepest an interval can go.
+    let Some(end) = dataset.dataset.holes.get(draft.hole).map(|hole| dataset.dataset.end_of(hole)) else {
+        editor.interval_insert_dialog = None;
+        return;
+    };
+    if draft.out_of_sequence.is_some() {
+        draw_insert_out_of_sequence_warning(ui, editor, end, commands);
+        return;
+    }
+    // As in the move dialog: Enter in a field only finishes the field.
+    let text_field_focused = ui
+        .ctx()
+        .memory(|memory| memory.focused())
+        .is_some_and(|focused_id| egui::TextEdit::load_state(ui.ctx(), focused_id).is_some());
+    let mut open = true;
+    let mut insert = None;
+    let mut cancel = false;
+    DragableMenu::new("interval_insert_dialog", tr!("drill-hole-insert-interval-title"))
+        .open(&mut open)
+        .min_width(360.0)
+        .max_width(440.0)
+        .show(ui.ctx(), |ui| {
+            read_only_row(ui, &tr!("drill-hole-rename-seam-hole"), &draft.dhid);
+            ui.add_space(4.0);
+            // Typed, not prefilled from a seam: its own depths would only be
+            // refused, so nothing is judged until both are given.
+            let range = tr!("drill-hole-insert-interval-depth-hint", end = shown_depth(end));
+            MenuFieldText::new(tr!("survey-from"), &mut draft.from.text).width(220.0).hint_text(range.clone()).show(ui);
+            MenuFieldText::new(tr!("survey-to"), &mut draft.to.text).width(220.0).hint_text(range).show(ui);
+            // One field per code field of the table, the one picked first and
+            // the only one that must be given.
+            code_field(ui, &mut draft.picked, 0);
+            for (index, sibling) in draft.siblings.iter_mut().enumerate() {
+                if code_field(ui, &mut sibling.field, index + 1) {
+                    sibling.follows_split = false;
+                }
+            }
+            MenuFieldText::new(tr!("drill-hole-rename-seam-reason"), &mut draft.reason)
+                .width(220.0)
+                .hint_text(tr!("drill-hole-insert-interval-reason-hint"))
+                .show(ui);
+            // Judged after the fields, on what they hold this frame.
+            let mut edit = draft.edit(end);
+            let mut judged = dataset.dataset.insertion_corrections(&edit, &CorrectionNote::default());
+            let hole = &dataset.dataset.holes[draft.hole];
+            // A field still following the split takes the value of the
+            // interval split, that row's own; with no split it stays blank.
+            // Nothing is ever taken from a neighbour.
+            let parent = judged.as_ref().ok().and_then(|plan| plan.split.first()).and_then(|&index| hole.intervals.get(index));
+            let mut followed = false;
+            for sibling in draft.siblings.iter_mut().filter(|sibling| sibling.follows_split) {
+                let wanted = parent.map(|parent| value_name(parent.values.get(&sibling.field.key))).unwrap_or_default();
+                if sibling.field.value != wanted {
+                    sibling.field.value = wanted;
+                    followed = true;
+                }
+            }
+            // A sibling that followed changes the edit that is sent, which the
+            // name check and the records read, so it is judged again.
+            if followed {
+                edit = draft.edit(end);
+                judged = dataset.dataset.insertion_corrections(&edit, &CorrectionNote::default());
+                ui.ctx().request_repaint();
+            }
+            let named_apart = insertion_named_apart(&dataset.color.working_sections, &edit);
+            // Depths come first: until both are given, a depth that is not one
+            // or the prompt to type them is said before any other refusal.
+            match &judged {
+                _ if draft.depths(end).is_none() => menu::menu_note(ui, depth_prompt(draft, end)),
+                Ok(plan) => {
+                    for (target, _) in plan.corrections.iter().filter(|(_, record)| record.kind == CorrectionKind::Boundary) {
+                        let Some(interval) = hole.intervals.get(target.interval) else { continue };
+                        let label = if plan.split.contains(&target.interval) {
+                            tr!("drill-hole-insert-interval-splits")
+                        } else {
+                            tr!("drill-hole-insert-interval-trims")
+                        };
+                        read_only_row(ui, &label, &interval_description(interval, &edit.field));
+                    }
+                    // As a rename is guarded: a code named like a working
+                    // section that does not hold it would cost the section its
+                    // name, so the insertion waits until the code changes.
+                    match &named_apart {
+                        Some((section, code)) => menu::menu_note(ui, name_is_code_message(section, code)),
+                        None => menu::menu_note(ui, tr!("drill-hole-insert-interval-note")),
+                    }
+                }
+                Err(problem) => menu::menu_note(ui, problem.message()),
+            }
+            let can_insert = judged.is_ok() && named_apart.is_none() && !draft.reason.trim().is_empty();
+            menu::menu_actions(ui, |ui| {
+                let confirm = !text_field_focused && menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("drill-hole-insert-interval-submit")).primary().enabled(can_insert)).clicked() || confirm) && can_insert {
+                    insert = judged.ok().map(|plan| (draft.edit(end), plan));
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    cancel = true;
+                }
+            });
+        });
+    if let Some((edit, plan)) = insert {
+        // Out of the column's order is allowed, as overturned strata are,
+        // but only after a warning.
+        let codes = dataset.dataset.insertion_out_of_sequence(&edit, &plan, |field| dataset.color.strat_column(field));
+        if !codes.is_empty() {
+            draft.out_of_sequence = Some(codes.join(", "));
+            return;
+        }
+        commands.push(interval_insert_command(draft, end));
+        open = false;
+    }
+    if !open || cancel {
+        editor.interval_insert_dialog = None;
+    }
+}
+
+/// The delete interval dialog: the interval picked in the borehole log and
+/// why it goes. Deleting proposes one deletion correction; the whole row
+/// leaves the interpreted data, every field it holds with it, and the row is
+/// held in the record. Any edit to the dataset while it is open closes it.
+pub(crate) fn draw_interval_delete_dialog(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
+    let Some(draft) = editor.interval_delete_dialog.as_mut() else {
+        return;
+    };
+    let Some(dataset) = datasets
+        .iter()
+        .find(|dataset| dataset.id == draft.dataset && dataset.state.loaded && dataset.state.revision() == draft.revision)
+    else {
+        editor.interval_delete_dialog = None;
+        return;
+    };
+    // The row at the index must still be the one picked, as the deletion
+    // checks again when it runs.
+    let still_there = dataset
+        .dataset
+        .holes
+        .get(draft.hole)
+        .filter(|hole| hole.dhid == draft.dhid)
+        .and_then(|hole| hole.intervals.get(draft.interval))
+        .is_some_and(|row| same_interval(row, &draft.row));
+
+    let text_field_focused = ui
+        .ctx()
+        .memory(|memory| memory.focused())
+        .is_some_and(|focused_id| egui::TextEdit::load_state(ui.ctx(), focused_id).is_some());
+    let mut open = true;
+    let mut delete = false;
+    let mut cancel = false;
+    DragableMenu::new("interval_delete_dialog", tr!("drill-hole-delete-interval-title"))
+        .open(&mut open)
+        .min_width(360.0)
+        .max_width(440.0)
+        .show(ui.ctx(), |ui| {
+            read_only_row(ui, &tr!("drill-hole-rename-seam-hole"), &draft.dhid);
+            read_only_row(ui, &tr!("drill-hole-delete-interval-interval"), &draft.description);
+            ui.add_space(4.0);
+            MenuFieldText::new(tr!("drill-hole-rename-seam-reason"), &mut draft.reason)
+                .width(220.0)
+                .hint_text(tr!("drill-hole-delete-interval-reason-hint"))
+                .show(ui);
+            if still_there {
+                menu::menu_note(ui, tr!("drill-hole-delete-interval-note"));
+            } else {
+                menu::menu_note(ui, tr!("drill-hole-delete-interval-changed"));
+            }
+            let can_delete = still_there && !draft.reason.trim().is_empty();
+            menu::menu_actions(ui, |ui| {
+                let confirm = !text_field_focused && menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("drill-hole-delete-interval-submit")).primary().enabled(can_delete)).clicked() || confirm) && can_delete {
+                    delete = true;
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    cancel = true;
+                }
+            });
+        });
+    if delete {
+        commands.push(UiCommand::DeleteInterval {
+            dataset: draft.dataset,
+            edit: IntervalDelete {
+                hole: draft.hole,
+                dhid: draft.dhid.clone(),
+                interval: draft.interval,
+                field: draft.field.clone(),
+                row: draft.row.clone(),
+            },
+            reason: draft.reason.trim().to_owned(),
+        });
+        open = false;
+    }
+    if !open || cancel {
+        editor.interval_delete_dialog = None;
+    }
+}
+
+/// What the insert dialog says while its depths are not both given: which
+/// field holds something that is not a depth, or else to type them.
+fn depth_prompt(draft: &IntervalInsertDraft, end: f64) -> String {
+    for (depth, field, end) in [(&draft.from, tr!("survey-from"), None), (&draft.to, tr!("survey-to"), Some(end))] {
+        if depth.depth(end) == TypedDepth::NotADepth {
+            return tr!("drill-hole-insert-interval-not-a-depth", field = field);
+        }
+    }
+    tr!("drill-hole-insert-interval-type-depths")
+}
+
+/// One code field of the insert dialog: its codes offered as it is typed, a
+/// local code not among them typed in full. True when the user changed it.
+fn code_field(ui: &mut egui::Ui, field: &mut InsertCodeField, salt: usize) -> bool {
+    let codes = &field.codes;
+    let (response, accepted) = MenuFieldText::new(field.label.clone(), &mut field.value)
+        .width(220.0)
+        .hint_text(tr!("drill-hole-insert-interval-code-hint"))
+        .show_with_completions(ui, ("interval_insert_code", salt), |query| {
+            let typed = query.text.trim();
+            let lower = typed.to_lowercase();
+            codes
+                .iter()
+                .filter(|code| code.as_str() != typed && code.to_lowercase().contains(&lower))
+                .map(|code| egui::Suggestion::new(code.clone()))
+                .collect()
+        });
+    response.changed() || accepted.is_some()
+}
+
+/// One interval as a correction dialog lists it: its depths, and its name
+/// in `field` where it holds one.
+pub(crate) fn interval_description(interval: &DrillInterval, field: &str) -> String {
+    let (from, to) = (format!("{:.2}", interval.from), format!("{:.2}", interval.to));
+    if holds_value(interval, field) {
+        tr!("drill-hole-move-boundary-interval", from = from, to = to, name = value_name(interval.values.get(field)))
+    } else {
+        tr!("drill-hole-move-boundary-interval-unnamed", from = from, to = to)
+    }
+}
+
+/// The insertion the dialog holds, as typed.
+fn interval_insert_command(draft: &IntervalInsertDraft, end: f64) -> UiCommand {
+    UiCommand::InsertInterval {
+        dataset: draft.dataset,
+        edit: draft.edit(end),
+        reason: draft.reason.trim().to_owned(),
+    }
+}
+
+/// The warning an insertion out of the strat column's order raises: OK
+/// inserts anyway, Cancel goes back to the insertion.
+fn draw_insert_out_of_sequence_warning(ui: &mut egui::Ui, editor: &mut EditorState, end: f64, commands: &mut Vec<UiCommand>) {
+    let Some(draft) = editor.interval_insert_dialog.as_mut() else {
+        return;
+    };
+    let text = tr!("drill-hole-insert-out-of-sequence", code = draft.out_of_sequence.clone().unwrap_or_default());
+    match out_of_sequence_warning(ui.ctx(), "interval_insert_out_of_sequence", text, tr!("drill-hole-insert-out-of-sequence-note")) {
+        Some(true) => {
+            commands.push(interval_insert_command(draft, end));
+            editor.interval_insert_dialog = None;
+        }
+        Some(false) => draft.out_of_sequence = None,
+        None => {}
+    }
+}
+
+/// The shift names dialog: one hole's names slid one run along the hole,
+/// what that does, and why. Shifting proposes one value correction per
+/// interval whose name moves; depths never change.
+pub(crate) fn draw_name_shift_dialog(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
+    let Some(draft) = editor.name_shift_dialog.as_mut() else {
+        return;
+    };
+    if !datasets
+        .iter()
+        .any(|dataset| dataset.id == draft.dataset && dataset.state.loaded && dataset.state.revision() == draft.revision)
+    {
+        editor.name_shift_dialog = None;
+        return;
+    }
+    let mut open = true;
+    let mut shift = false;
+    let mut cancel = false;
+    let reason = draft.reason.trim().to_owned();
+    let can_shift = draft.moved + draft.unknown > 0 && !reason.is_empty();
+    let title = match (draft.direction, draft.from) {
+        (ShiftDirection::Up, None) => tr!("drill-hole-shift-names-up-title"),
+        (ShiftDirection::Down, None) => tr!("drill-hole-shift-names-down-title"),
+        (ShiftDirection::Up, Some(_)) => tr!("drill-hole-shift-names-up-from-here-title"),
+        (ShiftDirection::Down, Some(_)) => tr!("drill-hole-shift-names-down-from-here-title"),
+    };
+    DragableMenu::new("name_shift_dialog", title)
+        .open(&mut open)
+        .min_width(360.0)
+        .max_width(440.0)
+        .show(ui.ctx(), |ui| {
+            read_only_row(ui, &tr!("drill-hole-rename-seam-hole"), &draft.dhid);
+            read_only_row(ui, &tr!("drill-hole-shift-names-field"), &draft.field);
+            read_only_row(ui, &tr!("drill-hole-shift-names-moved"), &draft.moved.to_string());
+            read_only_row(ui, &tr!("drill-hole-shift-names-unknown"), &draft.unknown.to_string());
+            read_only_row(ui, &tr!("drill-hole-shift-names-not-in-column"), &draft.untouched.to_string());
+            ui.add_space(4.0);
+            MenuFieldText::new(tr!("drill-hole-rename-seam-reason"), &mut draft.reason)
+                .width(220.0)
+                .hint_text(tr!("drill-hole-shift-names-reason-hint"))
+                .show(ui);
+            menu::menu_note(ui, tr!("drill-hole-shift-names-depths-kept"));
+            if draft.from.is_some() {
+                menu::menu_note(ui, tr!("drill-hole-shift-names-from-here-note"));
+            } else if draft.unknown > 0 {
+                menu::menu_note(ui, tr!("drill-hole-shift-names-unknown-note"));
+            }
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                if (ui.add(MenuButton::new(tr!("drill-hole-shift-names-submit")).primary().enabled(can_shift)).clicked() || confirm) && can_shift {
+                    shift = true;
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    cancel = true;
+                }
+            });
+        });
+    if shift {
+        commands.push(UiCommand::ShiftStratColumn {
+            dataset: draft.dataset,
+            hole: draft.hole,
+            field: draft.field.clone(),
+            direction: draft.direction,
+            from: draft.from,
+            reason,
+        });
+        open = false;
+    }
+    if !open || cancel {
+        editor.name_shift_dialog = None;
     }
 }
 
@@ -239,8 +824,13 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                 let mut stops = dataset.color.stops.clone();
                 let mut changed = false;
                 let mut remove = None;
-                let can_remove = stops.len() > 2;
+                let can_remove = stops.len() > MIN_DRILL_COLOR_STOPS;
+                // The slider spans the whole ramp; a stop is held between its
+                // neighbours, so the ramp's order never changes under a drag.
+                let positions: Vec<f32> = stops.iter().map(|stop| stop.t).collect();
                 for (index, stop) in stops.iter_mut().enumerate() {
+                    let low = index.checked_sub(1).map_or(0.0, |before| positions[before]);
+                    let high = positions.get(index + 1).copied().unwrap_or(1.0);
                     MenuField::new(tr!("drill-hole-colour-stop", index = ((index + 1) as u32))).show(ui, |ui, _, _| {
                         changed |= crate::ui::widgets::color::edit_rgb(ui, &mut stop.color).changed();
                         let actual = if (*max - *min).abs() <= f64::EPSILON {
@@ -249,9 +839,13 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                             *min + f64::from(stop.t) * (*max - *min)
                         };
                         ui.monospace(format!("{actual:.6}"));
-                        changed |= ui
+                        let moved = ui
                             .add_sized([145.0, ui.spacing().interact_size.y], egui::Slider::new(&mut stop.t, 0.0..=1.0).show_value(false))
                             .changed();
+                        if moved && low <= high {
+                            stop.t = stop.t.clamp(low, high);
+                        }
+                        changed |= moved;
                         if can_remove && ui.small_button(tr!("common-minus-sign")).clicked() {
                             remove = Some(index);
                         }
@@ -324,8 +918,26 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
                     });
                 };
                 // Inline: the dialog already scrolls, so a list scroll would nest.
-                for row in &shown_rows {
-                    draw_row(ui, row);
+                // The first row sets the pitch; only rows the scroll shows are
+                // drawn after it, the rest as blank space.
+                if let Some((first, rest)) = shown_rows.split_first() {
+                    let top = ui.cursor().min.y;
+                    draw_row(ui, first);
+                    let pitch = ui.cursor().min.y - top;
+                    let clip = ui.clip_rect();
+                    let visible = visible_rows(ui.cursor().min.y, pitch, (clip.min.y, clip.max.y), rest.len());
+                    if visible.start > 0 {
+                        ui.add_space(visible.start as f32 * pitch);
+                    }
+                    // Skipped rows still take ids, so each row keeps its own.
+                    ui.skip_ahead_auto_ids(visible.start);
+                    for row in &rest[visible.clone()] {
+                        draw_row(ui, row);
+                    }
+                    if visible.end < rest.len() {
+                        ui.add_space((rest.len() - visible.end) as f32 * pitch);
+                    }
+                    ui.skip_ahead_auto_ids(rest.len() - visible.end);
                 }
                 if let Some(table) = table {
                     commands.push(UiCommand::SetDrillHoleCategoryColors { id, categories: table });
@@ -350,6 +962,17 @@ pub(crate) fn draw_drill_hole_color_editor(ui: &mut egui::Ui, dataset: &OpenDril
     if let DrillFieldKind::Categorical { categories } = &field.kind {
         draw_working_sections(ui, dataset, field, categories, commands);
     }
+}
+
+/// The rows of an evenly spaced list, the first starting at `top`, that
+/// meet the vertical `clip` span: all of them when the pitch is unknown.
+fn visible_rows(top: f32, pitch: f32, clip: (f32, f32), count: usize) -> std::ops::Range<usize> {
+    if pitch <= 0.0 || !pitch.is_finite() {
+        return 0..count;
+    }
+    let first = (((clip.0 - top) / pitch).floor().max(0.0) as usize).min(count);
+    let end = (((clip.1 - top) / pitch).ceil().max(0.0) as usize).clamp(first, count);
+    first..end
 }
 
 /// Draft state for the "add a working section" builder: kept in egui memory,

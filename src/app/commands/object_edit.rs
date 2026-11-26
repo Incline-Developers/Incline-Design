@@ -10,12 +10,59 @@ use crate::{
     i18n::tr,
     model::{
         Command, Object, ObjectId,
-        object_edit::{drift_detected, validate_object},
+        object_edit::{drift_detected, reverse_vertices, validate_object},
     },
     userspace_log, userspace_warn,
 };
 
+/// Why nothing was reversed, given how many of the selected strings may be
+/// edited: none means hiding or locking, else each reads the same reversed.
+fn no_reversal_reason(editable: usize) -> String {
+    match editable {
+        0 => tr!("cmd-object-edit-no-strings-reverse"),
+        _ => tr!("cmd-object-edit-strings-read-same-reversed"),
+    }
+}
+
 impl<'a> App<'a> {
+    /// Reverse every selected string as one undoable batch, the way the
+    /// dialog's Reverse does one; hidden and locked strings are left alone.
+    /// With none selected the viewport picks them first, and the pick's Done
+    /// comes back here.
+    pub(crate) fn reverse_selected_strings(&mut self) {
+        let selected = self.selected_polylines();
+        if selected.is_empty() {
+            self.begin_selection_pick(crate::ui::state::SelectionPickTool::Reverse);
+            return;
+        }
+        let Some(document) = self.workspace.active_document() else {
+            return;
+        };
+        let editable: Vec<ObjectId> = selected.into_iter().filter(|&id| self.editor.canvas_edits_object(document, id)).collect();
+        let replacements: Vec<Command> = editable
+            .iter()
+            .filter_map(|&id| {
+                let before = document.get_object(id)?.clone();
+                let mut after = before.clone();
+                let Object::Polyline { verts, closed, .. } = &mut after else {
+                    return None;
+                };
+                reverse_vertices(verts, *closed);
+                (before != after).then_some(Command::Replace { before, after })
+            })
+            .collect();
+        if replacements.is_empty() {
+            userspace_warn!("{}", no_reversal_reason(editable.len()));
+            return;
+        }
+        let count = replacements.len();
+        self.execute_edit(Command::Batch(replacements));
+        // A Copy Along pick waiting on one of them now marks another vertex.
+        self.refresh_copy_along_pick();
+        userspace_log!("{}", tr!("cmd-object-edit-reversed-strings", count = count.to_string()));
+        self.invalidate_geometry();
+    }
+
     /// Open the "Edit Object" dialog on `id`, seeding its working copy from
     /// the active project's document (not `scene_document`, the read-only
     /// composite: the dialog needs the editable copy).
@@ -39,6 +86,19 @@ impl<'a> App<'a> {
         let layer_name = layer.map(|layer| layer.name.clone()).unwrap_or_else(|| tr!("cmd-object-edit-unassigned"));
         let layer_rgba = layer.map_or([1.0, 1.0, 1.0, 1.0], |layer| layer.color);
         self.editor.object_edit_dialog = Some(crate::ui::dialogs::object_edit::ObjectEditDialog::new(id, object, layer_name, layer_rgba));
+    }
+
+    /// Open the "Edit Object" dialog on `id` at its Vertices tab with `row`,
+    /// counting from zero, selected and scrolled into view once; a dialog
+    /// already open on `id` keeps its working copy and moves to the row.
+    pub(crate) fn show_object_vertex(&mut self, id: ObjectId, row: usize) {
+        self.activate_project_for_object(id);
+        self.open_object_edit_dialog(id);
+        if let Some(dialog) = self.editor.object_edit_dialog.as_mut().filter(|dialog| dialog.id == id) {
+            dialog.tab = crate::ui::dialogs::object_edit::ObjectEditTab::Vertices;
+            dialog.selected_row = Some(row);
+            dialog.scroll_to_row = Some(row);
+        }
     }
 
     /// Close the "Edit Object" dialog if its object is gone from the active

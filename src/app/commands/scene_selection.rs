@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use crate::{
     app::{App, canvas::is_triangulation_polyline},
     model::{Object, ObjectId, SceneEntityId, block_model::BlockModelId, drill_hole::DrillHoleId, point_cloud::PointCloudId, triangulation::TriangulationId},
-    ui::state::{ExplorerRow, SelectionCounts},
+    ui::state::{ExplorerRow, SelectionCounts, SelectionPickTool},
 };
 
 impl App<'_> {
@@ -148,6 +148,18 @@ impl App<'_> {
             .collect()
     }
 
+    /// Make `handles` the whole selection, as a tool does with what it made,
+    /// so the next tool in a flow is ready for it.
+    pub(crate) fn select_only(&mut self, handles: impl IntoIterator<Item = SceneEntityId>) {
+        if self.has_pending_move_delta() {
+            self.cancel_move_delta();
+        }
+        self.editor.selected_handles = handles.into_iter().collect();
+        self.editor.selected_drill_holes.clear();
+        self.editor.selected_tie_ins.clear();
+        self.invalidate_overlay();
+    }
+
     /// Refresh the per-kind selection counts the menus read.
     ///
     /// Walks the selection rather than the project, so the cost is the size of
@@ -171,6 +183,10 @@ impl App<'_> {
                         if matches!(object, Object::Point { .. }) {
                             counts.surface_points += 1;
                         }
+                        if let Object::Polyline { closed: false, verts, .. } = object {
+                            counts.open_strings += 1;
+                            counts.surface_points += verts.len();
+                        }
                     }
                 }
                 SceneEntityId::Triangulation(id) => {
@@ -184,6 +200,11 @@ impl App<'_> {
                 SceneEntityId::BlockModel(id) if self.block_models.iter().any(|model| model.id == *id && model.state.loaded) => {
                     counts.block_models += 1;
                 }
+                SceneEntityId::PrismoidGrid(id) => {
+                    if let Some(item) = self.prismoid_grids.iter().find(|item| item.id == *id && item.state.loaded) {
+                        counts.grid_masked_cells += item.summary.masked_cells;
+                    }
+                }
                 _ => {}
             }
         }
@@ -193,6 +214,14 @@ impl App<'_> {
         let mut reference_holes = 0usize;
         self.for_each_reference_hole(|_| reference_holes += 1);
         counts.reference_holes = reference_holes;
+        if let Some(selection) = &self.editor.cell_selection {
+            (counts.prismoid_cells, counts.masked_prismoid_cells) = (selection.count, selection.masked);
+        }
+        // Read off each point's layer mark, so only while the one prompt
+        // that shows it is up.
+        if self.editor.selection_pick.as_ref().is_some_and(|pick| pick.tool == SelectionPickTool::HoleMisfit) {
+            counts.quality_points = super::thickness_points::quality_point_count(&self.scene_document, &self.editor.selected_handles);
+        }
         self.editor.selection_counts = counts;
         self.prune_selected_layers();
     }

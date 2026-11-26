@@ -296,6 +296,7 @@ impl App<'_> {
                 SceneEntityId::DrillHole(id) => view.drill_holes.iter().find(|item| item.id == *id).map(|item| item.name.clone()),
                 SceneEntityId::PointCloud(id) => view.point_clouds.iter().find(|item| item.id == *id).map(|item| item.name.clone()),
                 SceneEntityId::Raster(id) => view.raster_textures.iter().find(|item| item.id == *id).map(|item| item.name.clone()),
+                SceneEntityId::PrismoidGrid(id) => view.prismoid_grids.iter().find(|item| item.id == *id).map(|item| item.name.clone()),
                 SceneEntityId::Object(_) | SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_) => None,
             }
         };
@@ -311,6 +312,7 @@ impl App<'_> {
                     SceneEntityId::DrillHole(id) => ("drillholes", id.0),
                     SceneEntityId::PointCloud(id) => ("point_cloud", id.0),
                     SceneEntityId::Raster(id) => ("raster", id.0),
+                    SceneEntityId::PrismoidGrid(id) => ("prismoid_grid", id.0),
                     SceneEntityId::HaulRoad(id) => ("haul_road", id.0),
                     SceneEntityId::HaulNode(id) => ("haul_node", id.0),
                 };

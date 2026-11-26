@@ -12,8 +12,10 @@
 
 use crate::{
     i18n::tr,
+    model::Axis,
     ui::{
         EditorState, UiProjectView,
+        elements::main_menu::MenuRow,
         state::{ActiveTool, CursorMode, UiCommand, Workspace},
         themed_icon, unthemed_icon,
         widgets::{
@@ -72,7 +74,7 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
         // Pit Design opens what is selected as well as drawing anew.
         let opens_selection = tool == ActiveTool::PitDesign && editor.selection_counts.pit_designable > 0;
         let layer_ok = !tool.requires_active_layer() || editor.active_layer.is_some() || opens_selection;
-        let blocked_by_section = editor.slice_mode_enabled && tool.section_refuses();
+        let blocked_by_section = editor.slice_mode_enabled && tool.section_refuses(editor.active_workspace);
         LeftTool {
             icon: egui::Image::new(icon),
             hint: if !editing_enabled {
@@ -114,6 +116,61 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
         tool(unthemed_icon!("explode_polyline.svg"), tr!("toolbars-explode-polyline-lines"), ActiveTool::ExplodePolyline),
         tool(unthemed_icon!("delete_element.svg"), tr!("toolbars-delete-points"), ActiveTool::DeletePoints),
     ]
+}
+
+/// Production's drawing run less the tools that design a pit, then the
+/// string tools a geologist reaches for on a section.
+fn drawing_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, project_active: bool) -> Vec<LeftTool> {
+    let mut tools = left_tools(ui, editor, editing_enabled, project_active);
+    tools.retain(|tool| !matches!(tool.action, LeftToolAction::Tool(active) if active.designs_pit()));
+    let cell = |icon: egui::ImageSource<'static>, tooltip: String, action: LeftToolAction, enabled: bool| LeftTool {
+        icon: egui::Image::new(icon),
+        tooltip,
+        action,
+        enabled: editing_enabled && enabled,
+        hint: None,
+    };
+    tools.extend([
+        cell(
+            unthemed_icon!("measure_batter_angle.svg"),
+            tr!("toolbars-strike-dip"),
+            LeftToolAction::Tool(ActiveTool::MeasureBatterAngle),
+            true,
+        ),
+        cell(
+            themed_icon!(ui, "edit_vertex.svg"),
+            tr!("toolbars-edit-vertex"),
+            LeftToolAction::Tool(ActiveTool::EditVertex),
+            true,
+        ),
+        cell(
+            themed_icon!(ui, "set_z.svg"),
+            tr!("common-set") + " Z...",
+            LeftToolAction::Command(Box::new(UiCommand::OpenMoveToAxisDialog(Axis::Z))),
+            true,
+        ),
+        cell(
+            themed_icon!(ui, "insert_crossings.svg"),
+            tr!("toolbars-insert-points-crossings"),
+            LeftToolAction::Command(Box::new(UiCommand::InsertPointsAtIntersections)),
+            // Opens straight into the pick when the selection has nothing to cross.
+            true,
+        ),
+        cell(
+            themed_icon!(ui, "reverse_string.svg"),
+            tr!("toolbars-reverse-strings"),
+            LeftToolAction::Command(Box::new(UiCommand::ReverseSelectedStrings)),
+            // Opens straight into the pick when no polyline is selected.
+            true,
+        ),
+        cell(
+            themed_icon!(ui, "thin_string.svg"),
+            tr!("toolbars-thin-strings"),
+            LeftToolAction::Command(Box::new(UiCommand::OpenThinStringsDialog)),
+            true,
+        ),
+    ]);
+    tools
 }
 
 /// The Blasting step's tools, in the order they are drawn: the two that draw
@@ -291,7 +348,7 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
     if !response.clicked() {
         return;
     }
-    match tool.action {
+    match &tool.action {
         LeftToolAction::NewLayer => {
             editor.new_layer_dialog_open = !editor.new_layer_dialog_open;
             if editor.new_layer_dialog_open {
@@ -299,16 +356,27 @@ fn draw_left_tool(ui: &mut egui::Ui, tool: &LeftTool, editor: &mut EditorState, 
                 commands.push(UiCommand::SetActiveTool(ActiveTool::None));
             }
         }
-        LeftToolAction::Tool(active) => commands.push(UiCommand::SetActiveTool(active)),
+        LeftToolAction::Tool(active) => commands.push(UiCommand::SetActiveTool(*active)),
         LeftToolAction::DrillPattern => commands.push(UiCommand::ToggleCreateDrillPattern),
         LeftToolAction::HaulDraw => commands.push(if editor.haul_draw { UiCommand::FinishHaulRoad } else { UiCommand::StartHaulRoad }),
-        LeftToolAction::Command(ref command) => commands.push(command.as_ref().clone()),
+        LeftToolAction::Command(command) => commands.push(command.as_ref().clone()),
         LeftToolAction::RecordVideo => {
             editor.video_export_dialog = match editor.video_export_dialog {
                 Some(_) => None,
                 None => Some(crate::ui::dialogs::video_export::VideoExportDialog::new(editor)),
             };
         }
+    }
+    if let LeftToolAction::Tool(_) | LeftToolAction::Command(_) = tool.action {
+        note_row_use(editor.active_workspace, commands);
+    }
+}
+
+/// A cell running a Design row's function, the last command pushed, is a use
+/// of that row.
+fn note_row_use(workspace: Workspace, commands: &mut Vec<UiCommand>) {
+    if let Some(row) = commands.last().and_then(|command| MenuRow::running(workspace, command)) {
+        commands.push(UiCommand::NoteRecentFunction(row));
     }
 }
 
@@ -341,6 +409,7 @@ pub(crate) fn draw_left_toolbar(
         _ if editor.is_haulage_page() => haulage_tools(ui, project, editor, project_active),
         _ if editor.is_schedule_animation() => animate_tools(ui, editor),
         workspace if workspace.has_production_tools() => left_tools(ui, editor, editing_enabled, project_active),
+        workspace if workspace.has_drawing_tools() => drawing_tools(ui, editor, editing_enabled, project_active),
         Workspace::DrillAndBlast => blast_tools(ui, project, editor, editing_enabled, project_active),
         _ => Vec::new(),
     };
@@ -537,6 +606,7 @@ pub(crate) fn tool_button(
 
     if response.clicked() {
         commands.push(UiCommand::SetActiveTool(tool));
+        note_row_use(editor.active_workspace, commands);
     }
 
     response
