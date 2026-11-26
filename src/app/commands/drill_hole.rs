@@ -689,34 +689,37 @@ impl<'a> App<'a> {
                 color: crate::model::ObjectColor::ByLayer,
             })
             .collect();
-        let used = objects.len();
+        let picks = ReferencePicks {
+            #[cfg(not(target_arch = "wasm32"))]
+            layer: layer_id,
+            points: objects.len(),
+            without: absent,
+            flagged,
+        };
         self.execute_edit(Command::AddLayerSnapshot { layer, objects });
         userspace_log!(
             "{}",
             tr!(
                 "cmd-drill-hole-reference-points-used-holes-placed",
-                used = used.to_string(),
-                absent = absent.to_string(),
+                used = picks.points.to_string(),
+                absent = picks.without.to_string(),
                 value = target.label().to_string(),
-                flagged = flagged.len().to_string()
+                flagged = picks.flagged.len().to_string()
             )
         );
-        if !flagged.is_empty() {
-            userspace_warn!("{}", tr!("cmd-drill-hole-uppermost-run-used-flagged-holes", holes = flagged.join(", ").to_string()));
+        if !picks.flagged.is_empty() {
+            userspace_warn!("{}", tr!("cmd-drill-hole-uppermost-run-used-flagged-holes", holes = picks.flagged.join(", ").to_string()));
         }
         self.invalidate_geometry();
-        Some(ReferencePicks {
-            layer: layer_id,
-            points: used,
-            without: absent,
-            flagged,
-        })
+        Some(picks)
     }
 }
 
 /// What a reference pick placed: one point on each hole that holds the
 /// code, on a layer of their own.
 pub(crate) struct ReferencePicks {
+    /// The layer they are on, for the MCP server to name.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) layer: crate::model::LayerId,
     pub(crate) points: usize,
     /// Holes it gave nothing for: the code not logged in them, or gone.

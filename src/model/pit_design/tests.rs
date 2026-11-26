@@ -1606,7 +1606,10 @@ fn flag_census() {
                                 for road in bench.ramps.iter().filter(|road| road.lengthened == 0.0) {
                                     grades.push(road.grade);
                                     if road.grade < 0.095 {
-                                        println!("low grade {:.4} {kind_name} {direction:?} dump={dump} {layout:?} cw={clockwise} {bench_height} bench {index} switchback {} flat {:.1}", road.grade, road.switchback, road.flat);
+                                        println!(
+                                            "low grade {:.4} {kind_name} {direction:?} dump={dump} {layout:?} cw={clockwise} {bench_height} bench {index} switchback {} flat {:.1}",
+                                            road.grade, road.switchback, road.flat
+                                        );
                                     }
                                 }
                             }
@@ -1820,7 +1823,10 @@ fn flag_look() {
     }
     for (index, bench) in design.report.iter().enumerate() {
         for road in &bench.ramps {
-            println!("bench {index} at {:.1}: switchback {} turn at {:?} lengthened {:.1} flat {:.1} grade {:.4} steepest {:.4}", bench.elevation, road.switchback, road.turn_at, road.lengthened, road.flat, road.grade, road.steepest);
+            println!(
+                "bench {index} at {:.1}: switchback {} turn at {:?} lengthened {:.1} flat {:.1} grade {:.4} steepest {:.4}",
+                bench.elevation, road.switchback, road.turn_at, road.lengthened, road.flat, road.grade, road.steepest
+            );
         }
     }
     for string in &design.strings {
@@ -2001,7 +2007,9 @@ fn steep_triangles() {
                         .filter(|string| string.closed)
                         .map(|string| {
                             let n = string.points.len();
-                            (0..n).filter(|&i| string.points[i].truncate().distance(string.points[(i + 1) % n].truncate()) < 0.3).count()
+                            (0..n)
+                                .filter(|&i| string.points[i].truncate().distance(string.points[(i + 1) % n].truncate()) < 0.3)
+                                .count()
                         })
                         .sum::<usize>();
                     println!("  close pairs {close}");
@@ -2045,7 +2053,10 @@ fn from_project() {
                 }
             }
             for flag in &design.flags {
-                println!("flag {:?} value {:.2} asked {:.2} len {:.1} bench {} at {:.1}", flag.check, flag.value, flag.asked, flag.length, flag.bench, flag.at);
+                println!(
+                    "flag {:?} value {:.2} asked {:.2} len {:.1} bench {} at {:.1}",
+                    flag.check, flag.value, flag.asked, flag.length, flag.bench, flag.at
+                );
             }
             if let Ok(out) = std::env::var("ZZ_OBJ") {
                 let strings: Vec<(Vec<DVec3>, bool)> = design
@@ -2098,7 +2109,12 @@ fn from_project() {
                 let v: Vec<f64> = text.split(',').map(|v| v.parse().unwrap()).collect();
                 let (at, reach) = (DVec2::new(v[0], v[1]), v[2]);
                 for string in &design.strings {
-                    let near: Vec<String> = string.points.iter().filter(|p| p.truncate().distance(at) < reach).map(|p| format!("({:.2},{:.2},{:.2})", p.x, p.y, p.z)).collect();
+                    let near: Vec<String> = string
+                        .points
+                        .iter()
+                        .filter(|p| p.truncate().distance(at) < reach)
+                        .map(|p| format!("({:.2},{:.2},{:.2})", p.x, p.y, p.z))
+                        .collect();
                     if !near.is_empty() {
                         println!("near {:?} closed {}: {}", string.kind, string.closed, near.join(" "));
                     }

@@ -742,6 +742,7 @@ pub(crate) fn set_console_scope(scope: u32) {
 /// Run `operation`, and return what it logged on this thread along with its
 /// result: the lines a background job's apply step wrote, say, for the MCP
 /// server to tell the AI what the job did. Logged as ever too.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn capturing<T>(operation: impl FnOnce() -> T) -> (T, Vec<String>) {
     let outer = CAPTURED.with(|captured| captured.replace(Some(Vec::new())));
     let result = operation();

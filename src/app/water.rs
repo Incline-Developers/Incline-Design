@@ -101,7 +101,8 @@ impl WaterRuns {
         &self.scene
     }
 
-    /// The runs' ids, oldest first.
+    /// The runs' ids, oldest first: for the MCP server.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn ids(&self) -> impl Iterator<Item = u64> + '_ {
         self.runs.iter().map(|run| run.id)
     }

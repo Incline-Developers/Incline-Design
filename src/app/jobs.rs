@@ -36,9 +36,11 @@ use std::sync::{Mutex, OnceLock};
 use super::App;
 
 /// How many finished jobs' outcomes are kept.
+#[cfg(not(target_arch = "wasm32"))]
 const JOB_OUTCOMES_KEPT: usize = 32;
 
 /// Something a job's apply step added to the project.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MadeItem {
     Item(crate::model::ItemRef),
@@ -47,6 +49,7 @@ pub(crate) enum MadeItem {
 
 /// How a reported job went, for the MCP server to tell the AI without it
 /// piecing it together from the tasks, the activity log and the project.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 pub(crate) struct JobOutcome {
     pub(crate) ticket: crate::app::BackgroundTaskTicket,
@@ -482,9 +485,15 @@ impl<'a> App<'a> {
                     if !app.job_dependencies_are_current(&poll_keys) {
                         let message = tr!("jobs-discarded-stale-result", poll_label = poll_label.clone().to_string());
                         crate::userspace_log!("{message}");
-                        app.settled_job_error = Some(message);
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            app.settled_job_error = Some(message);
+                        }
                     } else if let Some(apply) = apply.take() {
-                        app.settled_job_error = result.as_ref().err().filter(|error| !error.is::<Cancelled>()).map(|error| format!("{error:#}"));
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            app.settled_job_error = result.as_ref().err().filter(|error| !error.is::<Cancelled>()).map(|error| format!("{error:#}"));
+                        }
                         apply(app, result);
                     }
                     true
@@ -497,7 +506,10 @@ impl<'a> App<'a> {
                     if !poll_cancel.is_cancelled() {
                         let message = tr!("jobs-background-task-poll-label-ended", poll_label = poll_label.clone().to_string());
                         crate::userspace_error!("{message}");
-                        app.settled_job_error = Some(message);
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            app.settled_job_error = Some(message);
+                        }
                     }
                     true
                 }
@@ -564,12 +576,11 @@ impl<'a> App<'a> {
             };
             let mut job = self.pending_jobs.remove(index);
             self.applied_job_needs_gpu = false;
-            self.settled_job_error = None;
-            let items_before = self.item_inventory();
-            let (settled, log) = crate::logging::capturing(|| (job.poll)(self));
+            #[cfg(not(target_arch = "wasm32"))]
+            let settled = self.poll_keeping_outcome(job.ticket, &mut *job.poll);
+            #[cfg(target_arch = "wasm32")]
+            let settled = (job.poll)(self);
             if settled {
-                let error = self.settled_job_error.take();
-                self.record_job_outcome(job.ticket, &items_before, error, log);
                 residency_settled |= job
                     .keys
                     .iter()
@@ -600,6 +611,7 @@ impl<'a> App<'a> {
 
     /// Every item and design layer in the project, to tell what a job's
     /// apply step added.
+    #[cfg(not(target_arch = "wasm32"))]
     fn item_inventory(&self) -> Vec<MadeItem> {
         use crate::model::ItemRef;
         let mut items: Vec<MadeItem> = self.triangulations.iter().map(|item| MadeItem::Item(ItemRef::Triangulation(item.id))).collect();
@@ -613,8 +625,24 @@ impl<'a> App<'a> {
         items
     }
 
+    /// Poll a job, and once it settles, keep how it went for the MCP server:
+    /// what it added to the project, what it logged, and why it failed if
+    /// it did. Whether it settled.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_keeping_outcome(&mut self, ticket: crate::app::BackgroundTaskTicket, poll: &mut (dyn FnMut(&mut App<'a>) -> bool + 'a)) -> bool {
+        self.settled_job_error = None;
+        let items_before = self.item_inventory();
+        let (settled, log) = crate::logging::capturing(|| poll(self));
+        if settled {
+            let error = self.settled_job_error.take();
+            self.record_job_outcome(ticket, &items_before, error, log);
+        }
+        settled
+    }
+
     /// Keep how a reported job went: what it added beyond `before`, and why
     /// it failed if it did. A quiet job is not kept: nothing asked for it.
+    #[cfg(not(target_arch = "wasm32"))]
     fn record_job_outcome(&mut self, ticket: crate::app::BackgroundTaskTicket, before: &[MadeItem], error: Option<String>, log: Vec<String>) {
         let Some(task) = self.background_tasks.reported.iter().find(|task| task.ticket == ticket) else {
             return;

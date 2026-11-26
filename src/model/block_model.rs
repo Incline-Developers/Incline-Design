@@ -1722,6 +1722,8 @@ impl OpenBlockModel {
     /// A box given in world coordinates as the box round it in the model's
     /// own, which its slice is kept in: the same box moved, for a model not
     /// turned, else the box round its corners turned into the model's frame.
+    /// For the MCP server.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn world_box_to_local(&self, min: DVec3, max: DVec3) -> (DVec3, DVec3) {
         let inverse = self.model.rotation().inverse();
         let origin = self.model.origin();

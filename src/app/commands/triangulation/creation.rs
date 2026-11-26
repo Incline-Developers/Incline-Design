@@ -288,7 +288,10 @@ impl<'a> App<'a> {
             _ if breakline_fingerprint(&app.collect_triangulation_paths(&object_ids_for_failure).0) != sources => {
                 let message = tr!("jobs-discarded-stale-result", poll_label = tr!("cmd-creation-creating-triangulation").to_string());
                 crate::userspace_log!("{message}");
-                app.settled_job_error = Some(message);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    app.settled_job_error = Some(message);
+                }
             }
             Ok(generated) => {
                 app.editor.tri_create_failure = None;

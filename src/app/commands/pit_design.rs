@@ -1707,6 +1707,7 @@ impl App<'_> {
 
     /// Work a design out here and now, as the preview does in the
     /// background: for the MCP server.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn design_pit_now(&self, verts: &[PolyVertex], settings: &PitDesignSettings) -> Result<Preview, NoDesign> {
         let ground = if settings.daylights() {
             Some(self.pit_design_ground(settings.topography)?)
@@ -1718,6 +1719,7 @@ impl App<'_> {
 
     /// Put `pit` on pit design object `id` as one undo step, its design
     /// worked out here and now: for the MCP server.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn set_pit_now(&mut self, id: ObjectId, mut pit: PitObject) -> Result<Result<Design, NoDesign>> {
         let before = self
             .operand_object(id)

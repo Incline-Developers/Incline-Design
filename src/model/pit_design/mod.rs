@@ -1081,7 +1081,10 @@ fn design_with(
                 state.advance(bench, cut);
                 remember(&mut history, snapshot, added);
             }
-            Err(_) if !cancelled() && let Some(before) = before_rounded.take() => {
+            Err(_)
+                if !cancelled()
+                    && let Some(before) = before_rounded.take() =>
+            {
                 state = before;
                 state.builder.unrounded = true;
                 history.pop();
@@ -2721,9 +2724,7 @@ fn start_ring(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, placed: &[P
             // The points rounding added that crowd the ring where it
             // rejoins it, taken out only where the berm below comes out no
             // narrower for it: the ring's own points stay.
-            Some(rounded) => ring::conditioned(&rounded, sign, &|point| {
-                start_ring.iter().any(|own| own.distance(point) <= ring::SAME_POINT)
-            }),
+            Some(rounded) => ring::conditioned(&rounded, sign, &|point| start_ring.iter().any(|own| own.distance(point) <= ring::SAME_POINT)),
             None => start_ring,
         }
     };
