@@ -1031,6 +1031,7 @@ fn design_with(
             start_moved: 0.0,
             built: Built::default(),
             blocked: None,
+            unrounded: false,
         },
         // Each begun on the first bench it is on.
         ramps: vec![None; spec.ramps.len()],
@@ -1046,6 +1047,10 @@ fn design_with(
     // one of them is laid again with more added, and the benches after it
     // built again from there.
     let mut history: History<'_> = Vec::new();
+    // The state before the last bench, where it was laid on the ring
+    // rounded for a turn that would not fit: where the bench after cannot
+    // be built, it is laid again as it was first tried.
+    let mut before_rounded: Option<State<'_>> = None;
     let end = loop {
         if cancelled() {
             break End::Complete;
@@ -1057,8 +1062,15 @@ fn design_with(
         match state.builder.bench(&state.current, state.elevation, cut, state.ramps_for(&cut), None) {
             Ok(bench) => {
                 let added = bench.added;
+                before_rounded = bench.rounded.then(|| snapshot.clone());
+                state.builder.unrounded = false;
                 state.advance(bench, cut);
                 remember(&mut history, snapshot, added);
+            }
+            Err(_) if !cancelled() && let Some(before) = before_rounded.take() => {
+                state = before;
+                state.builder.unrounded = true;
+                history.pop();
             }
             Err(End::OutOfRoom) if !cancelled() => match (1..=history.len()).find_map(|depth| relaid(&history, depth, state.benches)) {
                 Some((relaid, rebuilt)) => {
@@ -1496,6 +1508,11 @@ struct Builder<'a> {
     built: Built,
     /// The ramp last found no room on a bench.
     blocked: Option<usize>,
+    /// Whether the next bench is laid without rounding the ring for a ramp
+    /// due to turn on it, neither the way its turn would set off nor, where
+    /// the turn would not fit, the way it carries on (see
+    /// [`Builder::bench_rounding`]): laid so, the bench after had no room.
+    unrounded: bool,
 }
 
 /// A ramp's strings: its edges, left and right of the way it is built, and
@@ -1566,6 +1583,18 @@ impl Built {
     }
 }
 
+/// How a bench's ring is rounded under a ramp due to turn back on it (see
+/// [`Builder::bench_rounding`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rounding {
+    /// The way its turn sets off, clear of its pad.
+    ForTurn,
+    /// Not at all.
+    Plain,
+    /// The way it carries on round, its turn not fitting.
+    CarryingOn,
+}
+
 /// One bench built: the ring the next starts from, where its ramp is, and
 /// what its stretch of ramp came to.
 struct Bench {
@@ -1575,6 +1604,9 @@ struct Bench {
     ramps: Vec<RampReport>,
     /// What was added to its first stretch to leave it sound, if it has one.
     added: Option<Added>,
+    /// Whether it was laid on the ring rounded for a ramp due to turn on it
+    /// (see [`Builder::bench_rounding`]).
+    rounded: bool,
 }
 
 impl Laid {
@@ -1625,6 +1657,18 @@ impl Builder<'_> {
     /// the bench is being laid again because the one after it would not
     /// build.
     fn bench(&mut self, from: &[DVec2], elevation: f64, cut: Cut, ramps: Vec<Option<RampOn>>, after: Option<Added>) -> Result<Bench, End> {
+        let rounding = if self.unrounded { Rounding::Plain } else { Rounding::ForTurn };
+        self.bench_rounding(from, elevation, cut, ramps, after, rounding)
+    }
+
+    /// [`Builder::bench`], the ring's corners under ramps due to turn back
+    /// on it rounded as `rounding` says. A ramp due to turn is first laid on
+    /// the ring rounded the way its turn sets off; where its turn does not
+    /// fit there, the bench is laid again on the ring as it is, and where
+    /// none fits there either and it carries on round instead, on the ring
+    /// rounded the way it carries on, so it does not wrap a corner tighter
+    /// than it can turn.
+    fn bench_rounding(&mut self, from: &[DVec2], elevation: f64, cut: Cut, ramps: Vec<Option<RampOn>>, after: Option<Added>, rounding: Rounding) -> Result<Bench, End> {
         let spec = self.spec;
         let sign = self.sign;
         let height = cut.height;
@@ -1636,11 +1680,18 @@ impl Builder<'_> {
         // road's far side, so only the berm below comes out wider.
         // With no berm the bench starts on the ring the one below ended on,
         // and there is no berm to round into.
+        let asked = ramps.clone();
         let (rounded, ramps) = if leaves_berm {
-            rounded_under_roads(spec, from, &walls, (elevation, height), ramps)
+            rounded_under_roads(spec, from, &walls, (elevation, height), ramps, rounding)
         } else {
             (None, ramps)
         };
+        let unrounded = from;
+        // The ramps due to turn back on this bench.
+        let due: Vec<usize> = (0..ramps.len())
+            .filter(|&index| ramps[index].is_some_and(|on| on.cursor.handover.is_some() && turn_due(&spec.ramps[index], &on.cursor, elevation, sign)))
+            .collect();
+        let rounded_for_turn = rounded.is_some() && rounding != Rounding::Plain && !due.is_empty();
         let from = rounded.as_deref().unwrap_or(from);
         // A ramp beginning on a bench above the first starts on its berm, at
         // the toe of the face it climbs, as one beginning on the floor does:
@@ -1670,6 +1721,21 @@ impl Builder<'_> {
                     let _ = ramp_spec;
                     return Err(end);
                 }
+            }
+        }
+        if leaves_berm && rounding == Rounding::ForTurn && laid.iter().any(|laid| laid.turn.is_none() && due.contains(&laid.index)) {
+            let (blocked, start_moved) = (self.blocked, self.start_moved);
+            let turned = |bench: &Bench| due.iter().all(|index| bench.ramps.iter().any(|road| road.ramp == *index && road.switchback));
+            if rounded_for_turn {
+                let builder = self.clone();
+                match self.bench_rounding(unrounded, elevation, cut, asked.clone(), after, Rounding::Plain) {
+                    Ok(bench) if turned(&bench) => return Ok(bench),
+                    _ => *self = builder,
+                }
+            }
+            match self.bench_rounding(unrounded, elevation, cut, asked, after, Rounding::CarryingOn) {
+                Ok(bench) => return Ok(Bench { rounded: true, ..bench }),
+                Err(_) => (self.blocked, self.start_moved) = (blocked, start_moved),
             }
         }
         let (start_ring, end_ring) = match rings_now {
@@ -1765,6 +1831,7 @@ impl Builder<'_> {
             next_ramps,
             ramps: reports,
             added,
+            rounded: rounded_for_turn,
         })
     }
 
@@ -2344,6 +2411,11 @@ fn turn_back(
 /// the turn without holding it out so long it leaves no room.
 const TURN_EASE: f64 = 0.5;
 
+/// How much of its bench the stretch back from a switchback has climbed
+/// where the berm between it and the road below is whole: from nothing on
+/// the pad, where that road arrives on the ring.
+const TURN_BERM_OPENS: f64 = 0.1;
+
 /// The most of a bench a turn climbs: the stretch after it climbs the rest.
 const MOST_TURN_LIFT: f64 = 0.75;
 
@@ -2556,6 +2628,20 @@ fn start_ring(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, placed: &[P
                 let start = walls.berm_at(split[index], facings[index]);
                 let end = walls.berm_at(split[next], facings[next]);
                 match along_from.iter().find(|placed| placed.stretch.climbed_at(middle).is_some()) {
+                    // Back from a switchback, the road leaves its pad the
+                    // turn's width out from the ring and only comes in to
+                    // its line as it climbs, so it never takes the berm's
+                    // place: the berm stays whole between the two roads,
+                    // where a face twice the height would stand over the
+                    // road below. Only off the pad, where the road below
+                    // arrives on the ring, it opens from nothing.
+                    Some(placed) if matches!(placed.join, Join::TurnsBack(_)) => {
+                        let opened = |parameter: f64| (placed.stretch.climbed_at(parameter).unwrap_or(1.0) / TURN_BERM_OPENS).min(1.0);
+                        EdgeOffset {
+                            start: sign * start * opened(at[index]),
+                            end: sign * end * opened(at[next]),
+                        }
+                    }
                     Some(placed) => EdgeOffset {
                         start: sign * start * placed.stretch.climbed_at(at[index]).unwrap_or(0.0),
                         end: sign * end * placed.stretch.climbed_at(at[next]).unwrap_or(1.0),
@@ -2636,26 +2722,33 @@ fn rounded_under_roads(
     walls: &walls::Walls<'_>,
     (elevation, height): (f64, f64),
     mut ramps: Vec<Option<RampOn>>,
+    rounding: Rounding,
 ) -> (Option<Vec<DVec2>>, Vec<Option<RampOn>>) {
     let sign = spec.direction.sign();
     let mut ring: Option<Vec<DVec2>> = None;
     for (index, on) in ramps.iter().enumerate() {
         // Only a road carrying on from the bench below: where one begins, its
-        // foot opens a bay in the ring that is its own rounding. Nor one due
-        // to turn back here, which may set off the other way round the ring
-        // from its pad.
+        // foot opens a bay in the ring that is its own rounding. One due to
+        // turn back here sets off the other way round the ring from its
+        // pad, so the corners are rounded that way, clear of the pad, or as
+        // `rounding` says otherwise.
         let (Some(on), Some(ramp)) = (on.filter(|on| on.cursor.handover.is_some()), spec.ramps.get(index)) else {
             continue;
         };
-        if turn_due(ramp, &on.cursor, elevation, sign) {
+        let pad = match ramp.layout {
+            Layout::Switchback { inside_radius, .. } if rounding != Rounding::CarryingOn && turn_due(ramp, &on.cursor, elevation, sign) => Some(inside_radius),
+            _ => None,
+        };
+        if pad.is_some() && rounding == Rounding::Plain {
             continue;
         }
+        let direction = if pad.is_some() { -on.cursor.direction } else { on.cursor.direction };
         let place = walls.on(from);
         let drift = place.berm(on.cursor.at) + place.face(on.cursor.at);
         let length = height / ramp.gradient.max(f64::MIN_POSITIVE) * 2.5 + ramp.width * 4.0;
         // Clear of where the road arrives from the bench below, where the
         // ring steps across it, or where its foot opens a bay in the ring.
-        let clear = ramp.width * 1.5;
+        let clear = ramp.width * 1.5 + pad.map_or(0.0, |radius| 2.0 * radius);
         // As wide as the road needs where it has drifted right across the
         // bench; then, for corners that rounding had to leave (running into
         // the step where the road arrives), as it needs part way, and at
@@ -2664,7 +2757,7 @@ fn rounded_under_roads(
             let radius = ramp.turning_radius + ramp.width + drift * share;
             let current = ring.as_deref().unwrap_or(from);
             let at = ring::nearest(current, ring::point_at(from, on.cursor.at)).0;
-            if let Some(rounded) = ring::rounded_along(current, sign, radius, (at, on.cursor.direction, length), clear) {
+            if let Some(rounded) = ring::rounded_along(current, sign, radius, (at, direction, length), clear) {
                 ring = Some(rounded);
             }
         }

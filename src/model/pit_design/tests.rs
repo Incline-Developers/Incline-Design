@@ -1552,6 +1552,7 @@ fn flag_census() {
     let mut by_check: BTreeMap<String, (usize, f64, String)> = BTreeMap::new();
     let mut designs = 0;
     let mut flagged = 0;
+    let mut turns = 0;
     let mut ends: BTreeMap<String, usize> = BTreeMap::new();
     let mut groups: BTreeMap<(String, String), usize> = BTreeMap::new();
     let mut berm_road: BTreeMap<&str, usize> = BTreeMap::new();
@@ -1585,7 +1586,18 @@ fn flag_census() {
                                 continue;
                             };
                             designs += 1;
+                            turns += design.report.iter().flat_map(|bench| &bench.ramps).filter(|road| road.switchback).count();
                             *ends.entry(format!("{:?}", design.end)).or_default() += 1;
+                            if std::env::var("ZZ_LIST").is_ok() {
+                                println!(
+                                    "list {kind_name} {direction:?} dump={dump} {} cw={clockwise} {bench}: {:?} {} benches, {} flags, {} turns",
+                                    matches!(layout, Layout::Spiral),
+                                    design.end,
+                                    design.benches,
+                                    design.flags.len(),
+                                    design.report.iter().flat_map(|bench| &bench.ramps).filter(|road| road.switchback).count()
+                                );
+                            }
                             if !design.flags.is_empty() {
                                 flagged += 1;
                             }
@@ -1651,7 +1663,7 @@ fn flag_census() {
             }
         }
     }
-    println!("{designs} designs, {flagged} with flags; ends {ends:?}");
+    println!("{designs} designs, {flagged} with flags, {turns} switchback turns; ends {ends:?}");
     for (check, (count, miss, worst)) in by_check {
         println!("{check}: {count} flags, worst {:.1}% off, {worst}", miss * 100.0);
     }
@@ -1737,6 +1749,15 @@ fn flag_look() {
     let base: Vec<DVec3> = points.iter().map(|p| p.extend(if down { 500.0 } else { 100.0 })).collect();
     let design = design(&Base::from_points(&base).unwrap(), &spec, None, &|| false).unwrap();
     println!("end {:?} benches {}", design.end, design.benches);
+    for (index, bench) in design.report.iter().enumerate() {
+        for road in &bench.ramps {
+            println!("bench {index} at {:.1}: switchback {} turn at {:?}", bench.elevation, road.switchback, road.turn_at);
+        }
+    }
+    for string in &design.strings {
+        let (lo, hi) = string.points.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.z), hi.max(p.z)));
+        println!("string {:?} closed {} z {lo:.1}..{hi:.1} points {}", string.kind, string.closed, string.points.len());
+    }
     for flag in &design.flags {
         println!(
             "flag {:?} value {:.2} asked {:.2} len {:.1} bench {} at {:.1}",
@@ -1754,6 +1775,36 @@ fn flag_look() {
                 })
                 .fold((f64::INFINITY, 0.0, 0.0), |a, b| if b.0 < a.0 { b } else { a });
             println!("berm flag at {:.1}: centreline {:.1} m away at z {:.1}..{:.1}", flag.at, best.0, best.1, best.2);
+        }
+    }
+    // A section through `ZZ_SECTION=x,y,dx,dy`: every string it crosses,
+    // by distance along it, with the string's kind and height there.
+    if let Ok(text) = std::env::var("ZZ_SECTION") {
+        let v: Vec<f64> = text.split(',').map(|v| v.parse().unwrap()).collect();
+        let (origin, way) = (DVec2::new(v[0], v[1]), DVec2::new(v[2], v[3]).normalize());
+        let mut hits = Vec::new();
+        for string in &design.strings {
+            let mut points = string.points.clone();
+            if string.closed {
+                points.push(points[0]);
+            }
+            for pair in points.windows(2) {
+                let (a, b) = (pair[0].truncate() - origin, pair[1].truncate() - origin);
+                let cross = |p: DVec2| way.perp_dot(p);
+                let (ca, cb) = (cross(a), cross(b));
+                if ca.signum() == cb.signum() {
+                    continue;
+                }
+                let t = ca / (ca - cb);
+                let along = a.lerp(b, t).dot(way);
+                if along.abs() < 60.0 {
+                    hits.push((along, string.kind, pair[0].z + (pair[1].z - pair[0].z) * t));
+                }
+            }
+        }
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (along, kind, z) in hits {
+            println!("section {along:7.2} {kind:?} z {z:.2}");
         }
     }
     let focus: Vec<f64> = std::env::var("ZZ_AT")
