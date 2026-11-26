@@ -143,6 +143,9 @@ pub(crate) struct Config {
     /// Show the console pannel
     #[serde(default = "default_show_console")]
     pub(crate) show_console: bool,
+    /// Which panels are popped out into windows of their own.
+    #[serde(default)]
+    pub(crate) popped_out: crate::ui::state::PoppedOutPanels,
     /// User multiplier on native OS/browser UI scaling.
     #[serde(default = "default_ui_size_percent")]
     pub(crate) ui_size_percent: f64,
@@ -255,6 +258,7 @@ impl Default for Config {
             well_log_style: crate::ui::widgets::log_traces::WellLogStyle::default(),
             dark_mode: default_dark_mode(),
             show_console: default_show_console(),
+            popped_out: crate::ui::state::PoppedOutPanels::default(),
             ui_size_percent: default_ui_size_percent(),
             snap_poll_rate: default_snap_poll_rate(),
             vsync_enabled: default_vsync_enabled(),
@@ -286,8 +290,29 @@ impl Default for Config {
     }
 }
 
+/// Whether this process only reads the person's settings and session,
+/// never writing them: a headless Incline, one MCP client's own, is not
+/// theirs to change the libraries or recent projects of.
+#[cfg(not(target_arch = "wasm32"))]
+static SETTINGS_READ_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Keep this process from writing the person's settings and session from
+/// now on: what it changes in them lasts as long as it does.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn keep_settings_read_only() {
+    SETTINGS_READ_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn settings_read_only() -> bool {
+    SETTINGS_READ_ONLY.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn save_config(config: &Config) -> io::Result<()> {
+    if settings_read_only() {
+        return Ok(());
+    }
     let path = data_path("config.toml")?;
     let contents = toml::to_string_pretty(config).map_err(io::Error::other)?;
     write_atomic(&path, contents.as_bytes())
@@ -301,6 +326,9 @@ pub(crate) fn load_config() -> io::Result<Config> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn save_session(session: &Session) -> io::Result<()> {
+    if settings_read_only() {
+        return Ok(());
+    }
     let path = data_path("last_session.toml")?;
     let contents = toml::to_string_pretty(session).map_err(io::Error::other)?;
     write_atomic(&path, contents.as_bytes())

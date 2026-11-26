@@ -95,14 +95,14 @@ impl Graphics<'_> {
         }
         let px = self.window_to_viewport_px((touch.location.x as f32, touch.location.y as f32));
         let screen = self.screen_size();
-        let over_overlay = self.gui.overlay_at_physical_position(touch.location.x as f32, touch.location.y as f32);
+        let over_overlay = self.overlay_at_physical_position(touch.location.x as f32, touch.location.y as f32);
         let allow_start = px.0 >= 0.0 && px.1 >= 0.0 && px.0 < screen.0 && px.1 < screen.1 && !over_overlay;
         // Decide ownership before removing an ended/cancelled contact. A finger
         // stays with the UI or viewport where it started even across boundaries.
         if !self.touch_gesture.owns(touch, allow_start) {
             return None;
         }
-        let gesture = self.touch_gesture.update(touch, allow_start, 6.0 * self.window.scale_factor());
+        let gesture = self.touch_gesture.update(touch, allow_start, 6.0 * self.scale_factor());
         // Apply each move before accepting another contact transition: a queued
         // orbit delta must never be applied around a subsequently picked pivot.
         match gesture {

@@ -20,14 +20,18 @@ use crate::{
     },
 };
 
+/// The Preferences window's size, on a screen with room for it. The import
+/// and export dialogs are as tall (`dialogs::import_export`).
+pub(crate) const PREFERENCES_SIZE: egui::Vec2 = egui::vec2(600.0, 380.0);
+
 pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     if !editor.show_preferences {
         return;
     }
     let mut open = true;
     let available = ui.ctx().content_rect().size() - egui::vec2(24.0, 24.0);
-    let scale = (available.x / 600.0).min(available.y / 480.0).clamp(0.1, 1.0);
-    let size = egui::vec2(600.0, 480.0) * scale;
+    let scale = (available.x / PREFERENCES_SIZE.x).min(available.y / PREFERENCES_SIZE.y).clamp(0.1, 1.0);
+    let size = PREFERENCES_SIZE * scale;
     crate::ui::widgets::menu::DragableMenu::new("preferences", tr!("preferences-title"))
         .open(&mut open)
         .fixed_size(size)
@@ -58,6 +62,7 @@ pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, comm
                     (PropertyTab::Interface, tr!("properties-interface")),
                     (PropertyTab::Camera, tr!("properties-camera")),
                     (PropertyTab::Performance, tr!("properties-performance")),
+                    (PropertyTab::Mcp, tr!("mcp-title")),
                     (PropertyTab::Developer, tr!("properties-developer")),
                 ] {
                     let response = crate::ui::widgets::explorer::ExplorerEntry::new(ui.scope_id().with(tab as u8), label)
@@ -78,6 +83,7 @@ pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, comm
                         PropertyTab::Interface => draw_interface_settings(ui, editor, commands),
                         PropertyTab::Camera => draw_camera_settings(ui, editor, commands),
                         PropertyTab::Performance => draw_performance_settings(ui, editor, commands),
+                        PropertyTab::Mcp => draw_mcp_settings(ui, editor, commands),
                         PropertyTab::Developer => draw_developer_settings(ui, editor, commands),
                     });
             });
@@ -111,7 +117,7 @@ pub(crate) fn draw_selection_appearance(
     for handle in &editor.selected_handles {
         let kind = match handle {
             SceneEntityId::Object(id) => match document.get_object(*id) {
-                Some(crate::model::Object::Polyline { .. } | crate::model::Object::Circle { .. }) => 0,
+                Some(crate::model::Object::Polyline { .. } | crate::model::Object::Circle { .. } | crate::model::Object::PitDesign { .. }) => 0,
                 Some(crate::model::Object::Point { .. }) => 1,
                 Some(crate::model::Object::Text { .. }) => 2,
                 None => continue,
@@ -131,7 +137,7 @@ pub(crate) fn draw_selection_appearance(
             .iter()
             .copied()
             .filter(|id| match document.get_object(*id) {
-                Some(crate::model::Object::Polyline { .. } | crate::model::Object::Circle { .. }) => kind == 0,
+                Some(crate::model::Object::Polyline { .. } | crate::model::Object::Circle { .. } | crate::model::Object::PitDesign { .. }) => kind == 0,
                 Some(crate::model::Object::Point { .. }) => kind == 1,
                 Some(crate::model::Object::Text { .. }) => kind == 2,
                 None => false,
@@ -164,6 +170,24 @@ pub(crate) fn draw_selection_appearance(
         {
             commands.push(UiCommand::OpenObjectEditDialog(*object_id));
             commands.push(UiCommand::CloseCanvasContextMenu);
+        }
+        // A pit design opens in Pit Design, and a closed polyline can become
+        // one there.
+        if editor.selected_handles.len() == 1
+            && let [object_id] = objects.as_slice()
+            && let Some(object) = document.get_object(*object_id)
+        {
+            let pit = matches!(object, crate::model::Object::PitDesign { .. });
+            if (pit || (matches!(object, crate::model::Object::Polyline { .. }) && object.encloses_area()))
+                && crate::ui::widgets::context_menu::ContextMenuAction::new(tr!("pit-design-menu")).show(ui).clicked()
+            {
+                commands.push(UiCommand::OpenPitDesign);
+                commands.push(UiCommand::CloseCanvasContextMenu);
+            }
+            if pit && crate::ui::widgets::context_menu::ContextMenuAction::new(tr!("pit-design-explode")).show(ui).clicked() {
+                commands.push(UiCommand::ExplodePitDesign(*object_id));
+                commands.push(UiCommand::CloseCanvasContextMenu);
+            }
         }
         if crate::ui::widgets::context_menu::ContextMenuAction::new(tr!("properties-move-layer")).show(ui).clicked() {
             let target_layer = project
@@ -480,6 +504,44 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
     );
 }
 
+/// The MCP server: on or off, its port, and where it is. Each change is made as it is committed, as the rest of Preferences'
+/// are, and saved apart from them (`mcp`).
+fn draw_mcp_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+    menu::menu_section(ui, tr!("mcp-title"));
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (editor, commands);
+        menu::menu_note(ui, tr!("mcp-desktop-only"));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use crate::ui::state::McpStatus;
+
+        let mcp = &editor.mcp;
+        let mut enabled = mcp.enabled;
+        if committed(&MenuFieldBool::new(tr!("mcp-enabled"), &mut enabled).show(ui)) {
+            commands.push(UiCommand::SetMcpEnabled(enabled));
+        }
+        let mut port = u32::from(mcp.port);
+        let port_field = MenuFieldU32::new(tr!("mcp-port"), &mut port, 1024..=65535).help_text(tr!("mcp-port-help")).show(ui);
+        if committed(&port_field)
+            && let Ok(port) = u16::try_from(port)
+        {
+            commands.push(UiCommand::SetMcpPort(port));
+        }
+        let status = match &mcp.status {
+            McpStatus::Off => tr!("mcp-status-off"),
+            McpStatus::Running => tr!("mcp-status-running"),
+            McpStatus::Failed(error) => tr!("mcp-status-failed", error = error.clone()),
+        };
+        read_only_row(ui, &tr!("mcp-status"), &status);
+        if mcp.status == McpStatus::Running {
+            read_only_row(ui, &tr!("mcp-address"), &crate::mcp::url(mcp.port));
+        }
+        ui.add_space(6.0);
+    }
+}
+
 fn draw_camera_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     settings_section(
         ui,
@@ -710,16 +772,23 @@ fn draw_design_tab(ui: &mut egui::Ui, editor: &mut EditorState, document: &Docum
         }
     }
 
+    // A pit design is no area to fill: the row is for the rest.
+    let fillable = context
+        .polylines
+        .iter()
+        .any(|id| !matches!(document.get_object(*id), Some(crate::model::Object::PitDesign { .. })));
     let mut fill = first_fill;
-    MenuFieldCombo::new(
-        "design_fill",
-        tr!("common-fill"),
-        &mut fill,
-        fill_style_label(first_fill),
-        [FillStyle::Clear, FillStyle::Crosses, FillStyle::Slashes, FillStyle::Solid].map(|style| (style, fill_style_label(style).into())),
-    )
-    .width(FIELD_WIDTH)
-    .show(ui);
+    if fillable {
+        MenuFieldCombo::new(
+            "design_fill",
+            tr!("common-fill"),
+            &mut fill,
+            fill_style_label(first_fill),
+            [FillStyle::Clear, FillStyle::Crosses, FillStyle::Slashes, FillStyle::Solid].map(|style| (style, fill_style_label(style).into())),
+        )
+        .width(FIELD_WIDTH)
+        .show(ui);
+    }
     if fill != first_fill {
         commands.push(UiCommand::BatchSetObjectFill(context.polylines.clone(), fill));
         *geometry_dirty = true;

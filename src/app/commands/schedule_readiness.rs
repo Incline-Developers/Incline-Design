@@ -722,6 +722,15 @@ impl crate::app::App<'_> {
         } else {
             self.mirror_sequence_editor();
         }
+        self.mirror_schedule_bar_views();
+        self.mirror_schedule_calculation();
+    }
+
+    /// Mirror each Gantt bar's report - its name, its members and their
+    /// areas, whether it is ready - into the editor state the schedule pages
+    /// and the report export read. The pages keep it current while they
+    /// show; anything else reading it calls this first.
+    pub(crate) fn mirror_schedule_bar_views(&mut self) {
         let reports = self.schedule_reports();
         // Nothing is calculated here. Inspection is unconditional and the
         // readiness of each bar is a read; the timed schedule comes only from
@@ -731,7 +740,6 @@ impl crate::app::App<'_> {
         self.schedule_report_cache.as_ref().map(|cache| cache.key).hash(&mut views_hasher);
         let views_key = views_hasher.finish();
         if self.schedule_report_cache.as_ref().is_some_and(|cache| cache.bar_views_key == Some(views_key)) {
-            self.mirror_schedule_calculation();
             return;
         }
         let views = reports
@@ -805,7 +813,6 @@ impl crate::app::App<'_> {
         if let Some(cache) = self.schedule_report_cache.as_mut() {
             cache.bar_views_key = Some(views_key);
         }
-        self.mirror_schedule_calculation();
     }
 
     /// Mirror what the current run says about each member of the open

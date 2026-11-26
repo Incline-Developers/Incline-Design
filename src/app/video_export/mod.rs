@@ -28,6 +28,18 @@ use crate::{i18n::tr, ui::state::VideoExportRequest, userspace_log, userspace_wa
 /// Frames queued for the encoder before collecting them waits for it.
 const QUEUED_FRAMES: usize = 4;
 
+/// One video frame due to be drawn.
+pub(crate) struct VideoFrameRequest {
+    pub(crate) size: (u32, u32),
+    /// Seconds into the video.
+    pub(crate) clock_s: f64,
+    pub(crate) labels: crate::rendering::graphics::video_capture::VideoLabels,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) view: Option<crate::rendering::graphics::video_capture::VideoView>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) hidden: Option<std::sync::Arc<std::collections::HashSet<crate::model::SceneEntityId>>>,
+}
+
 /// A recording in progress.
 pub(crate) struct Recording {
     /// The schedule instant of every frame, in hours.
@@ -49,6 +61,13 @@ pub(crate) struct Recording {
     render_requested: bool,
     /// Where the slider was, to put it back afterwards.
     restore_time_h: f64,
+    /// The view the video is recorded from; the window's when `None`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) view: Option<crate::rendering::graphics::video_capture::VideoView>,
+    /// What the video leaves out, in place of what the window hides; the
+    /// window's when `None`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) hidden: Option<std::sync::Arc<std::collections::HashSet<crate::model::SceneEntityId>>>,
 }
 
 impl Recording {
@@ -61,11 +80,19 @@ impl Recording {
         self.times.get(self.next).copied()
     }
 
-    pub(crate) fn take_render_request(&mut self) -> Option<((u32, u32), f64, crate::rendering::graphics::video_capture::VideoLabels)> {
+    pub(crate) fn take_render_request(&mut self) -> Option<VideoFrameRequest> {
         std::mem::take(&mut self.render_requested).then(|| {
-            let clock = self.next as f64 / self.fps;
+            let clock_s = self.next as f64 / self.fps;
             self.next += 1;
-            ((self.width, self.height), clock, self.labels)
+            VideoFrameRequest {
+                size: (self.width, self.height),
+                clock_s,
+                labels: self.labels,
+                #[cfg(not(target_arch = "wasm32"))]
+                view: self.view,
+                #[cfg(not(target_arch = "wasm32"))]
+                hidden: self.hidden.clone(),
+            }
         })
     }
 }
@@ -193,11 +220,16 @@ impl<'a> App<'a> {
             frames: sender,
             waiting: VecDeque::new(),
             render_requested: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            view: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            hidden: None,
             restore_time_h: self.editor.schedule_time_h,
         });
         self.editor.video_export_frame = Some((width, height));
         // The view is what is being recorded: it holds still until the end.
         if let Some(graphics) = self.graphics.as_mut() {
+            graphics.release_video_target();
             graphics.set_camera_locked(true);
         }
         self.editor.video_export_dialog = None;

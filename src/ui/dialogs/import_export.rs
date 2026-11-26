@@ -26,12 +26,18 @@ use crate::{
     },
 };
 
-const MENU_HEIGHT: f32 = 450.0;
+/// The dialogs' contents' height: what makes the whole dialog as tall as
+/// Preferences, once its title bar and its default margins top and bottom
+/// are added. A page with more than fits scrolls ([`details_scroll`]).
+const MENU_HEIGHT: f32 = crate::ui::elements::properties::PREFERENCES_SIZE.y - menu::TITLE_BAR_HEIGHT - 2.0 * DIALOG_MARGIN_Y;
+/// The default top and bottom margin of a `DragableMenu`, which these
+/// dialogs keep.
+const DIALOG_MARGIN_Y: f32 = 6.0;
 /// Wide enough for the longest format name at an entry's indent, so the tree
 /// truncates nothing at the default text size.
 const EXPLORER_WIDTH: f32 = 285.0;
 const FIELD_WIDTH: f32 = 280.0;
-const DETAILS_WIDTH: f32 = 680.0;
+const DETAILS_WIDTH: f32 = 530.0;
 const MENU_WIDTH: f32 = EXPLORER_WIDTH + 4.0 + DETAILS_WIDTH;
 
 /// One format, as a row of the dialog's type tree.
@@ -128,7 +134,7 @@ pub(crate) fn draw_import_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                 ui.allocate_ui(egui::Vec2::new(DETAILS_WIDTH, MENU_HEIGHT - 25.0), |ui| {
                     ui.set_width(DETAILS_WIDTH);
                     ui.set_height(MENU_HEIGHT - 25.);
-                    draw_import_details(ui, editor, commands);
+                    details_scroll(ui, "import_details", |ui| draw_import_details(ui, editor, commands));
                 });
                 ui.allocate_ui_with_layout(
                     egui::Vec2::new(DETAILS_WIDTH, ui.spacing().interact_size.y),
@@ -183,7 +189,7 @@ pub(crate) fn draw_export_menu(ui: &mut egui::Ui, editor: &mut EditorState, proj
                 ui.allocate_ui(egui::Vec2::new(DETAILS_WIDTH, MENU_HEIGHT - 25.0), |ui| {
                     ui.set_width(DETAILS_WIDTH);
                     ui.set_height(MENU_HEIGHT - 25.);
-                    draw_export_details(ui, editor, project);
+                    details_scroll(ui, "export_details", |ui| draw_export_details(ui, editor, project));
                 });
                 ui.allocate_ui_with_layout(
                     egui::Vec2::new(DETAILS_WIDTH, ui.spacing().interact_size.y),
@@ -283,6 +289,12 @@ fn draw_export_explorer(ui: &mut egui::Ui, editor: &mut EditorState) {
             draw_entry(ui, editor, &tr!("io-mapped-csv-bundle-csv"), DataMenu::CsvDrillHole);
         });
     });
+}
+
+/// A page of a dialog's settings, scrolling once it is taller than the
+/// dialog.
+fn details_scroll(ui: &mut egui::Ui, id_salt: &str, contents: impl FnOnce(&mut egui::Ui)) {
+    egui::ScrollArea::vertical().id_salt(id_salt).auto_shrink([false; 2]).show(ui, contents);
 }
 
 fn draw_import_details(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {

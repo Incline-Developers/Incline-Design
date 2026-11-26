@@ -281,6 +281,20 @@ pub(crate) fn validate_object(object: &Object) -> Option<ObjectEditIssue> {
             }
             None
         }
+        Object::PitDesign { verts, line_weight, .. } => {
+            if verts.len() < 3 {
+                return Some(ObjectEditIssue::TooFewVertices { required: 3 });
+            }
+            for (row, vertex) in verts.iter().enumerate() {
+                if !vertex.pos.is_finite() || !vertex.bulge.is_finite() {
+                    return Some(ObjectEditIssue::NonFiniteVertex(row));
+                }
+            }
+            if !line_weight.is_finite() {
+                return Some(ObjectEditIssue::NonFiniteValue);
+            }
+            None
+        }
         Object::Polyline { verts, line_weight, .. } => {
             if verts.len() < 2 {
                 return Some(ObjectEditIssue::TooFewVertices { required: 2 });

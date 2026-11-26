@@ -118,13 +118,12 @@ fn build_envelopes(design: &PreparedReferenceSurface, topography: &PreparedRefer
 /// footprints miss each other, or a design that never runs on the wanted
 /// side of the ground.
 ///
-/// `label` names what is being built, a solid's name, for the console notes
-/// about repaired surfaces; empty where there is nothing to call it.
+/// `built_for` says what it is built for, which says what is told of it.
 pub(crate) fn build_solid_mesh(
     design: &mesh_data::Triangulation,
     topography: &mesh_data::Triangulation,
     region: SolidRegion,
-    label: &str,
+    built_for: BuiltFor<'_>,
     progress: &crate::model::progress::Phase,
 ) -> Result<SolidMesh> {
     // The same pair is built more than once - the Setup page's inspection
@@ -145,7 +144,7 @@ pub(crate) fn build_solid_mesh(
         remember_build(key, &built);
         return Ok(built);
     }
-    let mut notes = Vec::new();
+    let mut notes = BuildNotes::default();
     let (vertices, faces, volume) = build_solid_between_surfaces_uncached(design, topography, region, &progress.phase(0.0, 0.9), &mut notes)?;
     anyhow::ensure!(!faces.is_empty(), crate::i18n::tr!("err-surf-solid-no-faces"));
     let mesh = std::sync::Arc::new(mesh_data::Triangulation::from_vertices_and_faces(vertices, faces)?);
@@ -163,13 +162,18 @@ pub(crate) fn build_solid_mesh(
     };
     // Once per pair of surfaces: the Setup preview and the Solids stage can
     // build the same pair at once, and the second would repeat the first.
-    if first_report(key) {
-        for note in notes {
+    if let BuiltFor::Solid(label) = built_for
+        && first_report(key)
+    {
+        for note in notes.repairs {
             if label.is_empty() {
                 userspace_log!("{note}");
             } else {
                 userspace_log!("{label}: {note}");
             }
+        }
+        if notes.open_edges > 0 {
+            userspace_warn!("{}", tr!("tri-solid-open-along-edge", count = notes.open_edges.to_string()));
         }
     }
     if let Some(disk) = disk {
@@ -177,6 +181,26 @@ pub(crate) fn build_solid_mesh(
     }
     remember_build(key, &built);
     Ok(built)
+}
+
+/// What a solid between two surfaces is built for, which says what is told
+/// of it.
+#[derive(Clone, Copy)]
+pub(crate) enum BuiltFor<'a> {
+    /// A solid asked for, by its name (empty where it has none): the repairs
+    /// made to its surfaces are noted, and a solid left open is warned of.
+    Solid(&'a str),
+    /// A measure worked out in the background as a design changes: nothing
+    /// is said, as nothing was asked for.
+    Measure,
+}
+
+/// What a build has to tell: the repairs made to its surfaces, and how many
+/// edges it left open.
+#[derive(Default)]
+struct BuildNotes {
+    repairs: Vec<String>,
+    open_edges: usize,
 }
 
 /// Keep `built` among the recent builds, for the next to ask for it.
@@ -297,12 +321,26 @@ fn mesh_fingerprint(mesh: &mesh_data::Triangulation) -> u64 {
     })
 }
 
+/// The volume enclosed between two surfaces on one side of their crossing,
+/// as [`build_solid_mesh`] builds it, but measured only: neither kept nor
+/// looked up among recent builds, for a search that tries many shapes and
+/// keeps none of them. `None` where there is nothing between them.
+pub(crate) fn measured_volume_between(design: &mesh_data::Triangulation, topography: &mesh_data::Triangulation, region: SolidRegion) -> Result<Option<f64>> {
+    let progress = crate::model::progress::Progress::new();
+    let mut notes = BuildNotes::default();
+    match build_solid_between_surfaces_uncached(design, topography, region, &progress.phase(0.0, 1.0), &mut notes) {
+        Ok((_, faces, volume)) => Ok((!faces.is_empty()).then_some(volume)),
+        Err(error) if error.chain().any(|cause| cause.to_string() == no_volume(region)) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 fn build_solid_between_surfaces_uncached(
     design: &mesh_data::Triangulation,
     topography: &mesh_data::Triangulation,
     region: SolidRegion,
     progress: &crate::model::progress::Phase,
-    notes: &mut Vec<String>,
+    notes: &mut BuildNotes,
 ) -> Result<BuiltSolid> {
     // Surface intersections must be computed near the origin: line and
     // barycentric arithmetic on mine eastings/northings loses enough precision
@@ -392,7 +430,7 @@ fn build_solid_local(
     topography: mesh_data::Triangulation,
     region: SolidRegion,
     progress: &crate::model::progress::Phase,
-    notes: &mut Vec<String>,
+    notes: &mut BuildNotes,
 ) -> Result<(Vec<mesh_data::Vertex>, Vec<[u32; 3]>, f64)> {
     // The two surfaces share the ground beyond the crest when one was built
     // from the other, and points rounding moved a hair apart are made one.
@@ -419,9 +457,11 @@ fn build_solid_local(
         // project, so said in the console rather than as a warning: a
         // warning opens a dialog, and these would open one on every open.
         if repaired {
-            notes.push(tr!("tri-solid-repaired-surface", role = role));
+            notes.repairs.push(tr!("tri-solid-repaired-surface", role = role));
         } else if prepared.skipped_vertical_faces > 0 {
-            notes.push(tr!("cmd-cuts-ignored-vertical-faces", count = prepared.skipped_vertical_faces.to_string()));
+            notes
+                .repairs
+                .push(tr!("cmd-cuts-ignored-vertical-faces", count = prepared.skipped_vertical_faces.to_string()));
         }
         surfaces.push(prepared);
     }
@@ -470,16 +510,13 @@ fn build_solid_local(
     // cross, and against the wall everywhere else. Anything still open is a
     // rim the wall could not trace - a sheet torn into pieces too small to
     // ring, say - and is worth saying rather than passing off as a solid.
-    let open_edges = leaking_edges(&vertices, &uses);
-    if open_edges > 0 {
-        userspace_warn!("{}", tr!("tri-solid-open-along-edge", count = open_edges.to_string()));
-    }
+    notes.open_edges = leaking_edges(&vertices, &uses);
 
     Ok((vertices, faces, volume))
 }
 
 /// Why there is no solid: the surfaces enclose nothing on the wanted side.
-fn no_volume(region: SolidRegion) -> String {
+pub(crate) fn no_volume(region: SolidRegion) -> String {
     match region {
         SolidRegion::Cut => tr!("tri-solid-no-volume-cut"),
         SolidRegion::Fill => tr!("tri-solid-no-volume-fill"),
@@ -737,7 +774,7 @@ impl App<'_> {
         };
 
         let compute = move |cancel: &crate::app::jobs::CancelFlag, progress: &crate::model::progress::Progress| -> Result<crate::model::triangulation::GeneratedTriangulationLog> {
-            let solid = build_solid_mesh(&design_mesh, &topography_mesh, region, "", &progress.phase(0.0, 0.95))?;
+            let solid = build_solid_mesh(&design_mesh, &topography_mesh, region, BuiltFor::Solid(""), &progress.phase(0.0, 0.95))?;
             if cancel.is_cancelled() {
                 anyhow::bail!(crate::app::jobs::Cancelled);
             }

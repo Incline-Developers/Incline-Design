@@ -7,7 +7,7 @@ use crate::{
     model::{Document, Object, ObjectPoint, geometry::circle_polyline_vertices},
     rendering::{
         StrokeInstance, Vertex,
-        geometry::{DrawContext, draw_line, draw_screen_cross, draw_screen_point_marker, draw_screen_point_marker_sized, tessellate_polyline_stroke},
+        geometry::{DrawContext, draw_line, draw_screen_cross, draw_screen_point_marker, draw_screen_point_marker_sized, draw_vertex_dots, tessellate_polyline_stroke},
         graphics::{ACTIVE_POINT_COLOR, DOC_LINE_WIDTH, MEASUREMENT_COLOR, PREVIEW_COLOR},
         pick::world_to_screen,
     },
@@ -31,6 +31,10 @@ const BLAST_OUTLINE_WIDTH: f32 = 2.5;
 /// Ground taken out of mining: still outlined, so it can be picked and put
 /// back, but grey against the live outlines around it.
 const EXCLUDED_OUTLINE_COLOR: [f32; 4] = [0.5, 0.5, 0.5, 0.9];
+
+/// Pit Design's flags, where a design falls short of its settings: amber,
+/// as warnings are.
+const PIT_FLAG_COLOR: [f32; 4] = [1.0, 0.62, 0.1, 1.0];
 
 /// The Road Network's selected dig block, and the line to where it joins
 /// the roads: the selection orange the rest of the scene uses.
@@ -184,9 +188,24 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
     overlay.fade_size_m = 0.0;
 
     let stroke_preview = editor.pending_stroke.clone();
-    for pair in stroke_preview.windows(2) {
-        draw_line(&mut overlay, pair[0], pair[1], DOC_LINE_WIDTH, PREVIEW_COLOR);
+    // A pit's string drawn with its corners rounded shows them rounded as it
+    // is drawn, out to the cursor: the string it will be.
+    let rounding_pit = editor.pit_drawing() && editor.pit_round_corners && !stroke_preview.is_empty();
+    if rounding_pit {
+        let mut points = stroke_preview.clone();
+        if let Some(cursor) = editor.cursor_world.filter(|_| !editor.poly_close_hovered() && !editor.poly_finish_dialog) {
+            points.push(cursor);
+        }
+        let verts = crate::model::pit_design::object::rounded_open(&points, editor.pit_corner_radius);
+        tessellate_polyline_stroke(&mut overlay, &verts, false, DOC_LINE_WIDTH, PREVIEW_COLOR);
+    } else {
+        for pair in stroke_preview.windows(2) {
+            draw_line(&mut overlay, pair[0], pair[1], DOC_LINE_WIDTH, PREVIEW_COLOR);
+        }
     }
+    // The points placed so far, as the line will show them.
+    let placed: Vec<crate::model::PolyVertex> = stroke_preview.iter().copied().map(crate::model::PolyVertex::straight).collect();
+    draw_vertex_dots(&mut overlay, &placed, DOC_LINE_WIDTH, PREVIEW_COLOR);
 
     if editor.is_haulage_page() {
         // Blocks out of reach are tinted already; a cross each would bury them.
@@ -319,6 +338,40 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
         }
     }
     draw_tie_preview(&mut overlay, editor);
+    // Where Pit Design's ramp would leave its string, while its start is
+    // picked: the point a click places it at.
+    if let Some(hover) = editor.pit_design.as_ref().filter(|draft| draft.picking_ramp.is_some()).and_then(|draft| draft.ramp_hover) {
+        draw_screen_cross(&mut overlay, hover, 20.0, 8.0, [0.05, 0.35, 0.1, 1.0]);
+        draw_screen_cross(&mut overlay, hover, 18.0, 4.0, [0.95, 0.95, 0.95, 1.0]);
+    }
+    // Where each of Pit Design's ramps leaves its string, and where each
+    // turns back.
+    if let Some(preview) = editor.pit_design.as_ref().and_then(|draft| draft.preview.as_ref()) {
+        // The marker under the pointer, which a press drags, stands larger.
+        let grabbable = editor.pit_design.as_ref().and_then(|draft| draft.ramp_marker_under_cursor);
+        // A start being picked is drawn at the pointer, not where it was.
+        let picking = editor.pit_design.as_ref().and_then(|draft| draft.picking_ramp);
+        for (index, start) in preview.ramp_starts.iter().enumerate().filter(|(index, _)| picking != Some(*index)) {
+            let grow = if grabbable == Some(index) { 6.0 } else { 0.0 };
+            draw_screen_cross(&mut overlay, *start, 20.0 + grow, 8.0, [0.05, 0.35, 0.1, 1.0]);
+            draw_screen_cross(&mut overlay, *start, 18.0 + grow, 4.0, [0.45, 0.9, 0.5, 1.0]);
+        }
+        if let Ok(design) = &preview.design {
+            for turn in design.report.iter().flat_map(|bench| &bench.ramps).filter_map(|road| road.turn_at) {
+                draw_screen_cross(&mut overlay, turn, 16.0, 7.0, [0.05, 0.2, 0.4, 1.0]);
+                draw_screen_cross(&mut overlay, turn, 14.0, 3.5, [0.55, 0.8, 1.0, 1.0]);
+            }
+            // Where it falls short of its settings: amber dots, larger where
+            // the panel or the pointer points at them.
+            let draft = editor.pit_design.as_ref();
+            let hover = draft.map(|draft| draft.hover).unwrap_or_default();
+            let under = draft.and_then(|draft| draft.flag_under_cursor);
+            for (index, flag) in design.flags.iter().enumerate() {
+                let lit = hover.flag == Some(index) || hover.bench == Some(flag.bench) || under == Some(index);
+                draw_screen_point_marker_sized(&mut overlay, flag.at, if lit { 18.0 } else { 12.0 }, PIT_FLAG_COLOR);
+            }
+        }
+    }
     // The directional shells' starting point already picked, shown while it is picked again.
     if let Some(pick) = editor.optimization.start_pick.as_ref()
         && let Some((x, y)) = editor.optimization.draft.as_ref().and_then(|draft| draft.scenario.output.shell_start)
@@ -360,7 +413,7 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
                 }
             }
         }
-    } else if let (Some(&last), Some(cursor)) = (editor.pending_stroke.last(), editor.cursor_world) {
+    } else if !rounding_pit && let (Some(&last), Some(cursor)) = (editor.pending_stroke.last(), editor.cursor_world) {
         draw_line(&mut overlay, last, cursor, DOC_LINE_WIDTH, PREVIEW_COLOR);
     }
 
@@ -439,7 +492,7 @@ pub(crate) fn rebuild_editor_overlay(input: OverlaySceneBuildInput<'_>) {
             (Object::Circle { center, .. }, Some(ObjectPoint::Center)) => {
                 draw_screen_point_marker_sized(&mut overlay, *center, 11.0, ACTIVE_POINT_COLOR);
             }
-            (Object::Polyline { verts, .. }, Some(ObjectPoint::Vertex(selected_index))) => {
+            (Object::Polyline { verts, .. } | Object::PitDesign { verts, .. }, Some(ObjectPoint::Vertex(selected_index))) => {
                 for (index, v) in verts.iter().enumerate() {
                     let selected = index == selected_index;
                     draw_screen_point_marker_sized(

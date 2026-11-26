@@ -12,6 +12,10 @@ pub(crate) mod npv_schedule; // Handles the schedules under optimization scenari
 pub(crate) mod object_edit;
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
 pub(crate) mod optimization; // Handles pit optimization's scenario list, editor and scenarios file.
+pub(crate) mod pit_design; // Designs a pit's benches and ramp from a closed string.
+pub(crate) mod pit_evaluation; // Measures what each pit design takes out of the ground.
+pub(crate) mod pit_rehab; // Reshapes a dump into one even slope for its rehabilitation.
+pub(crate) mod pit_roads; // Keeps every pit design's ramps in the haul network as roads.
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
 pub(crate) mod products; // Handles the Drill & Blast workspace's stored products.
 pub(crate) mod property; // Handles changing colors, fills, etc. commands
@@ -82,48 +86,89 @@ impl<'a> App<'a> {
         self.drop_editor_references_to_missing_items();
         self.apply_step_effects(effects);
         self.invalidate_geometry();
+        // A rollback to a checkpoint takes its next step once this one has
+        // landed, which may be after items it needed were loaded.
+        self.continue_history_walk();
+    }
+
+    /// Step the history towards the mark a rollback is walking to, until it
+    /// is there or a step has to wait for items to load; that step's landing
+    /// carries the walk on.
+    pub(crate) fn continue_history_walk(&mut self) {
+        if self.walking_history {
+            return;
+        }
+        let Some(mark) = self.history_walk else {
+            return;
+        };
+        self.walking_history = true;
+        loop {
+            let undo = match self.history.route_to(mark) {
+                Some(crate::model::HistoryRoute::Undo(_)) => true,
+                Some(crate::model::HistoryRoute::Redo(_)) => false,
+                Some(crate::model::HistoryRoute::Here) | None => {
+                    self.history_walk = None;
+                    break;
+                }
+            };
+            let before = self.history.mark();
+            self.apply_history_step(undo);
+            if self.history.mark() == before {
+                break;
+            }
+        }
+        self.walking_history = false;
     }
 
     pub(crate) fn handle_ui_commands(&mut self, commands: Vec<UiCommand>) {
-        let had_commands = !commands.is_empty();
-        if had_commands {
-            self.last_ui_command_at = Some(web_time::Instant::now());
-        }
         for command in commands {
-            // A widget being dragged reports the same command every frame.
-            // The first opens a console entry for the edit; the rest are that
-            // same edit still happening, and would bury the console.
-            let mut spec = command.console_report_spec();
-            if let (Some(spec), crate::ui::state::UiCommand::Schedule { edit, .. }) = (spec.as_mut(), &command)
-                && let Some(subject) = self.schedule_report_subject(edit)
-            {
-                spec.summary = subject;
+            // Each one reports its own failure, in the activity log.
+            let _ = self.handle_reported_ui_command(command);
+        }
+    }
+
+    /// Run one command as the window's controls do, reported in the activity
+    /// log, and hand back whether it failed there and then. A command that
+    /// starts a background job succeeds once the job is started; the job
+    /// reports its own outcome when it lands.
+    pub(crate) fn handle_reported_ui_command(&mut self, command: UiCommand) -> Result<()> {
+        self.last_ui_command_at = Some(web_time::Instant::now());
+        self.redraw_requested = true;
+        // A widget being dragged reports the same command every frame.
+        // The first opens a console entry for the edit; the rest are that
+        // same edit still happening, and would bury the console.
+        let mut spec = command.console_report_spec();
+        if let (Some(spec), crate::ui::state::UiCommand::Schedule { edit, .. }) = (spec.as_mut(), &command)
+            && let Some(subject) = self.schedule_report_subject(edit)
+        {
+            spec.summary = subject;
+        }
+        let result = match spec.filter(|_| self.should_report_to_console(&command)) {
+            Some(spec) => {
+                let report_id = crate::logging::begin_command_report(spec);
+                let result = crate::logging::with_report_scope(report_id, || self.handle_ui_command(command));
+                crate::logging::finish_command_report(report_id, result.as_ref().err());
+                result
             }
-            match spec.filter(|_| self.should_report_to_console(&command)) {
-                Some(spec) => {
-                    let report_id = crate::logging::begin_command_report(spec);
-                    let result = crate::logging::with_report_scope(report_id, || self.handle_ui_command(command));
-                    crate::logging::finish_command_report(report_id, result.as_ref().err());
-                }
-                // A command quiet enough to have no row of its own is most
-                // often a step of the tool in hand (Drape's Confirm), so
-                // whatever it does report goes under that tool's name.
-                None => {
-                    let run = |app: &mut Self| {
-                        if let Err(err) = app.handle_ui_command(command) {
-                            userspace_error!("{}", tr!("cmd-commands-command-failed-error", error = format!("{err:#}")));
-                        }
-                    };
-                    match self.editor.active_tool.report_spec() {
-                        Some(spec) => crate::logging::with_deferred_report(spec, || run(self)),
-                        None => run(self),
+            // A command quiet enough to have no row of its own is most
+            // often a step of the tool in hand (Drape's Confirm), so
+            // whatever it does report goes under that tool's name.
+            None => {
+                let run = |app: &mut Self| {
+                    let result = app.handle_ui_command(command);
+                    if let Err(err) = &result {
+                        userspace_error!("{}", tr!("cmd-commands-command-failed-error", error = format!("{err:#}")));
                     }
+                    result
+                };
+                match self.editor.active_tool.report_spec() {
+                    Some(spec) => crate::logging::with_deferred_report(spec, || run(self)),
+                    None => run(self),
                 }
             }
-        }
-        if had_commands {
-            self.redraw_requested = true;
-        }
+        };
+        self.redraw_requested = true;
+        result
     }
     /// Dispatch a UI command to the relevant domain handler (in the sibling
     /// `commands::*` modules). This is a thin router; the work lives in those
@@ -131,7 +176,7 @@ impl<'a> App<'a> {
     pub(crate) fn handle_ui_command(&mut self, command: UiCommand) -> Result<()> {
         let requires_project = matches!(
             &command,
-            UiCommand::TransformSurveySelection
+            UiCommand::TransformSurvey { .. }
                 | UiCommand::ImportOmfPaths(_)
                 | UiCommand::ImportDxfPathsInto(_)
                 | UiCommand::ImportTriangulationPaths(_)
@@ -163,6 +208,7 @@ impl<'a> App<'a> {
                 | UiCommand::SetReserveMapping { .. }
                 | UiCommand::SetReserveModelIncluded { .. }
                 | UiCommand::AddSolid { .. }
+                | UiCommand::ExplodePitDesign(_)
                 | UiCommand::DeleteSolid(_)
                 | UiCommand::SaveSolidPreviewToProject
                 | UiCommand::UpdateSolid { .. }
@@ -268,22 +314,7 @@ impl<'a> App<'a> {
             UiCommand::ShowProjectInFileManager => self.show_active_project_in_file_manager(),
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::ShowTrackedProjectInFileManager(path) => file::show_in_file_manager(&path),
-            UiCommand::CloseStartupDialog => {
-                // A project picked from the splash is still opening: leave the
-                // splash up until it lands rather than dropping the user on the
-                // empty startup project while the load runs behind it.
-                if self.project_open_pending() {
-                    return Ok(());
-                }
-                self.startup_dialog_dismissed = true;
-                // Dismissing the splash leaves the application on a project,
-                // never on nothing: closing a project puts the splash back, so
-                // this is the path that has to restore one.
-                if !self.workspace.has_active_project() {
-                    self.start_untitled_project()?;
-                }
-                Ok(())
-            }
+            UiCommand::CloseStartupDialog => self.dismiss_startup_dialog(),
             UiCommand::ImportOmfPaths(paths) => {
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -673,8 +704,8 @@ impl<'a> App<'a> {
                 self.delete_blast_library_item(item);
                 Ok(())
             }
-            UiCommand::ChargeSelectedHoles { rule } => {
-                self.charge_selected_holes(rule);
+            UiCommand::ChargeHoles { dataset, holes, rule } => {
+                self.charge_holes_with_rule(dataset, holes, rule);
                 Ok(())
             }
             UiCommand::RequestDeleteLayer(layer_id) => {
@@ -889,7 +920,8 @@ impl<'a> App<'a> {
             }
             UiCommand::BuildReferenceSurface { points, controls, extent } => self.build_reference_surface(points, controls, extent),
             UiCommand::BuildReferencePoints { holes, field, target, side } => {
-                self.build_reference_points(holes, field, target, side);
+                // What it placed is said in the activity log.
+                let _ = self.build_reference_points(holes, field, target, side);
                 Ok(())
             }
             UiCommand::InspectDrillHole(hole) => self.inspect_drill_hole(hole),
@@ -1129,19 +1161,6 @@ impl<'a> App<'a> {
             UiCommand::SetGridShown(shown) => self.set_grid_shown(shown),
             UiCommand::SetTopologyWireframes(enabled) => self.set_topology_wireframes(enabled),
             UiCommand::SetTopologyContours(enabled) => self.set_topology_contours(enabled),
-            #[cfg(not(target_arch = "wasm32"))]
-            UiCommand::SetSlicePreviewDetached(detached) => {
-                self.editor.slice_preview_detached = cfg!(not(target_arch = "wasm32")) && detached && self.editor.slice_mode_enabled;
-                self.slice_preview_cursor_px = None;
-                self.slice_preview_middle_down = false;
-                if !self.editor.slice_preview_detached
-                    && let Some(graphics) = self.graphics.as_mut()
-                {
-                    graphics.close_slice_preview();
-                }
-                self.redraw_requested = true;
-                Ok(())
-            }
             UiCommand::SetShowPoints(enabled) => self.set_show_points(enabled),
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::SetCinematicEnabled(enabled) => self.set_cinematic_enabled(enabled),
@@ -1215,7 +1234,7 @@ impl<'a> App<'a> {
                 }
                 result
             }
-            UiCommand::TransformSurveySelection => self.transform_survey_selection(),
+            UiCommand::TransformSurvey { entities, from, to } => self.transform_survey(&entities, &from, &to),
             UiCommand::OpenPreferences => {
                 self.editor.show_preferences = true;
                 Ok(())
@@ -1224,6 +1243,9 @@ impl<'a> App<'a> {
             UiCommand::SetLanguage(choice) => self.set_language(choice),
             UiCommand::SetWellLogStyle(style) => self.set_well_log_style(style),
             UiCommand::ToggleViewOption(option) => self.toggle_view_option(option),
+            UiCommand::SetPanelPoppedOut(kind, popped_out) => self.set_panel_popped_out(kind, popped_out),
+            UiCommand::SetMcpEnabled(enabled) => self.set_mcp_enabled(enabled),
+            UiCommand::SetMcpPort(port) => self.set_mcp_port(port),
             UiCommand::RemoveTriangulation(id) => {
                 self.remove_triangulation(id);
                 Ok(())
@@ -1346,10 +1368,6 @@ impl<'a> App<'a> {
                 self.open_relimit_dialog();
                 Ok(())
             }
-            UiCommand::OpenBatterBermDialog => {
-                self.open_batter_berm_dialog();
-                Ok(())
-            }
             UiCommand::OpenMoveToAxisDialog(axis) => {
                 self.open_move_to_axis(axis);
                 Ok(())
@@ -1358,8 +1376,34 @@ impl<'a> App<'a> {
                 self.insert_points_at_selected_intersections();
                 Ok(())
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            UiCommand::InsertPointsAtCrossings { object_ids } => {
+                self.insert_points_at_crossings(object_ids);
+                Ok(())
+            }
             UiCommand::OpenInsertPointAtElevationDialog => {
                 self.open_insert_point_at_elevation_dialog();
+                Ok(())
+            }
+            UiCommand::OpenPitDesign => {
+                self.open_pit_design();
+                Ok(())
+            }
+            UiCommand::FinishPitDesign => {
+                self.finish_pit_editing();
+                Ok(())
+            }
+            UiCommand::ExplodePitDesign(id) => self.explode_pit_design(id).map(|_| ()),
+            UiCommand::BeginPitRegionPick => {
+                self.begin_pit_region_pick();
+                Ok(())
+            }
+            UiCommand::PitDesignHover(hover) => {
+                self.set_pit_design_hover(hover);
+                Ok(())
+            }
+            UiCommand::FramePitFlag(index) => {
+                self.frame_pit_flag(index);
                 Ok(())
             }
             UiCommand::OpenObjectEditDialog(id) => {
@@ -1372,14 +1416,6 @@ impl<'a> App<'a> {
             }
             UiCommand::InsertPointsAtElevation { object_ids, elevation } => {
                 self.insert_points_at_elevation(object_ids, elevation);
-                Ok(())
-            }
-            UiCommand::CommitBatterBerm => {
-                self.commit_batter_berm();
-                Ok(())
-            }
-            UiCommand::CancelBatterBerm => {
-                self.cancel_batter_berm();
                 Ok(())
             }
             UiCommand::OpenCreateTriangulation => {
@@ -1540,6 +1576,21 @@ impl<'a> App<'a> {
                 let result = self.include_solid_in_topology(topology_id, shape_id, name, save_as_two, hide_old);
                 if result.is_ok() {
                     self.editor.tri_include_solid_open = false;
+                }
+                result
+            }
+            UiCommand::OpenJoinSurfaces => {
+                self.open_join_surfaces();
+                Ok(())
+            }
+            UiCommand::ExecuteJoinSurfaces {
+                surface_ids,
+                name,
+                unload_sources,
+            } => {
+                let result = self.join_surfaces(surface_ids, name, unload_sources);
+                if result.is_ok() {
+                    self.editor.tri_join_open = false;
                 }
                 result
             }

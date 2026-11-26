@@ -580,7 +580,7 @@ impl<'a> Graphics<'a> {
             &mut unused_fill_vertices,
             &mut unused_fill_indices,
             self.scene_origin,
-            self.window.scale_factor() as f32,
+            self.scale_factor() as f32,
         );
         for triangulation in triangulations {
             if !triangulation.state.loaded || editor.hidden_handles.contains(&triangulation.entity_id()) {
@@ -1371,7 +1371,10 @@ impl<'a> Graphics<'a> {
         }
 
         if !self.dynamic_strokes.is_empty() {
-            render_pass.set_pipeline(if editor.xray_enabled || editor.tying_holes() {
+            // Pit Design's preview, like the pit it stands in for, is seen
+            // through the ground.
+            let pit_preview = editor.pit_design.as_ref().is_some_and(|draft| draft.object_id().is_some());
+            render_pass.set_pipeline(if editor.xray_enabled || editor.tying_holes() || pit_preview {
                 &self.pipes().overlay_render_pipeline
             } else {
                 &self.pipes().stroke_render_pipeline

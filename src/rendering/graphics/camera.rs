@@ -303,7 +303,7 @@ pub(super) fn in_plane_screen_move(dx: f64, dy: f64, right: DVec3, up: DVec3, no
 
 /// Camera forward and up for a standard view; the section takes the same pair
 /// to turn its plane to, so the two views agree on where "north" looks.
-pub(super) fn standard_view_basis(view: crate::ui::state::StandardView) -> (DVec3, DVec3) {
+pub(crate) fn standard_view_basis(view: crate::ui::state::StandardView) -> (DVec3, DVec3) {
     match view {
         crate::ui::state::StandardView::Up => (DVec3::NEG_Z, DVec3::Y),
         crate::ui::state::StandardView::Down => (DVec3::Z, DVec3::Y),
@@ -608,6 +608,24 @@ impl<'a> Graphics<'a> {
         let displayed_plane_z = self.scene_origin.z + (plane_z - self.scene_origin.z) * self.vertical_exaggeration;
         screen_to_world_on_plane(&self.camera, self.projection.zoom, aspect, screen, self.camera_controller.mouse_loc, displayed_plane_z)
             .map(|point| self.unexaggerate_point(point))
+    }
+
+    /// [`Self::cursor_world`], with how far in plan `tolerance_px` pixels
+    /// reach from it there: for picking a place on geometry the viewport
+    /// does not draw as pickable, by distance in plan.
+    pub(crate) fn cursor_on_plane(&self, plane_z: f64, tolerance_px: f32) -> Option<(DVec3, f64)> {
+        let mouse = self.camera_controller.mouse_loc;
+        let beside = (mouse.0 + tolerance_px, mouse.1);
+        let (here, there) = if self.slice_view.is_some() {
+            (self.section_point_at_px(mouse)?, self.section_point_at_px(beside)?)
+        } else {
+            let screen = self.screen_size();
+            let aspect = screen.0 as f64 / screen.1.max(1.0) as f64;
+            let displayed_plane_z = self.scene_origin.z + (plane_z - self.scene_origin.z) * self.vertical_exaggeration;
+            let at = |px| screen_to_world_on_plane(&self.camera, self.projection.zoom, aspect, screen, px, displayed_plane_z).map(|point| self.unexaggerate_point(point));
+            (at(mouse)?, at(beside)?)
+        };
+        Some((here, here.truncate().distance(there.truncate())))
     }
 
     /// All pickable CPU geometry: the per-rebuild stream plus every visible
@@ -1068,6 +1086,14 @@ impl<'a> Graphics<'a> {
         self.camera.sync_angles_from_forward();
         self.camera_controller.begin_orbit(self.exaggerate_point(pt));
         self.orbit_marker = rotation_centre.is_none().then_some(pt);
+    }
+
+    /// Begin an orbit about `pivot`, a point the caller chose, marked as the
+    /// one picked under the cursor is.
+    pub(crate) fn begin_orbit_about(&mut self, pivot: DVec3) {
+        self.camera.sync_angles_from_forward();
+        self.camera_controller.begin_orbit(self.exaggerate_point(pivot));
+        self.orbit_marker = Some(pivot);
     }
 
     /// Asset under the cursor, else object, working plane, or eye depth.
@@ -1664,6 +1690,20 @@ impl<'a> Graphics<'a> {
         self.orbit_marker = None;
     }
 
+    /// Turn the camera to look along `forward` at once, about the point it
+    /// looks at and from as far, ending any swing under way. For a turn the
+    /// caller frames straight after, which a swing would undo as it ran.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn snap_view_direction(&mut self, view: crate::ui::state::StandardView) {
+        let (forward, up) = standard_view_basis(view);
+        self.camera_controller.cancel_view_transition();
+        self.camera_controller.cancel_orbit();
+        self.orbit_marker = None;
+        let target = self.camera.target();
+        let distance = (target - self.camera.position).length().max(1.0e-3);
+        self.camera.look_to(target - forward * distance, forward, up, distance);
+    }
+
     /// Whether a [`Self::set_view_direction`] swing is still under way.
     pub(crate) fn view_transition_running(&self) -> bool {
         self.camera_controller.has_view_transition()
@@ -1880,32 +1920,6 @@ impl<'a> Graphics<'a> {
             }
             _ => {}
         }
-
-        if min_depth.is_finite() {
-            let padding = (self.projection.zoom * 0.25).max(1.0);
-            self.projection.expand_view_depth_range(min_depth, max_depth, padding);
-        }
-    }
-
-    /// Keep generated batter/berm preview rings inside the clip volume. They
-    /// are not committed document geometry yet, so scene bounds omit them.
-    pub(super) fn include_batter_berm_preview_in_depth(&mut self, editor: &EditorState) {
-        if !editor.batter_berm_dialog_open || editor.batter_berm_rings_world.is_empty() {
-            return;
-        }
-
-        let forward = self.camera.forward();
-        let (min_depth, max_depth) = editor
-            .batter_berm_rings_world
-            .iter()
-            .flatten()
-            .copied()
-            .filter(|point| point.x.is_finite() && point.y.is_finite() && point.z.is_finite())
-            .map(|point| {
-                let point = self.exaggerate_point(point);
-                (point - self.camera.position).dot(forward)
-            })
-            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), depth| (min.min(depth), max.max(depth)));
 
         if min_depth.is_finite() {
             let padding = (self.projection.zoom * 0.25).max(1.0);

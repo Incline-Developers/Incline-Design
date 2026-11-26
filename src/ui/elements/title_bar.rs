@@ -190,14 +190,21 @@ fn paint_glyph(painter: &egui::Painter, control: Control, maximized: bool, centr
 /// Always in the weak text colour, focused or not: it names the window, and
 /// is not something to read past the menus and tabs for.
 pub(crate) fn draw_title(ui: &egui::Ui, bar: egui::Rect, span: egui::Rangef, centre_y: f32, project: &UiProjectView) {
-    let span = egui::Rangef::new(span.min + TITLE_MARGIN, span.max - TITLE_MARGIN);
-    if span.span() < TITLE_MIN_WIDTH {
-        return;
-    }
     let text = project.titled_project().map_or_else(
         || crate::APP_NAME.to_owned(),
         |entry| if entry.dirty { format!("{} *", entry.name) } else { entry.name.clone() },
     );
+    draw_title_text(ui, bar, span, centre_y, text);
+}
+
+/// Paint `text` as a window's title, centred on the window within `span`, as
+/// [`draw_title`] paints the project's name: for a window that names
+/// something else.
+pub(crate) fn draw_title_text(ui: &egui::Ui, bar: egui::Rect, span: egui::Rangef, centre_y: f32, text: String) {
+    let span = egui::Rangef::new(span.min + TITLE_MARGIN, span.max - TITLE_MARGIN);
+    if span.span() < TITLE_MIN_WIDTH {
+        return;
+    }
     let color = ui.visuals().weak_text_color();
     let font = egui::TextStyle::Button.resolve(ui.style());
     let mut job = egui::text::LayoutJob::simple_singleline(text, font, color);

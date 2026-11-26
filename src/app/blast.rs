@@ -80,8 +80,10 @@ impl App<'_> {
             }
         }
         self.persist_blast_library();
-        if !reload_holes.is_empty() {
-            self.charge_holes(&reload_holes, Some(&reload_rule));
+        if !reload_holes.is_empty()
+            && let Some(id) = self.tie_target().map(|dataset| dataset.id)
+        {
+            self.charge_holes(id, &reload_holes, Some(&reload_rule));
         }
     }
 
@@ -123,11 +125,17 @@ impl App<'_> {
         }
     }
 
-    /// Load `holes` of the active dataset with `rule`, or unload them with
-    /// `None`, as one undoable step. Holes the rule cannot fit are left as
-    /// they were and counted in the report.
-    pub(crate) fn charge_holes(&mut self, holes: &[usize], rule: Option<&ChargeRule>) {
-        let Some(dataset) = self.tie_target() else {
+    /// Load `holes` of `dataset` with `rule`, or unload them with `None`, as
+    /// one undoable step. Holes the rule cannot fit are left as they were
+    /// and counted in the report. A dataset that is not loaded, or is
+    /// locked, is left alone.
+    pub(crate) fn charge_holes(&mut self, dataset: crate::model::drill_hole::DrillHoleId, holes: &[usize], rule: Option<&ChargeRule>) {
+        let entity = crate::model::SceneEntityId::DrillHole(dataset);
+        let Some(dataset) = self
+            .drill_holes
+            .iter()
+            .find(|candidate| candidate.id == dataset && candidate.state.loaded && !self.editor.frozen_handles.contains(&entity))
+        else {
             return;
         };
         let id = dataset.id;
@@ -191,14 +199,12 @@ impl App<'_> {
         crate::logging::report_completed_action(CommandReportSpec::new(title, rule.map_or_else(String::new, |rule| rule.name.clone())), detail);
     }
 
-    /// Load or unload the selected holes of the active dataset, from the
-    /// Charge Rules section's menu.
-    pub(crate) fn charge_selected_holes(&mut self, rule: Option<String>) {
-        let Some(id) = self.editor.active_drill_hole else {
-            return;
-        };
-        let mut holes: Vec<usize> = self.editor.selected_drill_holes.iter().filter(|hole| hole.dataset == id).map(|hole| hole.hole).collect();
+    /// Load `holes` of `dataset` with the rule named `rule`, or unload them
+    /// with `None`: the Charge Rules section's menu, on the selected holes
+    /// of the active pattern.
+    pub(crate) fn charge_holes_with_rule(&mut self, dataset: crate::model::drill_hole::DrillHoleId, mut holes: Vec<usize>, rule: Option<String>) {
         holes.sort_unstable();
+        holes.dedup();
         if holes.is_empty() {
             userspace_warn!("{}", tr!("blast-log-select-holes-active-pattern-first"));
             return;
@@ -213,7 +219,7 @@ impl App<'_> {
             },
             None => None,
         };
-        self.charge_holes(&holes, rule.as_ref());
+        self.charge_holes(dataset, &holes, rule.as_ref());
     }
 
     /// A press with the Charge Holes tool: load the hole under the pointer -
@@ -255,18 +261,21 @@ impl App<'_> {
     }
 
     fn charge_with_tool(&mut self, holes: &[usize]) {
+        let Some(id) = self.tie_target().map(|dataset| dataset.id) else {
+            return;
+        };
         if holes.is_empty() {
             return;
         }
         if self.modifiers.shift_key() {
-            self.charge_holes(holes, None);
+            self.charge_holes(id, holes, None);
             return;
         }
         let Some(rule) = self.editor.active_rule().cloned() else {
             userspace_warn!("{}", tr!("blast-log-there-no-charge-rule-load-add"));
             return;
         };
-        self.charge_holes(holes, Some(&rule));
+        self.charge_holes(id, holes, Some(&rule));
     }
 
     /// Find the hole under the pointer for the hole card. Only while nothing

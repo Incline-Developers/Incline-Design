@@ -166,7 +166,10 @@ fn draw_body<R>(ui: &mut egui::Ui, title: &egui::WidgetText, width: f32, add_con
     ui.set_min_width(width);
     ui.set_max_width(width);
     apply_compact_style(ui);
-    paint_header(ui, title.text(), width);
+    // A menu opened from a button that names it needs no title of its own.
+    if !title.is_empty() {
+        paint_header(ui, title.text(), width);
+    }
     egui::Frame::NONE
         .inner_margin(egui::Margin::symmetric(CONTENT_HORIZONTAL_MARGIN, CONTENT_VERTICAL_MARGIN))
         .show(ui, add_contents)
@@ -456,6 +459,21 @@ pub(crate) fn dropdown_menu<R>(
 pub(crate) fn context_submenu<R>(ui: &mut egui::Ui, label: &str, enabled: bool, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> Option<egui::InnerResponse<R>> {
     let response = ContextMenuAction::new(label).enabled(enabled).submenu(true).show(ui);
     if !enabled {
+        return None;
+    }
+    // egui opens a submenu whenever the pointer is inside its row, even with
+    // something drawn over the row, such as a colour picker opened from the
+    // same menu. Hovering the row only counts when the row is what is under
+    // the pointer, so the submenu does not open beneath that picker. egui
+    // widens the row by half the item spacing, so the same is done here.
+    let row = response.rect.expand2(ui.spacing().item_spacing / 2.0);
+    let covered = ui
+        .ctx()
+        .pointer_hover_pos()
+        .filter(|pos| row.contains(*pos))
+        .and_then(|pos| ui.ctx().layer_id_at(pos))
+        .is_some_and(|layer| layer != ui.layer_id());
+    if covered {
         return None;
     }
     let title: egui::WidgetText = label.into();

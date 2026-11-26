@@ -6,10 +6,16 @@ pub(crate) mod geophysics; // Geophysics files linked to drill-hole datasets
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod geophysics_web;
 pub(crate) mod haulage_pipeline; // The Haulage workspace's Setup run/invalidation model
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod headless; // `incline-design mcp --headless`: Incline with no window, for one MCP client
 pub(crate) mod io; /* Handles session serialisation */
 pub(crate) mod jobs; // Reusable background-compute job queue
+pub(crate) mod mcp; // The MCP server: started and stopped to follow Preferences, its requests answered here
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod mcp_tools; // The MCP server's tools
 pub(crate) mod memory; // Allocator settings, and browser address-space budgeting for large allocations
 pub(crate) mod memory_usage; // The status bar's memory and per-core CPU readouts
+pub(crate) mod panel_windows; // Panels popped out of the main window into windows of their own
 pub(crate) mod planning_pipeline; // The Solids workspace's six-stage run/invalidation model
 pub(crate) mod schedule_animation; // Schedule Animate's derived, scrubbed geometry
 pub(crate) mod schedule_pipeline; // The Schedule workspace's Setup run/invalidation model
@@ -347,6 +353,56 @@ pub(crate) struct App<'a> {
     /// Keeping it in the application event loop prevents timed repaints from
     /// being discarded when there is otherwise no window activity.
     next_ui_repaint_deadline: Option<Instant>,
+    /// The point in the history a rollback is stepping back to, until it is
+    /// there (`continue_history_walk`).
+    history_walk: Option<crate::model::HistoryMark>,
+    /// Whether the walk is stepping now, so a step it takes does not start
+    /// another.
+    walking_history: bool,
+    /// The MCP server, while it runs. See `mcp`.
+    #[cfg(not(target_arch = "wasm32"))]
+    mcp_server: Option<crate::mcp::Server>,
+    /// Whether this Incline has no window, serving one MCP client (`headless`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) headless: bool,
+    /// The warnings and errors in the activity log an MCP client has been
+    /// told of, so each tool result can carry only the new ones. `None`
+    /// until the first call, which takes the log as it stands as seen.
+    #[cfg(not(target_arch = "wasm32"))]
+    mcp_seen_warnings: Option<std::collections::HashSet<crate::logging::ConsoleEntryId>>,
+    /// `get_tasks` calls waiting for the background work to finish.
+    #[cfg(not(target_arch = "wasm32"))]
+    mcp_waits: Vec<mcp_tools::PendingWait>,
+    /// A schedule calculation an MCP client asked for while the Setup steps
+    /// it needs were still running: started once they settle, rather than
+    /// refused as the Gantt's button refuses it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) mcp_pending_schedule_run: Option<crate::app::schedule_run::ScheduleRunMode>,
+    /// The schedule run serial when an MCP client last asked for a
+    /// calculation: an attempt recorded after it is that calculation's.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) mcp_schedule_serial_asked: u64,
+    /// Notifications a call raised while it was being answered, sent ahead
+    /// of its answer.
+    #[cfg(not(target_arch = "wasm32"))]
+    mcp_outbox: Vec<serde_json::Value>,
+    /// Named points in the undo history an MCP client can roll back to.
+    #[cfg(not(target_arch = "wasm32"))]
+    mcp_checkpoints: Vec<(String, crate::model::HistoryMark)>,
+    /// The groups of tools an MCP client has loaded (`mcp_tools::groups`).
+    #[cfg(not(target_arch = "wasm32"))]
+    mcp_loaded_groups: std::collections::BTreeSet<&'static str>,
+    /// Wakes the event loop from another thread: the MCP server's, when a
+    /// request comes in.
+    #[cfg(not(target_arch = "wasm32"))]
+    event_loop_proxy: Option<winit::event_loop::EventLoopProxy<()>>,
+    /// The popped-out panels' windows, in [`crate::ui::state::PanelKind::ALL`]'s
+    /// order. See `panel_windows`.
+    #[cfg(not(target_arch = "wasm32"))]
+    panel_window_states: [panel_windows::PanelWindowState; 4],
+    /// What the popped-out panels last showed of this window.
+    #[cfg(not(target_arch = "wasm32"))]
+    panel_view_key: panel_windows::PanelViewKey,
     window: Option<Arc<Window>>,
     /// The title last given to the window, so it is set only when it changes.
     window_title: String,
@@ -417,7 +473,6 @@ pub(crate) struct App<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     cpu_sampler: memory_usage::CpuSampler,
     surface_retry_pending: bool,
-    slice_surface_retry_deadline: Option<Instant>,
     last_scroll_instant: Option<Instant>,
     last_snap_poll_instant: Option<Instant>,
     editor: EditorState,
@@ -621,9 +676,10 @@ pub(crate) struct App<'a> {
     /// The water runs whose tabs are open. Session-only.
     pub(crate) water: crate::app::water::WaterRuns,
     pub(crate) solid_preview_restore_requested: Option<crate::app::commands::solids::SolidPreviewKey>,
-    slice_preview_cursor_px: Option<(f64, f64)>,
-    slice_preview_middle_down: bool,
     pending_selection_click: Option<crate::rendering::graphics::camera::ScenePick>,
+    /// The bench design last clicked with no tool up, and when: a second
+    /// click on it soon after opens it in Bench Design.
+    last_pit_click: Option<(crate::model::ObjectId, Instant)>,
     move_session_original: Option<MoveSession>,
     /// Captured collar placements, shared by Move Collar and Rotate Collar:
     /// both rewrite the same holes from the same originals, and only one of
@@ -657,6 +713,14 @@ pub(crate) struct App<'a> {
     /// Heavy compute jobs (include/cut/create) running on background threads;
     /// drained by `poll_jobs` each frame.
     pending_jobs: Vec<jobs::BackgroundJob<'a>>,
+    /// How the last few reported jobs went, newest last, for the MCP server
+    /// to tell the AI what its work made or why it failed (`JobOutcome`).
+    #[cfg(not(target_arch = "wasm32"))]
+    job_outcomes: std::collections::VecDeque<jobs::JobOutcome>,
+    /// Why the job `poll_jobs` is settling failed: set by its poll step,
+    /// taken by `poll_jobs`, as `applied_job_needs_gpu` is.
+    #[cfg(not(target_arch = "wasm32"))]
+    settled_job_error: Option<String>,
     /// Set by a job's apply step that handed the renderer new geometry to
     /// upload; read and cleared by `poll_jobs`, which keeps that job's busy
     /// state until the GPU upload finishes instead of settling it early.
@@ -684,6 +748,32 @@ impl<'a> Default for App<'a> {
             discard_changes_on_deferred_exit: false,
             redraw_requested: false,
             next_ui_repaint_deadline: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            mcp_server: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            headless: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            mcp_seen_warnings: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            mcp_waits: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            mcp_pending_schedule_run: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            mcp_schedule_serial_asked: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            mcp_outbox: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            mcp_checkpoints: Vec::new(),
+            history_walk: None,
+            walking_history: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            mcp_loaded_groups: std::collections::BTreeSet::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            event_loop_proxy: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            panel_window_states: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            panel_view_key: Default::default(),
             window: None,
             window_title: String::new(),
             window_state_stale: true,
@@ -729,7 +819,6 @@ impl<'a> Default for App<'a> {
             #[cfg(not(target_arch = "wasm32"))]
             cpu_sampler: memory_usage::CpuSampler::new(),
             surface_retry_pending: false,
-            slice_surface_retry_deadline: None,
             last_scroll_instant: None,
             last_snap_poll_instant: None,
             editor: EditorState::new(),
@@ -817,9 +906,8 @@ impl<'a> Default for App<'a> {
             schedule_animation: Default::default(),
             water: Default::default(),
             solid_preview_restore_requested: None,
-            slice_preview_cursor_px: None,
-            slice_preview_middle_down: false,
             pending_selection_click: None,
+            last_pit_click: None,
             move_session_original: None,
             collar_move_session: None,
             collar_rotation: None,
@@ -839,6 +927,10 @@ impl<'a> Default for App<'a> {
             project_asset_baseline: SaveToken::default(),
             pending_saves: Vec::new(),
             pending_jobs: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            job_outcomes: std::collections::VecDeque::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            settled_job_error: None,
             applied_job_needs_gpu: false,
             #[cfg(target_arch = "wasm32")]
             web_import_files: None,
@@ -952,6 +1044,7 @@ impl<'a> App<'a> {
         self.editor.well_log_style = config.well_log_style.sanitized();
         self.editor.dark_mode = config.dark_mode;
         self.editor.show_console = config.show_console;
+        self.editor.popped_out = config.popped_out;
         self.editor.ui_size_percent = io::finite_clamped(config.ui_size_percent, 50.0, 200.0, io::default_ui_size_percent());
         self.editor.renderer_background_color = crate::ui::scene_background_color(config.dark_mode);
         self.editor.snap_poll_rate = config.snap_poll_rate.clamp(5, 1000);
@@ -2184,37 +2277,7 @@ impl<'a> App<'a> {
         self.pending_resize = None;
         self.last_render_time = None;
         self.surface_retry_pending = false;
-        self.slice_surface_retry_deadline = None;
         self.redraw_requested = false;
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn sync_slice_preview_window(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        if !self.editor.slice_preview_detached || self.graphics.as_ref().is_some_and(|graphics| graphics.slice_preview_window_id().is_some()) {
-            return;
-        }
-        let attributes = Window::default_attributes()
-            .with_title(crate::i18n::tr!("err-file-section-preview-title", app = crate::APP_NAME.to_string()))
-            .with_window_icon(window_icon())
-            .with_min_inner_size(winit::dpi::PhysicalSize::new(320, 240))
-            .with_inner_size(winit::dpi::PhysicalSize::new(800, 700));
-        #[cfg(target_os = "linux")]
-        let attributes = attributes.with_name(crate::APP_ID, crate::APP_ID);
-        let result = event_loop.create_window(attributes).map(Arc::new).map_err(anyhow::Error::from).and_then(|window| {
-            self.graphics
-                .as_mut()
-                .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-file-renderer-not-ready")))?
-                .open_slice_preview(window)
-        });
-        if let Err(error) = result {
-            log::error!("{}", crate::i18n::tr!("app-failed-detach-top-down-preview", error = format!("{error:#}")));
-            self.editor.slice_preview_detached = false;
-        }
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn sync_slice_preview_window(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
-        self.editor.slice_preview_detached = false;
     }
 
     fn project_view_key(&self) -> u64 {
@@ -2769,16 +2832,21 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             self.haulage_auto_deadline = None;
             self.redraw_requested = true;
         }
-        if self.slice_surface_retry_deadline.is_some_and(|deadline| deadline <= now) {
-            self.slice_surface_retry_deadline = None;
-            if let Some(graphics) = self.graphics.as_ref() {
-                graphics.request_slice_preview_redraw();
-            }
-        }
         if self.scanned_model_kept_until.is_some_and(|until| until <= now) {
             self.scanned_model_kept_until = None;
             self.evict_unloaded_items();
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        let panel_deadline = self.poll_panel_repaints(now);
+        // A wait for the background work the MCP server is holding is
+        // answered once the work is done, so the loop keeps coming back
+        // until then.
+        #[cfg(not(target_arch = "wasm32"))]
+        let capture_deadline = self.poll_mcp_waits().then(|| now + Duration::from_millis(100));
+        #[cfg(target_arch = "wasm32")]
+        let capture_deadline: Option<Instant> = None;
+        #[cfg(target_arch = "wasm32")]
+        let panel_deadline: Option<Instant> = None;
         let continuous_redraw = self.graphics.as_ref().is_some_and(Graphics::needs_continuous_redraw);
         if self.redraw_requested || continuous_redraw {
             self.frame_demanded_at.get_or_insert(now);
@@ -2810,13 +2878,14 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         let trackpad_deadline = trackpad_active.then(|| now + Duration::from_millis(4));
         let wake_deadline = wake_deadline
             .into_iter()
-            .chain(self.slice_surface_retry_deadline)
             .chain(resize_settle_deadline)
             .chain(self.schedule_auto_deadline)
             .chain(self.planning_auto_deadline)
             .chain(self.haulage_auto_deadline)
             .chain(self.scanned_model_kept_until)
             .chain(trackpad_deadline)
+            .chain(panel_deadline)
+            .chain(capture_deadline)
             .min();
         if let Some(deadline) = wake_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
@@ -2832,8 +2901,14 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         self.teardown_window();
     }
 
-    #[cfg_attr(not(target_arch = "wasm32"), expect(unused_variables))]
     fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: AppEvent) {
+        // On the desktop the only event is the MCP server's: a request is
+        // waiting for the main thread.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let () = event;
+            self.serve_mcp();
+        }
         #[cfg(target_arch = "wasm32")]
         match event {
             AppEvent::GraphicsInitializationFinished => {

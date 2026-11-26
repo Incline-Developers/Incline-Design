@@ -620,7 +620,7 @@ impl<'a> App<'a> {
         field: String,
         target: crate::model::drill_hole::ReferenceTarget,
         side: crate::model::drill_hole::ReferenceSide,
-    ) {
+    ) -> Option<ReferencePicks> {
         let value = target.name().to_owned();
         let mut picks = Vec::new();
         let mut absent = 0usize;
@@ -664,11 +664,9 @@ impl<'a> App<'a> {
         }
         if picks.is_empty() {
             userspace_warn!("{}", tr!("cmd-drill-hole-no-hole-holds-value-field", value = target.label().to_string()));
-            return;
+            return None;
         }
-        let Some(project) = self.workspace.active_project_mut() else {
-            return;
-        };
+        let project = self.workspace.active_project_mut()?;
         let document = &mut project.project.document;
         let layer_id = document.allocate_layer_id();
         let layer = crate::model::Layer {
@@ -691,23 +689,43 @@ impl<'a> App<'a> {
                 color: crate::model::ObjectColor::ByLayer,
             })
             .collect();
-        let used = objects.len();
+        let picks = ReferencePicks {
+            #[cfg(not(target_arch = "wasm32"))]
+            layer: layer_id,
+            points: objects.len(),
+            without: absent,
+            flagged,
+        };
         self.execute_edit(Command::AddLayerSnapshot { layer, objects });
         userspace_log!(
             "{}",
             tr!(
                 "cmd-drill-hole-reference-points-used-holes-placed",
-                used = used.to_string(),
-                absent = absent.to_string(),
+                used = picks.points.to_string(),
+                absent = picks.without.to_string(),
                 value = target.label().to_string(),
-                flagged = flagged.len().to_string()
+                flagged = picks.flagged.len().to_string()
             )
         );
-        if !flagged.is_empty() {
-            userspace_warn!("{}", tr!("cmd-drill-hole-uppermost-run-used-flagged-holes", holes = flagged.join(", ").to_string()));
+        if !picks.flagged.is_empty() {
+            userspace_warn!("{}", tr!("cmd-drill-hole-uppermost-run-used-flagged-holes", holes = picks.flagged.join(", ").to_string()));
         }
         self.invalidate_geometry();
+        Some(picks)
     }
+}
+
+/// What a reference pick placed: one point on each hole that holds the
+/// code, on a layer of their own.
+pub(crate) struct ReferencePicks {
+    /// The layer they are on, for the MCP server to name.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) layer: crate::model::LayerId,
+    pub(crate) points: usize,
+    /// Holes it gave nothing for: the code not logged in them, or gone.
+    pub(crate) without: usize,
+    /// Holes where the code runs more than once, picked at its uppermost run.
+    pub(crate) flagged: Vec<String>,
 }
 
 /// The new layer's name for a reference pick. A working section says so, so

@@ -97,8 +97,14 @@ impl<'a> App<'a> {
             self.begin_selection_pick(SelectionPickTool::InsertAtIntersection);
             return;
         }
+        self.insert_points_at_crossings(selected);
+    }
 
-        let source: Vec<(ObjectId, Vec<PolyVertex>, bool)> = selected
+    /// Insert a vertex into each of `object_ids`' polylines wherever it
+    /// crosses another of them in plan, as one undo step. Ids that are not
+    /// polylines are passed over.
+    pub(crate) fn insert_points_at_crossings(&mut self, object_ids: Vec<ObjectId>) {
+        let source: Vec<(ObjectId, Vec<PolyVertex>, bool)> = object_ids
             .into_iter()
             .filter_map(|id| match self.scene_document.get_object(id) {
                 Some(Object::Polyline { verts, closed, .. }) => Some((id, verts.clone(), *closed)),

@@ -843,6 +843,16 @@ enum DesignRecord {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         hidden: bool,
     },
+    /// Its string comes from the object's run of segments, always closed;
+    /// what it is designed with, and its benches as worked out, are here.
+    PitDesign {
+        id: u64,
+        color: ObjectColor,
+        line_weight: f32,
+        pit: Box<crate::model::pit_design::object::PitObject>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hidden: bool,
+    },
 }
 
 /// One layer's objects as a composite of at most two elements: every polyline
@@ -903,6 +913,25 @@ fn write_design_layer<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writ
                     color,
                     fill: *fill,
                     line_weight: *line_weight,
+                    hidden,
+                });
+            }
+            Object::PitDesign { verts, line_weight, pit, .. } => {
+                if verts.len() < 3 {
+                    bail!(tr!("err-omf-polyline-too-few-vertices", id = id.to_string(), layer = layer.name.to_string()));
+                }
+                let first = line_vertices.len() as u32;
+                let count = verts.len() as u32;
+                line_vertices.extend(verts.iter().map(|vertex| vertex.pos.to_array()));
+                segments.extend((0..count - 1).map(|index| [first + index, first + index + 1]));
+                segments.push([first + count - 1, first]);
+                bulges.extend(verts.iter().map(|vertex| Some(vertex.bulge)));
+                segment_objects.extend(std::iter::repeat_n(Some(id as i64), verts.len()));
+                records.push(DesignRecord::PitDesign {
+                    id,
+                    color,
+                    line_weight: *line_weight,
+                    pit: pit.clone(),
                     hidden,
                 });
             }
@@ -1222,6 +1251,33 @@ fn write_block_model<W: Write + Seek + Send>(writer: &mut omf_crate::file::Write
     element
 }
 
+/// A block model's blocks as freeform sub-blocks of one parent spanning it:
+/// any blocks at all, as many as are shown.
+fn freeform_geometry<W: Write + Seek + Send>(
+    writer: &mut omf_crate::file::Writer<W>,
+    open: &OpenBlockModel,
+    orient: omf_crate::Orient3,
+    selected: &RenderableBlockIndices,
+    lower: DVec3,
+    extent: DVec3,
+) -> Result<omf_crate::BlockModel> {
+    let blocks = open.blocks.as_ref();
+    let subblocks = selected.iter().map(|index| {
+        let block = blocks.get(index).expect("every selected block was checked above");
+        // Normalizing by `extent` should land boundary blocks exactly on
+        // 0.0/1.0, but float rounding can push a corner a hair outside
+        // that range, which OMF's strict validation rejects.
+        let min = ((block.lower - lower) / extent).clamp(DVec3::ZERO, DVec3::ONE);
+        let max = ((block.upper - lower) / extent).clamp(DVec3::ZERO, DVec3::ONE);
+        ([0, 0, 0], [min.x, min.y, min.z, max.x, max.y, max.z])
+    });
+    Ok(omf_crate::BlockModel::with_freeform_subblocks(
+        orient,
+        omf_crate::Grid3::from_size_and_count(extent.to_array(), [1, 1, 1]),
+        writer.array_freeform_subblocks(subblocks)?,
+    ))
+}
+
 fn write_block_model_arrays<W: Write + Seek + Send>(writer: &mut omf_crate::file::Writer<W>, open: &OpenBlockModel) -> Result<omf_crate::Element> {
     let model = &open.model;
     let lower = model.metadata.lower;
@@ -1237,27 +1293,27 @@ fn write_block_model_arrays<W: Write + Seek + Send>(writer: &mut omf_crate::file
     if let Some(index) = selected.iter().find(|&index| index >= open.blocks.len()) {
         bail!(tr!("err-omf-block-model-missing-block", name = open.name.to_string(), index = index.to_string()));
     }
-    let blocks = open.blocks.as_ref();
-    let subblocks = selected.iter().map(|index| {
-        let block = blocks.get(index).expect("every selected block was checked above");
-        // Normalizing by `extent` should land boundary blocks exactly on
-        // 0.0/1.0, but float rounding can push a corner a hair outside
-        // that range, which OMF's strict validation rejects.
-        let min = ((block.lower - lower) / extent).clamp(DVec3::ZERO, DVec3::ONE);
-        let max = ((block.upper - lower) / extent).clamp(DVec3::ZERO, DVec3::ONE);
-        ([0, 0, 0], [min.x, min.y, min.z, max.x, max.y, max.z])
-    });
     let rotation = model.rotation();
-    let geometry = omf_crate::BlockModel::with_freeform_subblocks(
-        omf_crate::Orient3::new(
-            model.local_to_world(lower).to_array(),
-            rotation.x_axis.to_array(),
-            rotation.y_axis.to_array(),
-            rotation.z_axis.to_array(),
-        ),
-        omf_crate::Grid3::from_size_and_count(extent.to_array(), [1, 1, 1]),
-        writer.array_freeform_subblocks(subblocks)?,
+    let orient = omf_crate::Orient3::new(
+        model.local_to_world(lower).to_array(),
+        rotation.x_axis.to_array(),
+        rotation.y_axis.to_array(),
+        rotation.z_axis.to_array(),
     );
+    // A regular model whose every block is shown is written as the grid it
+    // is, its values on the blocks themselves: read back, it is regular
+    // still, and holds no bounds for each block.
+    let regular = match (open.blocks.as_ref(), selected) {
+        (BlockBoundsSource::Regular(grid), RenderableBlockIndices::All(count)) if !model.metadata.is_irregular && *count == model.metadata.n_blocks => grid.row_major(),
+        _ => None,
+    };
+    let (geometry, location) = match regular {
+        Some((dims, cell)) => (
+            omf_crate::BlockModel::new(orient, omf_crate::Grid3::from_size_and_count(cell.to_array(), dims.map(|count| count as u32))),
+            omf_crate::Location::Primitives,
+        ),
+        None => (freeform_geometry(writer, open, orient, selected, lower, extent)?, omf_crate::Location::Subblocks),
+    };
     let mut element = omf_crate::Element::new(open.name.clone(), geometry);
     element.color = Some(rgba8(open.color));
     for variable in &model.metadata.variables {
@@ -1267,13 +1323,9 @@ fn write_block_model_arrays<W: Write + Seek + Send>(writer: &mut omf_crate::file
         if variable.strings.is_empty() {
             let selected_values = selected.iter().map(|index| values.checked(index).filter(|value| value.is_finite()));
             let numbers = writer.array_numbers(selected_values)?;
-            element.attributes.push(write_number_attribute(
-                writer,
-                &variable.name,
-                omf_crate::Location::Subblocks,
-                numbers,
-                open.color_transfers.get(&variable.name),
-            )?);
+            element
+                .attributes
+                .push(write_number_attribute(writer, &variable.name, location, numbers, open.color_transfers.get(&variable.name))?);
         } else {
             let codes = variable.strings.keys().copied().collect::<Vec<_>>();
             let code_to_index = codes.iter().enumerate().map(|(index, code)| (*code, index as u32)).collect::<BTreeMap<_, _>>();
@@ -1297,7 +1349,7 @@ fn write_block_model_arrays<W: Write + Seek + Send>(writer: &mut omf_crate::file
             let names = writer.array_names(names)?;
             element.attributes.push(omf_crate::Attribute::from_categories(
                 variable.name.clone(),
-                omf_crate::Location::Subblocks,
+                location,
                 indices,
                 names,
                 Some(writer.array_gradient(gradient)?),
@@ -2781,6 +2833,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             let (id, hidden) = match &record {
                 DesignRecord::Point { id, hidden, .. }
                 | DesignRecord::Polyline { id, hidden, .. }
+                | DesignRecord::PitDesign { id, hidden, .. }
                 | DesignRecord::Circle { id, hidden, .. }
                 | DesignRecord::Text { id, hidden, .. } => (*id, *hidden),
             };
@@ -2838,6 +2891,37 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                         color,
                         fill,
                         line_weight,
+                    }
+                }
+                DesignRecord::PitDesign { color, line_weight, pit, .. } => {
+                    let run = take_run()?;
+                    let run_segments = &segments[run.clone()];
+                    let first = run_segments[0][0];
+                    let count = run_segments.len();
+                    let closed = count >= 3 && run_segments[count - 1] == [first + count as u32 - 1, first];
+                    let sequential = run_segments[..count - 1]
+                        .iter()
+                        .enumerate()
+                        .all(|(index, segment)| *segment == [first + index as u32, first + index as u32 + 1]);
+                    let vertices = line_vertices.get(first as usize..first as usize + count);
+                    let (true, true, Some(vertices)) = (closed, sequential, vertices) else {
+                        bail!(tr!("err-omf-design-polyline-not-continuous", id = id.to_string()));
+                    };
+                    let bulge = |index: usize| bulges.as_ref().and_then(|bulges| bulges.get(run.start + index).copied().flatten()).unwrap_or(0.0);
+                    let verts: Vec<PolyVertex> = vertices.iter().enumerate().map(|(index, pos)| PolyVertex { pos: *pos, bulge: bulge(index) }).collect();
+                    let mut pit = pit;
+                    // Its string came offset by the file's origin; what it
+                    // holds in coordinates moves with it.
+                    if self.project_origin != DVec3::ZERO {
+                        pit.translate(self.project_origin, &verts);
+                    }
+                    Object::PitDesign {
+                        id: object_id,
+                        layer,
+                        verts,
+                        color,
+                        line_weight,
+                        pit,
                     }
                 }
                 DesignRecord::Polyline { color, fill, line_weight, .. } => {
@@ -3303,26 +3387,40 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 .flatten()
                 .collect())
         };
-        // The bounds are six more arrays, and decode beside the rest unless the
-        // rest need the parents they hold.
-        let (blocks, summary, columns) = if spreads_parents {
-            let (blocks, parent_indices, summary) = read_geometry()?;
-            let columns = read_columns(&parent_indices)?;
-            (blocks, summary, columns)
-        } else {
-            let (geometry, columns) = rayon::join(read_geometry, || read_columns(&[]));
-            let (blocks, _, summary) = geometry?;
-            (blocks, summary, columns?)
-        };
-        if blocks.len() == 0 {
-            self.bundle.warnings.push(tr!("err-omf-block-model-empty", name = element.name.to_string()));
-            return Ok(());
-        }
         let upper = DVec3::new(*edges[0].last().unwrap_or(&0.0), *edges[1].last().unwrap_or(&0.0), *edges[2].last().unwrap_or(&0.0));
-        let model = BlockModelData::from_columns(blocks.len(), DVec3::ZERO, upper, columns, blocks.heap_bytes())?
-            .with_transform(origin, rotation)?
-            .with_source_fingerprint(self.block_model_fingerprint(element));
-        let blocks = Arc::new(BlockBoundsSource::Explicit(blocks));
+        // A regular grid without sub-blocks is read as the regular model it
+        // is: its blocks are its grid, with no bounds held for each.
+        let (model, blocks, summary) = if let (None, omf_crate::Grid3::Regular { size, .. }) = (&geometry.subblocks, &geometry.grid) {
+            let total = count
+                .into_iter()
+                .try_fold(1usize, |total, count| total.checked_mul(count))
+                .with_context(|| tr!("err-omf-block-count-overflows"))?;
+            ensure_items(total as u64, &tr!("err-omf-items-blocks"))?;
+            let columns = read_columns(&[])?;
+            let model = BlockModelData::from_regular_grid(DVec3::ZERO, DVec3::from_array(*size), count, columns)?;
+            let grid = crate::model::block_model::RegularBlockBounds::new(DVec3::ZERO, model.metadata.upper, count, None, total).map_err(anyhow::Error::msg)?;
+            (model, BlockBoundsSource::Regular(grid), None)
+        } else {
+            // The bounds are six more arrays, and decode beside the rest unless
+            // the rest need the parents they hold.
+            let (blocks, summary, columns) = if spreads_parents {
+                let (blocks, parent_indices, summary) = read_geometry()?;
+                let columns = read_columns(&parent_indices)?;
+                (blocks, summary, columns)
+            } else {
+                let (geometry, columns) = rayon::join(read_geometry, || read_columns(&[]));
+                let (blocks, _, summary) = geometry?;
+                (blocks, summary, columns?)
+            };
+            if blocks.len() == 0 {
+                self.bundle.warnings.push(tr!("err-omf-block-model-empty", name = element.name.to_string()));
+                return Ok(());
+            }
+            let model = BlockModelData::from_columns(blocks.len(), DVec3::ZERO, upper, columns, blocks.heap_bytes())?;
+            (model, BlockBoundsSource::Explicit(blocks), summary)
+        };
+        let model = model.with_transform(origin, rotation)?.with_source_fingerprint(self.block_model_fingerprint(element));
+        let blocks = Arc::new(blocks);
         let renderable = Arc::new(RenderableBlockIndices::All(blocks.len()));
         // What the decoding already found is not looked for again.
         let uniform_grid = match (&*blocks, &summary) {

@@ -140,12 +140,29 @@ pub(crate) fn snap_cursor(
                         nearest.consider_point(&view, vertex.pos);
                     }
                 }
+                // Its string's vertices, and every point of its benches.
+                Object::PitDesign { verts, .. } => {
+                    for vertex in verts {
+                        nearest.consider_point(&view, vertex.pos);
+                    }
+                    for point in object.pit_strings().flat_map(|string| &string.points) {
+                        nearest.consider_point(&view, *point);
+                    }
+                }
                 _ => {}
             },
 
             CursorMode::SnapToLine => {
                 // Line snapping walks the geometry view, so a circle's ring
                 // snaps like any other closed string.
+                // A pit design's benches snap as the strings they draw.
+                for string in object.pit_strings() {
+                    let count = string.points.len();
+                    let segments = if string.closed { count } else { count.saturating_sub(1) };
+                    for i in 0..segments {
+                        nearest.consider_segment(&view, string.points[i], string.points[(i + 1) % count]);
+                    }
+                }
                 let Some((geometry, closed)) = object.string_geometry() else {
                     continue;
                 };

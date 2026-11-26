@@ -21,15 +21,19 @@ use crate::{
 const DEFAULT_TRIANGULATION_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
 mod contours;
-mod creation;
+pub(crate) mod creation;
 pub(crate) mod cuts;
 mod geometry;
-mod include;
+pub(crate) mod include;
+mod join;
 mod point_cloud_tin;
 pub(crate) mod reference_surface;
 pub(crate) mod session;
 mod simplify;
 pub(crate) mod solid_between;
 
+// For the MCP server, which says how far a weld reaches.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use creation::COARSE_WELD_TOL;
 use geometry::*;
 pub(crate) use point_cloud_tin::{TerrainBudget, TerrainSampler, TerrainTinParams, estimate_terrain_tin_memory_bytes, terrain_budget_target};

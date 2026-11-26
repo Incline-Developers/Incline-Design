@@ -667,7 +667,20 @@ fn pick_nearest_vertex_from_indices(
                     }
                 }
             }
-            Object::Polyline { verts, closed, .. } if filter != VertexPickFilter::DeletablePolyline || verts.len() > if *closed { 3 } else { 2 } => {
+            // A pit design's handles are its string's vertices: its benches
+            // follow them.
+            Object::Polyline { verts, closed: true, .. } | Object::PitDesign { verts, .. } if filter != VertexPickFilter::DeletablePolyline || verts.len() > 3 => {
+                for (i, vert) in verts.iter().enumerate() {
+                    if let Some(sp) = slab_screen_point(slab, view_proj, screen, vert.pos) {
+                        let d = sp.distance(cursor);
+                        if d < best_dist {
+                            best_dist = d;
+                            best = Some((object.id(), ObjectPoint::Vertex(i), vert.pos));
+                        }
+                    }
+                }
+            }
+            Object::Polyline { verts, closed: false, .. } if filter != VertexPickFilter::DeletablePolyline || verts.len() > 2 => {
                 for (i, vert) in verts.iter().enumerate() {
                     if let Some(sp) = slab_screen_point(slab, view_proj, screen, vert.pos) {
                         let d = sp.distance(cursor);

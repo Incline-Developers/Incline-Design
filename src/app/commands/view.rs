@@ -109,7 +109,9 @@ impl<'a> App<'a> {
 
     pub(crate) fn set_show_points(&mut self, enabled: bool) -> anyhow::Result<()> {
         self.editor.show_points = enabled;
-        // Deliberately not persisted: this is a per-session view toggle.
+        // Deliberately not persisted: this is a per-session view toggle. The
+        // dots are drawn with the lines, so the scene is drawn again.
+        self.invalidate_geometry();
         self.redraw_requested = true;
         userspace_log!("{}", tr!("cmd-view-set-view-points-enabled", enabled = enabled.to_string()));
         Ok(())
@@ -150,6 +152,26 @@ impl<'a> App<'a> {
             ViewToggle::Console => preferences.show_console = value,
             ViewToggle::DarkMode => preferences.dark_mode = value,
         }
+        self.apply_preferences(preferences)
+    }
+
+    /// Pop a panel out into a window of its own, or dock it back in the main
+    /// window. The section preview's goes with the section view; the rest are
+    /// saved with the preferences.
+    pub(crate) fn set_panel_popped_out(&mut self, kind: crate::ui::state::PanelKind, popped_out: bool) -> anyhow::Result<()> {
+        use crate::ui::state::PanelKind;
+
+        let popped_out = popped_out && cfg!(not(target_arch = "wasm32"));
+        let mut preferences = self.editor.current_preferences();
+        match kind {
+            PanelKind::Console => preferences.popped_out.console = popped_out,
+            PanelKind::SectionPreview => {
+                self.editor.slice_preview_detached = popped_out && self.editor.slice_mode_enabled;
+                self.redraw_requested = true;
+                return Ok(());
+            }
+        }
+        self.redraw_requested = true;
         self.apply_preferences(preferences)
     }
 
@@ -199,6 +221,7 @@ impl<'a> App<'a> {
         self.editor.well_log_style = preferences.well_log_style;
         self.editor.dark_mode = preferences.dark_mode;
         self.editor.show_console = preferences.show_console;
+        self.editor.popped_out = preferences.popped_out;
         self.editor.ui_size_percent = preferences.ui_size_percent;
         self.editor.renderer_background_color = crate::ui::scene_background_color(preferences.dark_mode);
         self.editor.snap_poll_rate = preferences.snap_poll_rate;
@@ -327,7 +350,7 @@ impl<'a> App<'a> {
     /// blocks and the Blasting steps their bench bodies, with the project's
     /// own surfaces hidden; measuring those framed nothing there, and the
     /// camera stayed put or swung to the world origin.
-    fn framed_triangulations(&self) -> &[crate::model::triangulation::OpenTriangulation] {
+    pub(crate) fn framed_triangulations(&self) -> &[crate::model::triangulation::OpenTriangulation] {
         crate::app::events::drawn_surfaces(
             &self.editor,
             self.showing_solid_preview(),
@@ -515,6 +538,7 @@ pub(crate) fn config_from(
         well_log_style: preferences.well_log_style,
         dark_mode: preferences.dark_mode,
         show_console: preferences.show_console,
+        popped_out: preferences.popped_out,
         ui_size_percent: preferences.ui_size_percent,
         snap_poll_rate: preferences.snap_poll_rate,
         vsync_enabled: preferences.vsync_enabled,

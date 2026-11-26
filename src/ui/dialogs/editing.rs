@@ -7,7 +7,7 @@ use crate::{
     i18n::tr,
     model::{Axis, Document},
     ui::{
-        state::{ActiveTool, BatterBermMode, DrapePhase, EditorState, HeightMode, OffsetMeasure, RelimitMode, RenameTarget, SelectionPickTool, TrimEnd, UiCommand, UiProjectView},
+        state::{ActiveTool, DrapePhase, EditorState, HeightMode, OffsetMeasure, RelimitMode, RenameTarget, SelectionPickTool, TrimEnd, UiCommand, UiProjectView},
         themed_icon,
         widgets::{
             context_menu::{ContextMenu, ContextMenuAction, context_menu_popup, context_menu_separator, context_submenu},
@@ -57,6 +57,7 @@ fn object_kind_label(object: &crate::model::Object) -> String {
         crate::model::Object::Polyline { .. } => tr!("common-polyline"),
         crate::model::Object::Circle { .. } => tr!("common-circle"),
         crate::model::Object::Text { .. } => tr!("common-text"),
+        crate::model::Object::PitDesign { .. } => tr!("pit-design-kind"),
     }
 }
 
@@ -1218,117 +1219,6 @@ fn queue_begin_offset_pick(commands: &mut Vec<UiCommand>, editor: &EditorState) 
         project_to_rl,
         collide_with_triangulation: editor.offset_collide_with_triangulation,
     });
-}
-
-/// Draw the Generate Batter-Berms dialog.
-pub(crate) fn draw_batter_berm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, viewport_rect: egui::Rect) {
-    const CONTROL_WIDTH: f32 = 120.0;
-
-    if editor.batter_berm_target_id.is_none() {
-        return;
-    }
-
-    ViewportDockPanel::new("batter_berm_panel", tr!("edit-generate-batter-berms"), viewport_rect)
-        .min_width(310.0)
-        .show(ui.ctx(), |ui| {
-            MenuFieldF64::new(tr!("edit-berm-width"), &mut editor.batter_berm_width, 0.1..=500.0)
-                .width(CONTROL_WIDTH)
-                .speed(0.1)
-                .max_decimals(2)
-                .suffix(tr!("common-m"))
-                .show(ui);
-            MenuFieldF64::new(tr!("edit-batter-angle"), &mut editor.batter_berm_angle, 1.0..=89.0)
-                .help_text(tr!("edit-slope-angle-each-batter-face"))
-                .width(CONTROL_WIDTH)
-                .speed(0.5)
-                .max_decimals(1)
-                .show(ui);
-            MenuFieldF64::new(tr!("edit-bench-height"), &mut editor.batter_berm_bench_height, 0.1..=500.0)
-                .width(CONTROL_WIDTH)
-                .speed(0.1)
-                .max_decimals(2)
-                .suffix(tr!("common-m"))
-                .show(ui);
-            let max_benches = editor.batter_berm_max_benches;
-            if max_benches == 0 {
-                editor.batter_berm_benches = 0;
-            } else {
-                editor.batter_berm_benches = editor.batter_berm_benches.clamp(1, max_benches);
-            }
-            ui.add_enabled_ui(max_benches > 0, |ui| {
-                MenuFieldU32::new(tr!("edit-benches"), &mut editor.batter_berm_benches, if max_benches == 0 { 0..=0 } else { 1..=max_benches })
-                    .help_text(tr!("edit-number-complete-batter-berm-levels"))
-                    .width(CONTROL_WIDTH)
-                    .speed(0.1)
-                    .show(ui);
-            });
-
-            MenuField::new(tr!("edit-type"))
-                .help_text(tr!("edit-type-direction-together-set-offset"))
-                .show(ui, |ui, row_height, _| {
-                    let gap = ui.spacing().item_spacing.x;
-                    let button_width = (CONTROL_WIDTH - gap) * 0.5;
-                    ui.allocate_ui_with_layout(egui::vec2(CONTROL_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        if ui
-                            .add(
-                                MenuButton::new(tr!("edit-pit"))
-                                    .selected(editor.batter_berm_mode == BatterBermMode::Pit)
-                                    .min_width(button_width),
-                            )
-                            .clicked()
-                        {
-                            editor.batter_berm_mode = BatterBermMode::Pit;
-                        }
-                        if ui
-                            .add(
-                                MenuButton::new(tr!("edit-stockpile"))
-                                    .selected(editor.batter_berm_mode == BatterBermMode::Stockpile)
-                                    .min_width(button_width),
-                            )
-                            .clicked()
-                        {
-                            editor.batter_berm_mode = BatterBermMode::Stockpile;
-                        }
-                    })
-                    .response
-                });
-
-            MenuField::new(tr!("edit-direction"))
-                .help_text(tr!("edit-bench-direction-help"))
-                .show(ui, |ui, row_height, _| {
-                    let gap = ui.spacing().item_spacing.x;
-                    let button_width = (CONTROL_WIDTH - gap) * 0.5;
-                    ui.allocate_ui_with_layout(egui::vec2(CONTROL_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        if ui
-                            .add(MenuButton::new(tr!("common-up")).selected(editor.batter_berm_direction_up).min_width(button_width))
-                            .clicked()
-                        {
-                            editor.batter_berm_direction_up = true;
-                        }
-                        if ui
-                            .add(MenuButton::new(tr!("common-down")).selected(!editor.batter_berm_direction_up).min_width(button_width))
-                            .clicked()
-                        {
-                            editor.batter_berm_direction_up = false;
-                        }
-                    })
-                    .response
-                });
-
-            ui.add_space(8.0);
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add(MenuButton::new(tr!("edit-apply")).primary().enabled(!editor.batter_berm_rings_world.is_empty()))
-                    .clicked()
-                {
-                    commands.push(UiCommand::CommitBatterBerm);
-                }
-                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() {
-                    commands.push(UiCommand::CancelBatterBerm);
-                }
-            });
-        });
 }
 
 /// Draw the Relimit Line dialog (intersect, absolute length, or relative length modes).

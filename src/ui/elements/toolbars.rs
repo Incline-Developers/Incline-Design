@@ -69,12 +69,16 @@ struct LeftTool {
 /// what a tool belongs to is its neighbours' business, not a tile's.
 fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, project_active: bool) -> Vec<LeftTool> {
     let tool = |icon: egui::ImageSource<'static>, tooltip: String, tool: ActiveTool| {
-        let layer_ok = !tool.requires_active_layer() || editor.active_layer.is_some();
+        // Pit Design opens what is selected as well as drawing anew.
+        let opens_selection = tool == ActiveTool::PitDesign && editor.selection_counts.pit_designable > 0;
+        let layer_ok = !tool.requires_active_layer() || editor.active_layer.is_some() || opens_selection;
         let blocked_by_section = editor.slice_mode_enabled && tool.section_refuses();
         LeftTool {
             icon: egui::Image::new(icon),
             hint: if !editing_enabled {
                 None
+            } else if !layer_ok && tool == ActiveTool::PitDesign {
+                Some(tr!("pit-design-tool-needs", tool = tooltip.as_str().to_string()))
             } else if !layer_ok {
                 Some(tr!("toolbars-tool-needs-layer", tool = tooltip.as_str().to_string()))
             } else {
@@ -97,11 +101,11 @@ fn left_tools(ui: &egui::Ui, editor: &EditorState, editing_enabled: bool, projec
         tool(themed_icon!(ui, "create_line.svg"), tr!("common-create-line"), ActiveTool::MakeLine),
         tool(themed_icon!(ui, "create_polyline.svg"), tr!("common-create-polyline"), ActiveTool::MakePoly),
         tool(themed_icon!(ui, "create_circle.svg"), tr!("common-create-circle"), ActiveTool::MakeCircle),
+        tool(themed_icon!(ui, "pit_design.svg"), tr!("pit-design-title"), ActiveTool::PitDesign),
         tool(unthemed_icon!("create_text.svg"), tr!("toolbars-create-text"), ActiveTool::MakeText),
         tool(themed_icon!(ui, "move_element.svg"), tr!("common-move-design"), ActiveTool::Move),
         tool(themed_icon!(ui, "offset_element.svg"), tr!("common-offset"), ActiveTool::OffsetElement),
         tool(themed_icon!(ui, "drape_element.svg"), tr!("common-drape-topology"), ActiveTool::DrapeToTopology),
-        tool(unthemed_icon!("auto_bench.svg"), tr!("toolbars-auto-bench"), ActiveTool::BatterBermOffset),
         tool(themed_icon!(ui, "relimit_line.svg"), tr!("common-relimit-line"), ActiveTool::RelimitLine),
         tool(themed_icon!(ui, "create_bezier.svg"), tr!("toolbars-bezier-polyline"), ActiveTool::Bezier),
         tool(themed_icon!(ui, "chamfer_corners.svg"), tr!("toolbars-chamfer-polyline-corners"), ActiveTool::Chamfer),
@@ -551,7 +555,13 @@ pub(crate) fn cursor_mode_button(
     side: f32,
 ) -> egui::Response {
     let selected = editor.cursor_mode == mode;
-    let response = ui.add(ToolbarButton::new(icon, tooltip).id_salt(("cursor_mode", tooltip)).button_side(side).selected(selected));
+    // Pit Design draws level: only the regular cursor while it is up.
+    let held = editor.cursor_modes_held() && mode != CursorMode::Select;
+    let response = ui.add_enabled(
+        !held,
+        ToolbarButton::new(icon, tooltip).id_salt(("cursor_mode", tooltip)).button_side(side).selected(selected),
+    );
+    let response = if held { response.disabled_hint(tr!("pit-design-cursor-held")) } else { response };
 
     if response.clicked() {
         editor.cursor_mode = mode;

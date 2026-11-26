@@ -100,11 +100,15 @@ impl<'a> App<'a> {
         self.invalidate_overlay();
     }
 
+    /// Let go of the corner Chamfer is on, and put Chamfer down if it is up:
+    /// undo calls this whatever tool is up, and must leave any other up.
     pub(crate) fn cancel_chamfer(&mut self) {
         self.editor.chamfer_poly_id = None;
         self.editor.chamfer_corner_index = None;
         self.editor.chamfer_gizmo_drag_start_px = None;
-        self.editor.active_tool = ActiveTool::None;
+        if self.editor.active_tool == ActiveTool::Chamfer {
+            self.editor.active_tool = ActiveTool::None;
+        }
         self.invalidate_overlay();
     }
 }

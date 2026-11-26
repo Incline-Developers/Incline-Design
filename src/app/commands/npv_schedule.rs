@@ -48,16 +48,24 @@ impl<'a> App<'a> {
 
     /// Start a new schedule of `parent` in the schedule editor, hiding the list.
     pub(crate) fn add_npv_schedule(&mut self, parent: u64) {
-        let id = self.editor.optimization.fresh_id();
-        let Some(scenario) = self.editor.optimization.scenarios.iter().find(|scenario| scenario.id == parent) else {
+        let Some(schedule) = self.new_npv_schedule(parent) else {
             return;
         };
+        self.editor.optimization.schedule_draft = Some(NpvScheduleDraft::new(parent, schedule, true));
+        self.editor.optimization.list_open = false;
+    }
+
+    /// A new schedule of scenario `parent` as Add makes one: a fresh id, the
+    /// next free name, and a limit row per method and sold element. Not yet
+    /// in the list. `None` if there is no such scenario.
+    pub(crate) fn new_npv_schedule(&mut self, parent: u64) -> Option<NpvSchedule> {
+        let id = self.editor.optimization.fresh_id();
+        let scenario = self.editor.optimization.scenarios.iter().find(|scenario| scenario.id == parent)?;
         let name = free_name(scenario, id, &tr!("sched-default-name"));
         let mut schedule = NpvSchedule::new(id, name);
         // One row per method and sold element, so the limits start complete.
         schedule.add_all_limits(scenario);
-        self.editor.optimization.schedule_draft = Some(NpvScheduleDraft::new(parent, schedule, true));
-        self.editor.optimization.list_open = false;
+        Some(schedule)
     }
 
     pub(crate) fn edit_npv_schedule(&mut self, parent: u64, id: u64) {

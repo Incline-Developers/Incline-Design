@@ -951,7 +951,7 @@ haul-open-layout = Open the Road Network
 haul-dump-override = Override dump time (s)
 haul-unlimited = Default
 haul-convert-help = Turn the selected design polylines into haul roads. Ends and crossings within the join tolerance become shared nodes; the polylines stay as they are.
-haul-empty = No roads yet. Draw one, or convert or import pit design polylines.
+haul-empty = No roads yet. Draw one, or convert or import bench design polylines.
 haul-connected-help = A block is connected when it can reach a road node within the auto-join distance, climbing or descending no steeper than the truck's maximum grade. Green blocks join the nearest node, blue ones the nodes chosen for them; red ones are out of reach and still scheduled, with a longer straight drive to the nearest node.
 haul-roads-selected =
     { $count ->
@@ -1084,7 +1084,6 @@ app-could-not-restore-browser-project = Could not restore the browser project: {
 app-deleted-browser-project = Deleted browser project
 app-failed-create-window-error = Failed to create window: { $error }
 app-failed-create-window-icon-error = Failed to create window icon: { $error }
-app-failed-detach-top-down-preview = Failed to detach top-down preview: { $error }
 app-failed-initialize-graphics-error = Failed to initialise graphics: { $error }
 app-browser-preferences-load-failed = Failed to load browser preferences: { $error }
 app-failed-load-config-file-error = Failed to load config file: { $error }
@@ -1167,7 +1166,6 @@ cinematic-shadows-method = Cinematic view shadows: { $method }
 
 ## Cmd strings
 
-cmd-batter-berm-created-batter-berm-from-object = Created batter berm from object { $object_id }
 cmd-bezier-replaced-polyline-span-first-last = Replaced polyline span { $first }→{ $last } with { $count } sampled intermediate points
 cmd-bezier-vertices-first-last = Vertices { $first } to { $last }
 cmd-block-model-block-model-loader-disconnected-path = Block model loader disconnected for { $path }
@@ -1216,7 +1214,13 @@ cmd-cuts-ignored-vertical-faces = Ignored { $count } vertical or degenerate refe
 cmd-cuts-site-skipped-constraint-from-x = { $site }: skipped constraint ({ $from_x }, { $from_y }) -> ({ $to_x }, { $to_y }) the triangulator could not split
 cmd-cuts-skipped-degenerate-edges = { $site }: skipped { $skipped } near-degenerate constraint edge(s); the cut boundary may be off by a hairline near them
 cmd-cuts-trimmed-surface = Trimmed surface '{ $surface }' to topography '{ $topology }' ({ $mode })
+cmd-cuts-repaired-topography = The topography folds over itself in plan or has hairline cracks between its faces, so the surface was trimmed against a repaired copy of it: points less than 0.001 apart in plan were joined, edges were split where points of the topography lie on them, and wherever it folds the sheet that keeps more of the surface was used.
 cmd-cuts-trimming-surface-topology = Trimming surface to topography…
+cmd-join-joining-surfaces = Joining surfaces…
+cmd-join-joined-surfaces = Joined { $count } surfaces into '{ $name }' ({ $vertices } vertices, { $faces } faces): they meet along { $seam }.
+cmd-join-joined-surfaces-apart = Joined { $count } surfaces into '{ $name }' ({ $vertices } vertices, { $faces } faces). They do not meet anywhere, so it is in separate parts.
+cmd-join-surfaces-overlap = '{ $first }' and '{ $second }' overlap over { $area } m² in plan, so the joined surface has two layers there. To set a pit or dump into a topography, use Merge Shell into Topography.
+cmd-join-failed = Join Surfaces failed: { $message }
 cmd-drape-draped-intersected-vertices-changed = Draped { $intersected } vertices; { $changed } changed elevation
 cmd-drape-no-intersections = None of the selected design vertices intersect the selected topographies
 cmd-drape-objects-changed-object-s-changed = { $objects } changed object(s) · { $changed } of { $intersected } intersecting vertices moved
@@ -1385,6 +1389,7 @@ cmd-object-edit-unassigned = Unassigned
 cmd-offset-create-offset = Create Offset
 cmd-offset-created-offset-count-object-s = Created offset of { $count } object(s)
 cmd-offset-distance-must-be-positive = Offset distance must be greater than zero
+cmd-offset-skipped-collapsed-polylines = Skipped { $count } closed polyline(s): the offset distance is past where they shrink to nothing
 cmd-offset-skipped-count-circle-s-offset = Skipped { $count } circle(s): the offset distance is larger than the radius
 cmd-omf-could-not-open-project-source = Could not open project { $source_name }: { $error }
 cmd-omf-create-open-project-before-merging = Create or open a project before merging data
@@ -2215,7 +2220,7 @@ truck-rule-ground = Pit ground
 truck-rule-no-classes = Add a truck class first.
 truck-rule-class-missing = A truck class this rule names is gone.
 truck-rule-destination-missing = A destination this rule names is gone.
-truck-stage-no-classes = No truck classes are configured. Trucks do not constrain this schedule.
+truck-stage-no-classes = No truck classes are configured. Nothing can be hauled until one is added.
 truck-rule-no-fleet = This rule's truck classes have no trucks, so nothing can be hauled under it.
 truck-stage-no-rules = No trucking rules are configured, so no truck class is permitted anywhere.
 schedule-calendar-trucks = Trucks
@@ -2581,7 +2586,6 @@ schedule-capture-rehandle = { $rule } permits moving reclaimed material into a s
 schedule-unblasted = Unblasted
 schedule-dig-sequence = Dig sequence
 schedule-leave-blank-use-ground = Leave blank to use the ground-derived name
-common-create-batter-berm = Create Batter Berm
 common-create-bezier-curve = Create Bezier Curve
 common-create-block-model = Create Block Model
 common-create-block-model-ellipsis = Create Block Model...
@@ -2912,11 +2916,7 @@ edit-apply = Apply
 edit-apply-pick-target = Apply and Pick Target
 edit-axis-value = { $axis } value
 edit-azimuth = Azimuth
-edit-batter-angle = Batter angle (°)
 edit-azimuth-help = Bearing the holes are drilled on, in degrees clockwise from grid north.
-edit-bench-height = Bench height
-edit-benches = Benches
-edit-berm-width = Berm width
 edit-bezier-curve = Bezier Curve
 edit-choose-layer = Choose a layer
 edit-measure-help = Choose whether the entered value is distance along the slope, horizontal width, or vertical height.
@@ -2935,7 +2935,6 @@ edit-create-new-layer = Create a new layer
 edit-save-project = Save
 edit-delta-length-m-use = Delta length (m, use + or -)
 edit-dip = Dip
-edit-direction = Direction
 edit-distance = Distance
 edit-distance-along-slope = Distance along slope
 edit-download-free-native-version-our = Download the free native version at our website ↗
@@ -2947,7 +2946,6 @@ edit-end = End
 edit-enter-valid-elevation = Enter a valid elevation.
 edit-exit-slice = Exit section
 edit-finish-polyline = Finish Polyline
-edit-generate-batter-berms = Generate Batter Berms
 edit-height = Height
 edit-height-change = Height change
 edit-height-mode = Height mode
@@ -2970,7 +2968,6 @@ edit-moving-end-endpoint = Moving: End endpoint
 edit-moving-start-endpoint = Moving: Start endpoint
 edit-new-length-m = New length (m)
 edit-new-project = New Project
-edit-number-complete-batter-berm-levels = Number of complete batter-and-berm levels. The maximum is limited to the deepest level that preserves the specified geometry.
 edit-bezier-segments-help = Number of line segments used to approximate the curve between the two selected vertices.
 edit-chamfer-segments-help = Number of straight segments used to approximate the rounded corner. Use 1 for a straight chamfer.
 edit-object = Object
@@ -2999,17 +2996,13 @@ edit-shortest = Shortest
 edit-slice-view = Section View
 edit-slice-3d = 3D view
 edit-slice-3d-help = Draw surfaces in 3D across the section width instead of as the line where they cross the section plane, and allow orbiting. Drillholes, polylines, points and block models show within the section width either way.
-edit-slope-angle-each-batter-face = Measured from horizontal.
 edit-slope-angle-offset-positive-negative = Slope angle of the offset. Positive and negative angles move the copy above or below the source as it moves sideways.
 edit-speed = Speed
 edit-start = Start
-edit-stockpile = Stockpile
 edit-stop-generated-offset-where-its = Stop the generated offset where its path first meets a visible triangulation.
 edit-target-rl = Target RL
 edit-thickness-visible-slice-slab-centred = Section width: the thickness of ground shown, centred on the section line.
 edit-type = Type
-edit-type-direction-together-set-offset = Type and Direction together set the offset side. Pit + Up and Stockpile + Down step outward; Pit + Down and Stockpile + Up step inward.
-edit-bench-direction-help = Up raises each bench by the bench height; Down lowers it. This also flips the offset side - see Type.
 edit-bezier-control-point-1-help = World X, Y and Z coordinates of the first Bezier control point.
 edit-bezier-control-point-2-help = World X, Y and Z coordinates of the second Bezier control point.
 edit-offset-cut = Offset Cut
@@ -3275,7 +3268,6 @@ menu-build-solid-surfaces = Build Solid from Surfaces...
 
 ## Modelling strings
 
-
 ## Object strings
 
 object-edit-appearance = Appearance
@@ -3327,13 +3319,13 @@ omf-skipped-drillhole-data-saved-older = Skipped drillhole data saved in an olde
 
 ## Plot strings
 
-
 ## Point strings
 
 point-cloud-classify = Classify
 point-cloud-classify-vegetation = Classify vegetation
 point-cloud-cloth-resolution = Cloth resolution
 point-cloud-cloth-resolution-about-one-half = A cloth resolution about one and a half times the spacing of the sparsest selected cloud's points, so every particle has returns under it.
+point-cloud-noise-radius-about-spacing = A noise radius about one and a half times the spacing of the sparsest selected cloud's points, so a sparse survey's ground keeps its neighbours and is not marked as noise.
 point-cloud-combine-selected-point-clouds-into = Combine the selected point clouds into one new cloud, so a single triangulation can be built across all of them. Per-point colours are kept; a cloud without them contributes its display colour.
 point-cloud-selected-count = { $count } selected · { $points } points
 point-cloud-delete-selected-clouds-from-project = Delete the selected clouds from the project once the join completes, freeing the memory their duplicate copy would otherwise hold.
@@ -3471,7 +3463,6 @@ spatial-bvh-face-index-out-of-range = BVH face index { $index } out of range for
 state-above = at or above
 state-activate-project = Activate Project
 state-all-open-incline-design-data = All open Incline Design data
-state-apply-generated-rings = Apply generated rings
 state-apply-selection = Apply to selection
 state-rotate-by-azimuth-dip = by azimuth { $azimuth }°, dip { $dip }°
 state-rotate-to-azimuth-dip = to azimuth { $azimuth }°, dip { $dip }°
@@ -3509,12 +3500,10 @@ state-cut-triangulation-polyline = Cut Triangulation by Polyline
 state-cut-triangulation-z = Clip Triangulation by Elevation
 state-dark-mode = Dark Mode
 state-data-ticked-export-checklist = The data ticked in the export checklist
-state-detached = Detached
 state-disabled = Disabled
 state-discard-project-changes = Discard Project Changes
 state-discard-replace-project = Discard and Replace Project
 state-discarding-unsaved-changes = Discarding unsaved changes
-state-docked = Docked
 state-drape-raster = Drape Raster
 state-drill-pattern = Drill Pattern
 state-duplicate-layer = Duplicate Layer
@@ -3555,6 +3544,7 @@ state-major-minor = Major { $major } · minor { $minor }
 state-move-axis-value = Move to Axis Value
 state-move-objects-layer = Move Objects to Layer
 state-name-count-cloud-s = { $name } · { $count } cloud(s)
+state-name-count-surfaces = { $name } · { $count } surfaces
 state-name-count-holes = { $name } · { $count } holes
 state-name-count-object-s = { $name } · { $count } object(s)
 state-name-z-min-z-max = { $name } · { $z_min } to { $z_max }
@@ -3609,7 +3599,6 @@ state-show-console = Show Console
 state-show-project = Show Project
 state-shown = Shown
 state-slice-mode = Section View
-state-slice-preview = Section Preview
 state-south = South
 state-stem-contours = { $stem } Contours
 state-trim-above = Trim above
@@ -3658,7 +3647,6 @@ toolbar-fill-type = Fill type
 
 ## Toolbars strings
 
-toolbars-auto-bench = Auto-Bench
 toolbars-bezier-polyline = Bezier Polyline
 toolbars-chamfer-polyline-corners = Chamfer Polyline Corners
 toolbars-create-text = Create Text
@@ -3726,6 +3714,16 @@ tri-limit-z-range = Limit elevation range
 tri-major = Major
 tri-max-edge-length = Max edge length
 tri-merge = Merge
+tri-join = Join
+tri-join-surfaces = Join Surfaces
+tri-join-surfaces-ellipsis = Join Surfaces...
+tri-join-surfaces-note = Combine surfaces that fit together into one, such as a topography cut to a pit shell and the pit design trimmed to it. Where they meet, their points are joined, so the result is one continuous surface.
+tri-surfaces = Surfaces
+tri-join-sources-help = Tick the surfaces to join. Two or more are needed.
+tri-join-selected-count = { $count } selected
+tri-none-loaded = No surfaces are loaded.
+tri-joined-surface = Joined Surface
+tri-join-unload-help = Unload the surfaces joined once the joined surface is in, to free memory. Undo brings them back.
 tri-method = Method
 tri-minor = Minor
 tri-contour-interval-help = Minor controls ordinary contours. Major controls emphasised contours and must use an interval at least as large as Minor.
@@ -3899,7 +3897,6 @@ viewport-interval-data = Interval data
 viewport-intervals = Intervals
 viewport-m-from-collar-toward-bearing = m from collar, toward { $bearing }°
 viewport-navigation-hint = Middle-drag to pan · Scroll to zoom
-viewport-navigation-hint-detach = Middle-drag to pan · Scroll to zoom · Click to detach
 viewport-n = N
 viewport-no-data-variable = No data for this variable
 viewport-no-density-log-hole = No density log for this hole
@@ -4797,7 +4794,6 @@ err-file-opening-browser-project = Opening browser project…
 err-file-layer-description = layer { $layer }
 
 # src/app/mod.rs
-err-file-section-preview-title = { $app } | Section preview (wheel to zoom, middle-drag to pan, F to fit)
 err-file-browser-window-failed = Could not create the browser window: { $error }
 
 # src/app/jobs.rs
@@ -4824,7 +4820,6 @@ err-file-replace = Could not replace { $path }
 err-file-worker-pool-failed = Could not start the browser worker pool: { $error }
 err-file-event-loop-failed = Could not create the browser event loop: { $error }
 err-file-app-state-failed = Could not create the application state: { $error }
-
 
 # src/model/formats/point_cloud.rs
 err-cloud-unsupported-extension = Unsupported point cloud file type: { $name }
@@ -5075,9 +5070,11 @@ err-tri-z-min-below-z-max = The minimum elevation must be less than the maximum 
 err-tri-no-geometry-in-elevation-range = No triangulation geometry lies within the specified elevation range
 err-tri-trim-surface-and-topography-same = The surface to trim and the topography must be different triangulations
 err-tri-trim-surface-not-found = Surface to trim not found
+err-tri-join-two-surfaces = Choose at least two surfaces to join.
+err-tri-join-surface-not-loaded = '{ $name }' is not loaded. Load it to join it.
+err-tri-join-too-large = The surfaces together have too many points for one surface.
 err-tri-reference-topography-not-found = Reference topography not found
 err-tri-no-surface-relative-topography = No surface geometry lies { $retained } the topography within its XY coverage
-err-tri-topography-overlaps-itself = The reference topography overlaps itself in plan and is not single-valued (triangles { $first } and { $second } overlap by { $area } square units with up to { $z_delta } elevation difference)
 err-tri-name-repaired-surface = Repaired surface
 err-tri-repaired-surface-no-footprint = The repaired surface has no plan footprint left to rebuild
 err-tri-pit-shell-no-faces = The pit shell contains no faces
@@ -5115,6 +5112,9 @@ err-tri-endpoints-end-end = end of edge A and end of edge B
 err-tri-nearest-endpoints-gap = nearest endpoints ({ $label }) are { $gap } apart in plan (elevation differs by { $dz }), likely meant to be the same shared vertex but digitised independently
 err-tri-collinear-overlap-conflicting-elevations = collinear overlap has conflicting elevations near ({ $x }, { $y }); edge A's elevation is { $z_a }, edge B's elevation is { $z_c }
 err-tri-breakline-edges-conflicting-elevations = Selected breakline edges intersect in plan at conflicting elevations and cannot form a single-valued terrain surface (breakline { $path_index } edge { $edge_index } ({ $a } to { $b }) and breakline { $other_path_index } edge { $other_edge_index } ({ $c } to { $d }): { $detail })
+err-tri-breakline-elevation-conflicts = Selected breakline edges cross in plan at different elevations in { $count } places and cannot form a single-valued terrain surface:
+err-tri-breakline-elevation-conflict-item = Breakline { $path_index } edge { $edge_index } ({ $a } to { $b }) and breakline { $other_path_index } edge { $other_edge_index } ({ $c } to { $d }): { $detail }
+err-tri-breakline-elevation-conflicts-more = and { $count } more
 err-tri-no-closed-breakline-boundary = No closed breakline boundary supplied
 err-tri-breakline-too-few-vertices = A selected breakline has too few vertices
 err-tri-breakline-non-finite = A selected breakline contains non-finite coordinates
@@ -5359,7 +5359,6 @@ err-solids-missing-geometry = Missing block geometry at block { $index }
 err-solids-piece-context = In the piece from RL { $base } to { $top }, against the block centred at ({ $x }, { $y }, RL { $z }) of { $size_x } x { $size_y } x { $size_z }
 err-solids-overlap = A block's overlap exceeds its volume across the planning pieces, so the pieces overlap each other
 
-
 # src/model/mod.rs
 err-bm-polyline-min-vertices = { $what } needs at least 2 vertices
 err-bm-polyline-bad-vertex = { $what } contains an invalid vertex
@@ -5574,7 +5573,6 @@ err-gfx-model-too-deep = The machine model has too many nested parts
 err-gfx-model-index-range = The machine model has a face that points past its vertices
 err-gfx-model-empty = The machine model has no faces
 
-
 # src/app/memory.rs and its callers (browser builds)
 err-memory-estimate-overflows = The memory estimate for the { $what } is too large
 err-memory-over-budget = The { $what } needs { $needed } MiB, but only { $remaining } MiB is left of the browser's 3 GiB working memory
@@ -5648,3 +5646,284 @@ water-error-settings = The storm's settings are not all valid numbers.
 water-error-no-surface = Choose a loaded surface to rain on.
 water-error-empty = The surface has no area in plan to rain on.
 water-clock = { $time } / { $end }
+
+## Panels popped out into windows of their own (ui/widgets/pop_out.rs)
+panel-pop-out = Pop out into its own window
+panel-console = Console
+panel-section-preview = Section Preview
+
+## The MCP server (mcp/, app/mcp.rs, Preferences > MCP)
+mcp-title = MCP
+mcp-desktop-only = The MCP server runs in the desktop app.
+mcp-enabled = MCP Server
+mcp-port = Port
+mcp-port-help = The port on this computer the server listens on. Change it if another program already uses it.
+mcp-status = Status
+mcp-status-off = Off
+mcp-status-running = Running
+mcp-status-failed = Could not start ({ $error })
+mcp-address = Address
+mcp-started = MCP server running at { $url }
+mcp-add-objects = Add Objects (MCP)
+mcp-added-objects = An AI tool added { $count } object(s).
+mcp-delete-objects = Delete Objects (MCP)
+mcp-deleted-objects = An AI tool deleted { $count } object(s).
+mcp-changed-objects = { $title }: an AI tool changed { $count } object(s).
+mcp-edit-objects = Edit Objects (MCP)
+mcp-move-objects = Move Objects (MCP)
+mcp-copy-objects = Copy Objects (MCP)
+mcp-replace-object = Replace Object (MCP)
+mcp-show-objects = Show Objects (MCP)
+
+## Pit Design
+
+pit-design-menu = Bench Design
+pit-design-title = Bench Design
+pit-design-kind-pit = Pit
+pit-design-kind-dump = Dump or stockpile
+pit-design-stop-ground = Where it meets the ground
+pit-design-end-ground = Met the ground at RL { $rl }
+pit-design-problem-daylight-dump-up = A dump built up from its toe has no ground to meet: stop it after a number of benches, or at an RL.
+pit-design-benches-section = Walls
+pit-design-bench-height = Bench height
+pit-design-face-angle = Face angle
+pit-design-berm-width = Berm width
+pit-design-wall-radius = Wall radius
+pit-design-wall-radius-help = The tightest the walls may turn. Sharp corners are rounded to it, so the walls leave no narrow noses of rock and no tight corners of pit.
+pit-design-rules-section = Bench rules
+pit-design-height-cycle = Height cycle
+pit-design-height-cycle-hint = e.g. 10, 10, 15
+pit-design-height-cycle-help = Heights the benches take in turn, over and over, counting from the string: 10, 10, 15 makes every third bench 15 m high. Leave it empty for every bench to be the bench height.
+pit-design-catch-every = Catch berm every
+pit-design-catch-every-help = Every this many benches, the berm is the catch berm width instead. A width of 0 leaves no berm there. 0 benches for no catch berms.
+pit-design-catch-width = Catch berm width
+pit-design-zone = Zone { $number }
+pit-design-zone-from = From RL
+pit-design-zone-to = To RL
+pit-design-zone-remove = Remove zone
+pit-design-zone-add = Add zone
+pit-design-zone-add-help = A band of RL whose benches are cut with their own height, face angle and berm width, such as weathered rock near the surface. A bench takes the zone it starts in; where zones overlap, the lower one in the list counts.
+pit-design-slopes-section = Slope rules
+pit-design-inter-ramp = Inter-ramp target
+pit-design-inter-ramp-help = The inter-ramp angle the walls should come to, between passes of the ramp, to check the design against. 0 for none. A sector's own target counts for the walls it holds.
+pit-design-sector = Sector { $number }
+pit-design-sector-bearing = Facing
+pit-design-sector-bearing-help = The bearing the walls face, as their dip direction: the pit's north wall faces south, 180°. Walls facing between two sectors take values between theirs.
+pit-design-sector-remove = Remove sector
+pit-design-sector-add = Add sector
+pit-design-sector-add-help = Cut the walls by the way they face, as a geotechnical design gives slopes by wall orientation. With sectors, they replace the design's face angle and berm width; a zone's values and a region's still count over them.
+pit-design-region = Region { $number }
+pit-design-region-remove = Remove region
+pit-design-region-add = Add region
+pit-design-region-add-help = Cut the walls inside a closed polyline otherwise, such as a fault zone or weaker rock on one side of the pit. A region's values count over everything else, blending in across its edge.
+pit-design-region-picking = Click a closed polyline in the viewport. Its outline bounds the new region.
+pit-design-region-prompt = Click a closed polyline to bound the slope region.
+pit-design-blend = Blend distance
+pit-design-blend-help = How far across a region's edge its values blend into those round it, half inside and half out. 0 for a sharp change.
+pit-design-walls-table = Inter-ramp angles
+pit-design-walls-facing = Facing
+pit-design-walls-designed = Designed
+pit-design-walls-achieved = Achieved
+pit-design-walls-steepest = Steepest
+pit-design-walls-target = Target
+pit-design-walls-too-steep-hint = Steeper on average than the target, or than the benches were cut to make.
+pit-design-walls-too-steep =
+    { $count ->
+        [one] The walls facing one way come out steeper than they should.
+       *[other] The walls facing { $count } ways come out steeper than they should.
+    }
+pit-design-stop-benches = After a number of benches
+pit-design-stop-elevation = At an RL
+pit-design-stop-daylight = Where it daylights
+pit-design-benches = Benches
+pit-design-stop-rl = RL
+pit-design-topography = Topography
+pit-design-topography-help = The ground the design builds to: a pit daylights against it, and a dump built down meets it.
+pit-design-topography-none = None
+pit-design-ramp-section = Ramp
+pit-design-ramp-width = Width
+pit-design-ramp-gradient = Gradient
+pit-design-ramp-gradient-help = Rise over run. It is held along the steeper edge of the road, so round a bend its inside edge is no steeper than this.
+pit-design-climbs = Climbs
+pit-design-climbs-help = Which way round the pit the ramp climbs, seen from above.
+pit-design-clockwise = Clockwise
+pit-design-anticlockwise = Anticlockwise
+pit-design-ramp-drag-hint = Drag along the string to move where the ramp starts. Delete takes the ramp off.
+pit-design-switch-refused = No bench from here up has room to turn back: click to stop asking for it
+pit-design-ramp-drag-prompt = Let go on the string where the ramp should leave it.
+pit-design-ramp-add-hint = Click to add a ramp here, or drag along the string the way the road should go
+pit-design-ramp-add-prompt = Drag along the string the way the road should go, then let go.
+pit-design-turn-widening = Turn widening
+pit-design-turn-widening-help = How much wider than the road the turn is round its middle, on the outside, for the trucks to make it.
+pit-design-turn-grade = Turn grade
+pit-design-turn-grade-help = The grade the road's inside edge climbs at round a switchback, the stretch after it climbing what is left of the bench: usually 2 to 3% flatter than the ramp, so trucks hold their speed on the bend. 0 for a level turn on a pad.
+pit-design-turn-moved = The turn asked at RL { $asked } was made at RL { $made }: there was no room for it sooner.
+pit-design-inside-radius = Inside radius
+pit-design-inside-radius-help = The tightest the inside edge of the road should turn: what a switchback turns round, and what the whole road is checked against.
+pit-design-ramp-extent-section = Ramp extent
+pit-design-ramp-begins = Begins
+pit-design-ramp-begins-help = Where the ramp begins: at the string, or at the bench that starts at an RL the way the design is built.
+pit-design-ramp-begins-string = At the string
+pit-design-ramp-ends = Ends
+pit-design-ramp-ends-help = Where the ramp ends: at the design's last bench, or at the bench that starts at an RL, leaving the benches beyond it without a ramp.
+pit-design-ramp-ends-last = At the last bench
+pit-design-ramp-at-rl = At an RL
+pit-design-ramp-rl = RL
+pit-design-ramp-exit-flat = Exit flat
+pit-design-ramp-exit-flat-help = How far the ramp runs level where it leaves the pit: at its top building up, where its last bench is known (not where the design stops on the ground); at its first bench building down.
+pit-design-ramp-junction-flat = Junction flat
+pit-design-ramp-junction-flat-help = How far each stretch of the ramp runs level where it leaves its bench's berm, so the berm is reached from the road on the flat. A band's flat counts where it is longer.
+pit-design-ramp-band = Band { $number }
+pit-design-ramp-band-flat = Flat
+pit-design-ramp-band-remove = Remove band
+pit-design-ramp-band-add = Add band
+pit-design-ramp-band-add-help = A band of RL whose stretches of road are laid otherwise: narrower, such as a one-lane bottom, or running level at least so far before they climb. A bench takes the band it starts in; where bands overlap, the lower one in the list counts.
+pit-design-ramp-numbered = Ramp { $number }
+pit-design-ramp-blocked = Ramp { $number } has no room on the next bench.
+pit-design-result-section = Design
+pit-design-designing = Designing...
+pit-design-benches-built = Benches
+pit-design-final-rl = Final RL
+pit-design-ramp-length = Ramp length
+pit-design-volume = Volume
+pit-design-ended = Ended
+pit-design-end-complete = Every bench built
+pit-design-end-daylight = Daylit at RL { $rl }
+pit-design-end-out-of-room = Stopped at RL { $rl }: the next bench has no room.
+pit-design-end-ramp-too-long = Stopped at RL { $rl }: the next bench has no room for the ramp to climb it.
+pit-design-end-left-ground = Stopped at RL { $rl }: the design reached the edge of the topography before it daylit.
+pit-design-start-moved = The ramp starts { $distance } m along from where it was picked, where it has room.
+pit-design-uneven-string = The string is not level: its points stray up to { $distance } m from RL { $rl }, where the design starts.
+pit-design-problem-bench-height = The bench height must be above 0.
+pit-design-problem-face-angle = The face angle must be between 0° and 90°.
+pit-design-problem-berm-width = The berm width cannot be below 0.
+pit-design-problem-zone = A zone's From and To RLs must differ.
+pit-design-problem-wall-radius = The wall radius cannot be below 0.
+pit-design-problem-ramp-band = A ramp band's From and To RLs must differ, and the ramp's flats cannot be below 0.
+pit-design-problem-sector = A slope sector needs a bearing, a face angle between 0° and 90°, and a berm width of 0 or more.
+pit-design-problem-region = A slope region needs an outline of at least three points, a face angle between 0° and 90°, and a berm width of 0 or more.
+pit-design-problem-ramp-width = The ramp's width must be above 0.
+pit-design-problem-ramp-gradient = The ramp's gradient must be above 0.
+pit-design-problem-switchback = A switchback needs benches between turns or RLs to turn at, and a turn grade no steeper than the ramp's.
+pit-design-problem-benches = Build at least one bench.
+pit-design-problem-daylight-down = A pit built down from its crest has no ground to daylight against: stop it after a number of benches, or at an RL.
+pit-design-problem-string = The starting string must be a closed polyline round some area.
+pit-design-problem-stop-elevation = The RL to stop at is behind the string: below it when building up, above it when building down.
+pit-design-problem-no-topography = Choose the topography to daylight against.
+pit-design-problem-topography-not-loaded = Load { $name } to daylight against it.
+pit-design-exploded =
+    { $count ->
+        [one] Exploded the bench design into one polyline.
+       *[other] Exploded the bench design into { $count } polylines.
+    }
+pit-design-report-explode = Turns a bench design into polylines.
+pit-design-explode-help = Turn the bench design into polylines: its string and each of its benches' strings, to edit by hand. They are no longer designed: undo puts the design back.
+pit-design-explode = Explode
+pit-design-kind = Bench Design
+pit-design-default-name = { $kind } { $number }
+pit-design-tool-needs = { $tool } - select a bench design or closed polyline, or make a layer to draw on
+pit-design-cursor-held = Bench Design draws its strings level at their RL, so it snaps to nothing while it is up.
+pit-design-gone = That bench design is no longer in the project.
+pit-design-draw-prompt = Click the string to design from, point by point: a pit's floor or crest, or a dump's toe or top.
+pit-design-draw-close = Click the first point, or press Enter, to close the string.
+pit-design-draw-close-minor = Right click finishes too
+pit-design-draw-help = Draw the closed string the design starts from: a pit's floor toe or crest, or a dump's toe or top. Once it closes, the design is made from it on the active layer.
+pit-design-round-corners = Round corners
+pit-design-draw-ground = Ground here
+pit-design-draw-ground-above = { $rl } m ({ $by } m above the RL)
+pit-design-draw-ground-below = { $rl } m ({ $by } m below the RL)
+pit-design-round-corners-help = Round each corner of the string to an arc, as a toe or crest is mined. The arcs are part of the string, and its vertices stay few and editable.
+pit-design-corner-radius = Corner radius
+pit-design-done-help = Finish this pit and put the tool down. Escape does the same.
+pit-design-ramp-none = Click the starting string in the view to add a ramp.
+pit-design-ramp-remove-short = Remove
+pit-design-ramp-remove-help = Take this ramp off the design. Undo puts it back.
+pit-design-done = Done
+pit-design-name = Name
+pit-design-flatter =
+    { $count ->
+        [one] One bench climbs flatter than the gradient: no level stretch would leave it sound.
+       *[other] { $count } benches climb flatter than the gradient: no level stretch would leave them sound.
+    }
+pit-design-bench-table = Bench by bench
+pit-design-table-rl = RL
+pit-design-table-grade = Grade
+pit-design-table-flat = Level
+pit-design-table-width = Width
+pit-design-table-turn = Turn
+pit-design-table-ramp = Ramp
+pit-design-table-face = Face
+pit-design-table-berm = Berm
+pit-design-card-height = Height
+pit-design-table-turned = Switchback
+pit-design-table-flatter-hint = Climbs over { $length } m more than the gradient asks, so it is flatter: no level stretch before it left the bench sound.
+pit-design-table-narrow-hint = Narrower than the { $width } m asked for, where it hands over at a turn of the wall.
+pit-design-checks = Checks
+pit-design-checks-pass = Every check passes: the ramp's grade, width and turns, and the berms and faces, are as asked.
+pit-design-checks-pass-short = Every check passes.
+pit-design-checks-in-view =
+    { $count ->
+        [one] One place falls short, marked in the view
+       *[other] { $count } places fall short, marked in the view
+    }
+pit-design-gizmo-dragging = Let go to set it.
+pit-design-gizmo-fine = Shift for finer steps
+pit-design-check-steep = Ramp too steep
+pit-design-check-flatter = Ramp flatter
+pit-design-check-narrow = Ramp too narrow
+pit-design-check-tight = Ramp turns too tight
+pit-design-check-berm = Berm too narrow
+pit-design-check-face = Face too steep
+pit-design-check-inter-ramp = Walls too steep
+pit-design-flag = { $check }: { $value } where { $asked } was asked, at RL { $rl }.
+pit-design-flag-along = Over { $length } m.
+pit-design-table-steeper-hint = Steeper than the { $grade } % asked for.
+pit-design-measuring = Measuring...
+pit-design-evaluate-missing-model = the block model chosen
+pit-design-evaluation = Evaluation
+pit-design-block-model = Block model
+pit-design-block-model-none = None
+pit-design-block-model-help = The block model the design's ground is measured in, by the project's reserve fields and this model's mapping of them (Planning, Reserves).
+pit-design-evaluation-no-topography = Choose a topography to measure the design against.
+pit-design-evaluation-not-loaded = Load { $name } to measure the design.
+pit-design-evaluation-failed = The design could not be measured: { $reason }
+pit-design-evaluation-volume = Volume
+pit-design-evaluation-covered = In the block model
+pit-design-evaluation-by = By { $field }
+pit-design-evaluation-benches = By bench
+pit-design-evaluation-short = The design stops short of the topography: the ground above its last ring is measured as though its walls stood straight up from there.
+pit-design-evaluate-missing-shell = the shell chosen
+pit-design-shell = Shell
+pit-design-shell-help = An optimisation shell to set the pit against: the ground the design takes beyond it, and the ground inside it the design leaves.
+pit-design-shell-against = Against the shell
+pit-design-shell-failed = The design could not be set against the shell: { $reason }
+pit-design-shell-gained = Beyond the shell
+pit-design-shell-left = Left in the shell
+pit-design-shell-net = Difference
+pit-design-compare = Bench designs compared
+pit-design-compare-stale = Measured before its last change: it is measured again once what it is measured against is loaded.
+pit-design-layer-crest = Crest
+pit-design-layer-toe = Toe
+pit-design-layer-ramp = Ramp
+pit-design-layer-daylight = Daylight
+pit-design-haul-road = { $design } ramp
+pit-design-haul-road-numbered = { $design } ramp { $number }
+pit-design-layer-rehab = Rehabilitated
+pit-design-rehab-bad-settings = A rehabilitation needs a slope between 0° and 90° and contours some height apart.
+pit-design-rehab-no-top = The dump has no section at the top it is reshaped from.
+pit-design-rehab-too-flat = The slope is too flat to hold the dump's volume under that top: raise the top or steepen the slope.
+pit-design-rehab-no-room = The topography leaves the reshaped dump no room to spread.
+pit-design-rehab = Rehabilitate
+pit-design-rehab-help = Reshape the dump, holding its volume, into one even slope down to the topography, its top no higher than asked: the landform it is left as. It is drawn with the dump, and its earthworks are reported.
+pit-design-rehab-slope = Overall slope
+pit-design-rehab-slope-help = The angle the reshaped dump's sides come to, from horizontal.
+pit-design-rehab-limit = Limit the top
+pit-design-rehab-limit-help = Keep the reshaped dump's top no higher than an RL: it spreads wider to hold its volume below.
+pit-design-rehab-top = Top RL
+pit-design-rehab-contour = Contour interval
+pit-design-rehab-contour-help = How far apart in height the reshaped dump's contours are drawn.
+pit-design-rehab-figures = Rehabilitated
+pit-design-rehab-failed = The dump could not be reshaped: { $reason }
+pit-design-rehab-cut = Cut from the dump
+pit-design-rehab-fill = Placed beyond it
+pit-design-rehab-footprint = Footprint

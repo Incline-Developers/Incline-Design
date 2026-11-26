@@ -35,7 +35,9 @@ impl<'a> App<'a> {
             ids,
             |obj: &mut Object| {
                 match obj {
-                    Object::Point { color, .. } | Object::Polyline { color, .. } | Object::Circle { color, .. } | Object::Text { color, .. } => *color = new_color,
+                    Object::Point { color, .. } | Object::Polyline { color, .. } | Object::Circle { color, .. } | Object::Text { color, .. } | Object::PitDesign { color, .. } => {
+                        *color = new_color
+                    }
                 }
             },
             tr!("cmd-property-batch-set-color-count-object", count = ids.len().to_string())

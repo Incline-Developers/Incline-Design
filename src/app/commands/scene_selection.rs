@@ -41,6 +41,18 @@ impl App<'_> {
             .collect()
     }
 
+    /// A design object a command was given by id, wherever it is: on a
+    /// hidden layer too, which the scene leaves out. The window can only pick
+    /// what it shows, but a command given ids (from the MCP server) means
+    /// those objects whether they are shown or not. Planning's own strings,
+    /// which only the scene holds, are found there.
+    pub(crate) fn operand_object(&self, id: ObjectId) -> Option<&Object> {
+        self.workspace
+            .active_document()
+            .and_then(|document| document.get_object(id))
+            .or_else(|| self.scene_document.get_object(id))
+    }
+
     /// The selected closed polyline, when the selection holds exactly one.
     ///
     /// The clip tools take a single boundary rather than a set, so anything
@@ -149,6 +161,9 @@ impl App<'_> {
                         counts.objects += 1;
                         if matches!(object, Object::Polyline { .. }) {
                             counts.polylines += 1;
+                        }
+                        if matches!(object, Object::PitDesign { .. }) || (matches!(object, Object::Polyline { .. }) && object.encloses_area()) {
+                            counts.pit_designable += 1;
                         }
                         if is_triangulation_polyline(object) {
                             counts.triangulation_sources += 1;

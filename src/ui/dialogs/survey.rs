@@ -137,9 +137,15 @@ impl SurveyState {
 
     /// The selected conversion, planned but not yet run.
     pub(crate) fn selected_survey_transform(&self) -> anyhow::Result<SurveyTransform> {
-        anyhow::ensure!(self.source_system != self.target_system, "{}", tr!("survey-same-system"));
-        let from = self.resolve(&self.source_system)?;
-        let to = self.resolve(&self.target_system)?;
+        self.survey_transform(&self.source_system, &self.target_system)
+    }
+
+    /// The conversion from one named system to another, planned but not yet
+    /// run.
+    pub(crate) fn survey_transform(&self, from: &Option<String>, to: &Option<String>) -> anyhow::Result<SurveyTransform> {
+        anyhow::ensure!(from != to, "{}", tr!("survey-same-system"));
+        let from = self.resolve(from)?;
+        let to = self.resolve(to)?;
         Ok(crs::Conversion::plan(&from, &to)?.into_transform())
     }
 
@@ -532,7 +538,11 @@ pub(crate) fn draw_transform_dialog(ui: &mut egui::Ui, editor: &mut EditorState,
                 let enabled = has_project && count > 0 && plan.is_ok();
                 let submitted = menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("survey-transform-button")).primary().enabled(enabled)).clicked() || submitted) && enabled {
-                    commands.push(UiCommand::TransformSurveySelection);
+                    commands.push(UiCommand::TransformSurvey {
+                        entities: editor.selected_handles.iter().copied().collect(),
+                        from: state.source_system.clone(),
+                        to: state.target_system.clone(),
+                    });
                     // The run is the end of the dialog's job: progress, the
                     // result and any failure are reported in the activity
                     // console, so there is nothing left here to read.

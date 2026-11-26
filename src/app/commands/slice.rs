@@ -1,6 +1,6 @@
 //! Vertical slice view: two-click line placement and mode enter/exit.
 
-use glam::DVec2;
+use glam::{DVec2, DVec3};
 
 use crate::{app::App, i18n::tr, ui::state::ActiveTool, userspace_log};
 
@@ -22,10 +22,16 @@ impl<'a> App<'a> {
             self.invalidate_overlay();
             return;
         };
+        self.enter_section(start, point);
+    }
 
+    /// Look at the vertical section along the line from `start` to `point`,
+    /// as the second click of the section tool does. Returns false when the
+    /// two are the same point in plan, which gives no line.
+    pub(crate) fn enter_section(&mut self, start: DVec3, point: DVec3) -> bool {
         let delta = (point - start).truncate();
         if delta.length_squared() <= 1.0e-12 {
-            return;
+            return false;
         }
         let direction: DVec2 = delta.normalize();
         let center = (start + point) * 0.5;
@@ -34,8 +40,6 @@ impl<'a> App<'a> {
         self.editor.slice_pending_start = None;
         self.editor.active_tool = ActiveTool::None;
         self.editor.slice_preview_navigation.reset();
-        self.slice_preview_cursor_px = None;
-        self.slice_preview_middle_down = false;
         self.set_fly_mode_enabled(false);
         if let Some(graphics) = self.graphics.as_mut() {
             graphics.set_fly_mode_enabled(false);
@@ -65,6 +69,7 @@ impl<'a> App<'a> {
                 length = (half_length * 2.0).to_string()
             )
         );
+        true
     }
 
     /// Toggle the vertical slice viewing mode. Enabling without a drawn line
@@ -87,13 +92,10 @@ impl<'a> App<'a> {
         self.editor.slice_mode_enabled = false;
         self.editor.slice_preview_detached = false;
         self.editor.slice_preview_navigation.reset();
-        self.slice_preview_cursor_px = None;
-        self.slice_preview_middle_down = false;
         self.editor.selection_box_start_px = None;
         self.editor.selection_box_current_px = None;
         self.pending_selection_click = None;
         if let Some(graphics) = self.graphics.as_mut() {
-            graphics.close_slice_preview();
             graphics.exit_slice_mode();
         }
         self.end_right_orbit();

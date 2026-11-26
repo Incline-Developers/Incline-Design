@@ -168,9 +168,11 @@ impl App<'_> {
         Ok(())
     }
 
-    pub(crate) fn transform_survey_selection(&mut self) -> Result<()> {
-        let transform = self.editor.survey.selected_survey_transform()?;
-        let target_system = self.editor.survey.resolve(&self.editor.survey.target_system)?.to_stored();
+    /// Move `entities` from one coordinate system to another, in the
+    /// background.
+    pub(crate) fn transform_survey(&mut self, entities: &[SceneEntityId], from: &Option<String>, to: &Option<String>) -> Result<()> {
+        let transform = self.editor.survey.survey_transform(from, to)?;
+        let target_system = self.editor.survey.resolve(to)?.to_stored();
         let project = self.workspace.active_project().ok_or_else(|| anyhow!("{}", tr!("survey-wrong-project")))?;
         let runtime_id = project.runtime_id;
         let mut keys = vec![JobKey::Project {
@@ -180,7 +182,7 @@ impl App<'_> {
         let mut objects = Vec::new();
         let mut layers = HashMap::new();
         let mut items = Vec::new();
-        for handle in &self.editor.selected_handles {
+        for handle in entities {
             match *handle {
                 SceneEntityId::HaulRoad(_) | SceneEntityId::HaulNode(_) => anyhow::bail!("{}", tr!("haul-survey-selection")),
                 SceneEntityId::Object(id) => {

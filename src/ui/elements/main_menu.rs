@@ -43,7 +43,7 @@ const LOGO_SIZE: f32 = 18.0;
 const LOGO_MARGIN: f32 = 6.0;
 /// Space between the run of menus and tabs and the window's buttons, at
 /// either end of the bar.
-const WINDOW_BUTTONS_GAP: f32 = 8.0;
+pub(crate) const WINDOW_BUTTONS_GAP: f32 = 8.0;
 /// Space between the last menu and the workspace tabs, on top of the bar's
 /// item spacing, so the two runs read as two rather than one.
 #[cfg(not(target_os = "macos"))]
@@ -52,7 +52,7 @@ const MENUS_TABS_GAP: f32 = 2.0;
 /// menus and the workspace tabs' names. Centred on the
 /// row they ride high, the bar's top padding being only the window's edge.
 /// See [`lowered`].
-const LABEL_DROP: f32 = 2.0;
+pub(crate) const LABEL_DROP: f32 = 2.0;
 /// Space either side of a workspace tab's label.
 const TAB_PADDING: f32 = 10.0;
 /// Vertical space a workspace tab claims in the bar.
@@ -103,12 +103,8 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
     // Not a region: the bar spans the window and carries the gap's own colour,
     // so it reads as the backdrop the workspace is laid on rather than as a
     // panel of its own. See `chrome::window_bar_frame`.
-    let frame = crate::ui::chrome::window_bar_frame(ui);
+    let frame = title_bar_frame(ui);
     let mut tabs = None;
-    let frame = frame.inner_margin(egui::Margin {
-        top: frame.inner_margin.top + TOP_PADDING,
-        ..frame.inner_margin
-    });
     let rect = egui::Panel::top("main_menu")
         .show_separator_line(false)
         .frame(frame)
@@ -164,6 +160,17 @@ pub(crate) fn draw_main_menu(ui: &mut egui::Ui, editor: &mut EditorState, projec
         .response
         .rect;
     (rect, tabs)
+}
+
+/// The frame of a bar that is its window's title bar too: the window bar's,
+/// with room above it so what is on it is not pinned to the window's edge.
+/// A popped-out panel's window has one as well (`elements::panel_window`).
+pub(crate) fn title_bar_frame(ui: &egui::Ui) -> egui::Frame {
+    let frame = crate::ui::chrome::window_bar_frame(ui);
+    frame.inner_margin(egui::Margin {
+        top: frame.inner_margin.top + TOP_PADDING,
+        ..frame.inner_margin
+    })
 }
 
 /// Lay `add_contents` out along the bar [`LABEL_DROP`] lower than the row
@@ -233,7 +240,7 @@ fn draw_workspace_tabs(ui: &mut egui::Ui, editor: &mut EditorState, commands: &m
 /// view's own first step rather than a drawing tool, so it survives too. The
 /// cursor mode is left as the user set it: it does nothing without a drawing
 /// tool to use it, and it is theirs again the moment production is back.
-fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, workspace: Workspace) {
+pub(crate) fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, workspace: Workspace) {
     if editor.active_workspace == workspace {
         return;
     }
@@ -391,7 +398,7 @@ fn draw_file_menu(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProje
 fn draw_view_menu(ui: &mut egui::Ui, editor: &EditorState, commands: &mut Vec<UiCommand>) {
     let view_menu = tr!("menu-view");
     MenuBarMenu::new(&view_menu).show(ui, |ui| {
-        for toggle in [ViewToggle::Console, ViewToggle::DarkMode] {
+        for toggle in [ViewToggle::DarkMode, ViewToggle::Console] {
             if ContextMenuAction::new(toggle.label()).checked(toggle.get(editor)).show(ui).clicked() {
                 commands.push(UiCommand::ToggleViewOption(toggle));
                 ui.close();
@@ -449,6 +456,7 @@ pub(crate) enum MenuRow {
     TrimTopology,
     CutTopologyByPitShell,
     MergeShellIntoTopology,
+    JoinSurfaces,
     BuildSolidFromSurfaces,
     GenerateContours,
     Simplify,
@@ -530,7 +538,12 @@ const PRODUCTION_MENUS: &[WorkspaceMenu] = &[
         title: MenuTitle::Triangulation,
         groups: &[
             rows(&[MenuRow::ClipSurfaceByPolyline, MenuRow::SliceSurfaceByZ, MenuRow::TrimTopology]),
-            rows(&[MenuRow::CutTopologyByPitShell, MenuRow::MergeShellIntoTopology, MenuRow::BuildSolidFromSurfaces]),
+            rows(&[
+                MenuRow::CutTopologyByPitShell,
+                MenuRow::MergeShellIntoTopology,
+                MenuRow::JoinSurfaces,
+                MenuRow::BuildSolidFromSurfaces,
+            ]),
             rows(&[MenuRow::Simplify]),
             rows(&[MenuRow::GenerateContours]),
             rows(&[MenuRow::SimulateWater]),
@@ -628,6 +641,7 @@ impl MenuRow {
             Self::TrimTopology => tr!("common-trim-topology"),
             Self::CutTopologyByPitShell => tr!("common-cut-topology-pit-shell"),
             Self::MergeShellIntoTopology => tr!("common-merge-shell-into-topology-ellipsis"),
+            Self::JoinSurfaces => tr!("tri-join-surfaces-ellipsis"),
             Self::BuildSolidFromSurfaces => tr!("menu-build-solid-surfaces"),
             Self::GenerateContours => tr!("common-generate-contour-lines"),
             Self::Simplify => tr!("simplify-menu"),
@@ -657,6 +671,7 @@ impl MenuRow {
             Self::TrimTopology => UiCommand::OpenCutTriangulationBySurface,
             Self::CutTopologyByPitShell => UiCommand::OpenCutTopologyByPitShell,
             Self::MergeShellIntoTopology => UiCommand::OpenIncludeSolidInTopology,
+            Self::JoinSurfaces => UiCommand::OpenJoinSurfaces,
             Self::BuildSolidFromSurfaces => UiCommand::OpenBuildSolidFromSurfaces,
             Self::GenerateContours => UiCommand::OpenContourTriangulation,
             Self::Simplify => UiCommand::OpenSimplifyTriangulation,
@@ -686,9 +701,13 @@ impl MenuRow {
             // has nothing to cross.
             Self::InsertAtIntersection | Self::InsertAtElevation | Self::SetAxis(_) | Self::CreateTriangulation | Self::ReferencePoints | Self::ReferenceSurface => true,
             // The tools taking two surfaces pick both in their dialog.
-            Self::TrimTopology | Self::CutTopologyByPitShell | Self::MergeShellIntoTopology | Self::BuildSolidFromSurfaces | Self::PitOptimization | Self::SurveyDefinitions => {
-                true
-            }
+            Self::TrimTopology
+            | Self::CutTopologyByPitShell
+            | Self::MergeShellIntoTopology
+            | Self::JoinSurfaces
+            | Self::BuildSolidFromSurfaces
+            | Self::PitOptimization
+            | Self::SurveyDefinitions => true,
             Self::UndrapeAllRasters => project.raster_textures.iter().any(|raster| raster.is_draped),
             // These work on one named item, which their dialog lists: the
             // selection only saves choosing it there.
@@ -720,6 +739,7 @@ impl MenuRow {
             Self::TrimTopology => "ws-menubar-triangulation-trim-topology",
             Self::CutTopologyByPitShell => "ws-menubar-triangulation-cut-by-pit-shell",
             Self::MergeShellIntoTopology => "ws-menubar-triangulation-merge-shell",
+            Self::JoinSurfaces => "ws-menubar-triangulation-join-surfaces",
             Self::BuildSolidFromSurfaces => "ws-menubar-triangulation-build-solid",
             Self::GenerateContours => "ws-menubar-triangulation-contours",
             Self::Simplify => "ws-menubar-triangulation-simplify",

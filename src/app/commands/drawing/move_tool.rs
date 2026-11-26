@@ -618,7 +618,7 @@ fn translate_move_target(object: &mut Object, vertex_target: Option<(ObjectId, O
         return;
     }
     match (object, point) {
-        (Object::Polyline { verts, .. }, ObjectPoint::Vertex(vertex_index)) => {
+        (Object::Polyline { verts, .. } | Object::PitDesign { verts, .. }, ObjectPoint::Vertex(vertex_index)) => {
             if let Some(vertex) = verts.get_mut(vertex_index) {
                 vertex.pos += delta;
             }

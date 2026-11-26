@@ -710,7 +710,7 @@ fn draw_display_switches(ui: &mut egui::Ui, editor: &mut EditorState, commands: 
     }
     let points = ui.add(
         ToolbarButton::new(
-            egui::Image::new(unthemed_icon!("toggle_points.svg")),
+            egui::Image::new(themed_icon!(ui, "toggle_points.svg")),
             if editor.show_points {
                 tr!("viewport-bar-hide-points")
             } else {

@@ -259,6 +259,12 @@ fn refresh_caches(dialog: &mut ObjectEditDialog) {
             (polyline_length(verts, *closed), polyline_area_xy(verts, *closed), rows)
         }
         Object::Circle { radius, .. } => (std::f64::consts::TAU * radius, Some(std::f64::consts::PI * radius * radius), Vec::new()),
+        Object::PitDesign { verts, .. } => {
+            let rows = (0..verts.len())
+                .filter(|&edge| verts[edge].bulge.is_finite() && verts[edge].bulge.abs() > f64::EPSILON)
+                .collect();
+            (polyline_length(verts, true), polyline_area_xy(verts, true), rows)
+        }
         Object::Point { .. } | Object::Text { .. } => (0.0, None, Vec::new()),
     };
     // A pinned segment (see `sticky_arc`) is dropped here once row edits put it out of range.
@@ -271,6 +277,7 @@ fn refresh_caches(dialog: &mut ObjectEditDialog) {
                     verts.len().saturating_sub(1)
                 }
             }
+            Object::PitDesign { verts, .. } => verts.len(),
             Object::Point { .. } | Object::Text { .. } | Object::Circle { .. } => 0,
         };
         if segment < segment_count {
@@ -367,6 +374,11 @@ fn draw_properties_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
             .show(ui);
             MenuFieldF32::new(tr!("common-line-weight"), line_weight, 0.1..=20.0).speed(0.1).max_decimals(2).show(ui);
         }
+        // A pit design is always closed and never filled: its benches draw
+        // inside it. Pit Design edits the rest.
+        Object::PitDesign { line_weight, .. } => {
+            MenuFieldF32::new(tr!("common-line-weight"), line_weight, 0.1..=20.0).speed(0.1).max_decimals(2).show(ui);
+        }
         // A circle is always closed, so it offers fill and line weight but
         // no "Closed" toggle - its centre and radius live on the Circle tab.
         Object::Circle { fill, line_weight, .. } => {
@@ -413,7 +425,11 @@ fn draw_properties_tab(ui: &mut egui::Ui, dialog: &mut ObjectEditDialog) {
 
 fn set_object_color(object: &mut Object, color: ObjectColor) {
     match object {
-        Object::Point { color: slot, .. } | Object::Polyline { color: slot, .. } | Object::Circle { color: slot, .. } | Object::Text { color: slot, .. } => *slot = color,
+        Object::Point { color: slot, .. }
+        | Object::Polyline { color: slot, .. }
+        | Object::Circle { color: slot, .. }
+        | Object::Text { color: slot, .. }
+        | Object::PitDesign { color: slot, .. } => *slot = color,
     }
 }
 
@@ -621,7 +637,7 @@ fn commit_cell(dialog: &mut ObjectEditDialog, row: usize, column: VertexColumn, 
 /// How many rows the vertex sheet shows.
 fn vertex_row_count(object: &Object) -> usize {
     match object {
-        Object::Polyline { verts, .. } => verts.len(),
+        Object::Polyline { verts, .. } | Object::PitDesign { verts, .. } => verts.len(),
         // One row, holding the centre: a circle has no vertices to sheet.
         Object::Point { .. } | Object::Text { .. } | Object::Circle { .. } => 1,
     }
@@ -636,6 +652,7 @@ fn vertex_row(object: &Object, row: usize) -> Option<(glam::DVec3, Option<f64>)>
             let starts_a_segment = *closed || row + 1 < verts.len();
             (vertex.pos, starts_a_segment.then_some(vertex.bulge))
         }),
+        Object::PitDesign { verts, .. } => verts.get(row).map(|vertex| (vertex.pos, Some(vertex.bulge))),
         Object::Point { pos, .. } | Object::Text { pos, .. } => (row == 0).then_some((*pos, None)),
         Object::Circle { center, .. } => (row == 0).then_some((*center, None)),
     }
@@ -663,6 +680,10 @@ fn set_vertex_component(object: &mut Object, row: usize, column: VertexColumn, v
                 None => return false,
             }
         }
+        Object::PitDesign { verts, .. } => match verts.get_mut(row) {
+            Some(vertex) => (&mut vertex.pos, Some(&mut vertex.bulge)),
+            None => return false,
+        },
         Object::Point { pos, .. } | Object::Text { pos, .. } => {
             if row != 0 {
                 return false;

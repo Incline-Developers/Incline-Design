@@ -34,6 +34,36 @@ use std::sync::{
 use std::sync::{Mutex, OnceLock};
 
 use super::App;
+
+/// How many finished jobs' outcomes are kept.
+#[cfg(not(target_arch = "wasm32"))]
+const JOB_OUTCOMES_KEPT: usize = 32;
+
+/// Something a job's apply step added to the project.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MadeItem {
+    Item(crate::model::ItemRef),
+    Layer(crate::model::LayerId),
+}
+
+/// How a reported job went, for the MCP server to tell the AI without it
+/// piecing it together from the tasks, the activity log and the project.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+pub(crate) struct JobOutcome {
+    pub(crate) ticket: crate::app::BackgroundTaskTicket,
+    /// Its task label, without the trailing ellipsis.
+    pub(crate) label: String,
+    /// Why it failed, if it did: its own error, or why its result was
+    /// thrown away. `None` when it did its work, or was cancelled.
+    pub(crate) error: Option<String>,
+    /// What it added, in the order the project lists them.
+    pub(crate) made: Vec<MadeItem>,
+    /// What it logged as it landed, when it did its work: what it made and
+    /// anything to know about it.
+    pub(crate) log: Vec<String>,
+}
 use crate::{
     i18n::tr,
     model::{progress::Progress, triangulation::TriangulationId},
@@ -78,6 +108,12 @@ pub(crate) enum JobKey {
     /// A run of the schedule with this id.
     NpvScheduleRun(u64),
     DrillHole(crate::model::drill_hole::DrillHoleId),
+    /// Work on a snapshot of the project's objects, wanted as long as the
+    /// project is open: its apply step checks the objects it read itself,
+    /// so a change elsewhere in the project does not throw it away.
+    ProjectOpen {
+        runtime_id: u32,
+    },
     /// The Solids Setup page's inspection mesh. Keyed by the solid, so
     /// selecting another one - or changing this one's surfaces - cancels the
     /// build already in flight for it.
@@ -144,6 +180,13 @@ pub(crate) enum JobKey {
     DigBlockCount {
         key: u64,
     },
+    /// Pit Design's preview, built from its settings; each change of them
+    /// starts another, which cancels the one before.
+    PitDesignPreview(u64),
+    /// A pit design object's benches worked out again.
+    PitDesignRefresh(crate::model::ObjectId),
+    /// A pit design object measured again.
+    PitDesignEvaluation(crate::model::ObjectId),
     /// A job not tied to any tracked source (always applied).
     #[allow(dead_code)]
     Anonymous,
@@ -307,6 +350,7 @@ impl<'a> App<'a> {
                 .is_some_and(|pending| pending.runtime == runtime && pending.serial == serial),
             JobKey::Geophysics { dataset, generation } => self.well_logs.generation(dataset) == Some(generation),
             JobKey::DrillHoleLoad { runtime_id, .. } => self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id),
+            JobKey::ProjectOpen { runtime_id } => self.workspace.projects.iter().any(|project| project.runtime_id == runtime_id),
             JobKey::Raster(id) => self.raster_textures.iter().any(|item| item.id == id),
             // Its result is a finished video, wanted whatever moved.
             JobKey::VideoExport => true,
@@ -314,6 +358,7 @@ impl<'a> App<'a> {
             // Held under its key, which a reader checks against the ground
             // and lines it is counting.
             JobKey::DigBlockCount { .. } => true,
+            JobKey::PitDesignPreview(_) | JobKey::PitDesignRefresh(_) | JobKey::PitDesignEvaluation(_) => true,
             JobKey::Project { runtime_id, document_revision } => self
                 .workspace
                 .projects
@@ -438,8 +483,17 @@ impl<'a> App<'a> {
             let mut poll_once = || match rx.try_recv() {
                 Ok(result) => {
                     if !app.job_dependencies_are_current(&poll_keys) {
-                        crate::userspace_log!("{}", tr!("jobs-discarded-stale-result", poll_label = poll_label.clone().to_string()));
+                        let message = tr!("jobs-discarded-stale-result", poll_label = poll_label.clone().to_string());
+                        crate::userspace_log!("{message}");
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            app.settled_job_error = Some(message);
+                        }
                     } else if let Some(apply) = apply.take() {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            app.settled_job_error = result.as_ref().err().filter(|error| !error.is::<Cancelled>()).map(|error| format!("{error:#}"));
+                        }
                         apply(app, result);
                     }
                     true
@@ -450,7 +504,12 @@ impl<'a> App<'a> {
                 // must be visible rather than quietly treated as done.
                 Err(mpsc::TryRecvError::Disconnected) => {
                     if !poll_cancel.is_cancelled() {
-                        crate::userspace_error!("{}", tr!("jobs-background-task-poll-label-ended", poll_label = poll_label.clone().to_string()));
+                        let message = tr!("jobs-background-task-poll-label-ended", poll_label = poll_label.clone().to_string());
+                        crate::userspace_error!("{message}");
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            app.settled_job_error = Some(message);
+                        }
                     }
                     true
                 }
@@ -517,7 +576,11 @@ impl<'a> App<'a> {
             };
             let mut job = self.pending_jobs.remove(index);
             self.applied_job_needs_gpu = false;
-            if (job.poll)(self) {
+            #[cfg(not(target_arch = "wasm32"))]
+            let settled = self.poll_keeping_outcome(job.ticket, &mut *job.poll);
+            #[cfg(target_arch = "wasm32")]
+            let settled = (job.poll)(self);
+            if settled {
                 residency_settled |= job
                     .keys
                     .iter()
@@ -544,6 +607,54 @@ impl<'a> App<'a> {
         }
         // The status bar is driven from the ticket registry (see
         // `App::refresh_status_message`), which each job joined when it began.
+    }
+
+    /// Every item and design layer in the project, to tell what a job's
+    /// apply step added.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn item_inventory(&self) -> Vec<MadeItem> {
+        use crate::model::ItemRef;
+        let mut items: Vec<MadeItem> = self.triangulations.iter().map(|item| MadeItem::Item(ItemRef::Triangulation(item.id))).collect();
+        items.extend(self.block_models.iter().map(|item| MadeItem::Item(ItemRef::BlockModel(item.id))));
+        items.extend(self.drill_holes.iter().map(|item| MadeItem::Item(ItemRef::DrillHole(item.id))));
+        items.extend(self.point_clouds.iter().map(|item| MadeItem::Item(ItemRef::PointCloud(item.id))));
+        items.extend(self.raster_textures.iter().map(|item| MadeItem::Item(ItemRef::Raster(item.id))));
+        if let Some(document) = self.workspace.active_document() {
+            items.extend(document.layers().iter().map(|layer| MadeItem::Layer(layer.id)));
+        }
+        items
+    }
+
+    /// Poll a job, and once it settles, keep how it went for the MCP server:
+    /// what it added to the project, what it logged, and why it failed if
+    /// it did. Whether it settled.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_keeping_outcome(&mut self, ticket: crate::app::BackgroundTaskTicket, poll: &mut (dyn FnMut(&mut App<'a>) -> bool + 'a)) -> bool {
+        self.settled_job_error = None;
+        let items_before = self.item_inventory();
+        let (settled, log) = crate::logging::capturing(|| poll(self));
+        if settled {
+            let error = self.settled_job_error.take();
+            self.record_job_outcome(ticket, &items_before, error, log);
+        }
+        settled
+    }
+
+    /// Keep how a reported job went: what it added beyond `before`, and why
+    /// it failed if it did. A quiet job is not kept: nothing asked for it.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn record_job_outcome(&mut self, ticket: crate::app::BackgroundTaskTicket, before: &[MadeItem], error: Option<String>, log: Vec<String>) {
+        let Some(task) = self.background_tasks.reported.iter().find(|task| task.ticket == ticket) else {
+            return;
+        };
+        let label = task.label.trim_end_matches(['.', '…', ' ']).to_owned();
+        let made = self.item_inventory().into_iter().filter(|item| !before.contains(item)).collect();
+        // A failure is said by its error; what it logged then only says it again.
+        let log = if error.is_some() { Vec::new() } else { log };
+        self.job_outcomes.push_back(JobOutcome { ticket, label, error, made, log });
+        while self.job_outcomes.len() > JOB_OUTCOMES_KEPT {
+            self.job_outcomes.pop_front();
+        }
     }
 
     /// Cancel in-flight jobs where any dependency key matches `pred`: their
