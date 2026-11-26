@@ -5049,7 +5049,6 @@ pit-design-climbs = Sale
 pit-design-climbs-help = In quale verso la rampa sale intorno alla fossa, vista dall'alto.
 pit-design-clockwise = In senso orario
 pit-design-anticlockwise = In senso antiorario
-}
 pit-design-ramp-drag-hint = Trascina lungo la linea per spostare l'inizio della rampa. Canc toglie la rampa.
 pit-design-switch-refused = Nessuna berma da qui in poi ha spazio per il tornante: fai clic per non chiederlo più
 pit-design-ramp-drag-prompt = Rilascia sulla linea dove la rampa deve lasciarla.

@@ -5007,7 +5007,6 @@ pit-design-climbs = 上升方向
 pit-design-climbs-help = 从上方看,坡道绕采坑上升的方向。
 pit-design-clockwise = 顺时针
 pit-design-anticlockwise = 逆时针
-}
 pit-design-ramp-drag-hint = 沿线条拖动以移动坡道起点。按 Delete 移除坡道。
 pit-design-switch-refused = 从这里起没有台阶有空间折返：点击取消此要求
 pit-design-ramp-drag-prompt = 在坡道应离开的线条位置松开。

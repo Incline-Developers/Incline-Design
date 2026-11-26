@@ -5748,7 +5748,6 @@ pit-design-climbs = Climbs
 pit-design-climbs-help = Which way round the pit the ramp climbs, seen from above.
 pit-design-clockwise = Clockwise
 pit-design-anticlockwise = Anticlockwise
-}
 pit-design-ramp-drag-hint = Drag along the string to move where the ramp starts. Delete takes the ramp off.
 pit-design-switch-refused = No bench from here up has room to turn back: click to stop asking for it
 pit-design-ramp-drag-prompt = Let go on the string where the ramp should leave it.

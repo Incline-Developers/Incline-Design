@@ -5048,7 +5048,6 @@ pit-design-climbs = Steigt
 pit-design-climbs-help = In welcher Richtung die Rampe um die Grube ansteigt, von oben gesehen.
 pit-design-clockwise = Im Uhrzeigersinn
 pit-design-anticlockwise = Gegen den Uhrzeigersinn
-}
 pit-design-ramp-drag-hint = Entlang der Linie ziehen, um den Rampenbeginn zu verschieben. Entf entfernt die Rampe.
 pit-design-switch-refused = Keine Berme von hier an hat Platz zum Wenden: klicken, um es nicht mehr anzufordern
 pit-design-ramp-drag-prompt = Lassen Sie auf der Linie dort los, wo die Rampe sie verlassen soll.

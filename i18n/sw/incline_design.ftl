@@ -5039,7 +5039,6 @@ pit-design-climbs = Hupanda
 pit-design-climbs-help = Upande ambao barabara ya mteremko hupanda kuzunguka shimo, ikitazamwa kutoka juu.
 pit-design-clockwise = Kwa mwelekeo wa saa
 pit-design-anticlockwise = Kinyume cha mwelekeo wa saa
-}
 pit-design-ramp-drag-hint = Buruta kando ya mstari ili kuhamisha mwanzo wa barabara. Delete huiondoa barabara.
 pit-design-switch-refused = Hakuna benchi kuanzia hapa yenye nafasi ya kugeuka: bofya kuacha kuiomba
 pit-design-ramp-drag-prompt = Achilia kwenye mstari mahali barabara inapopaswa kuuacha.

@@ -5008,7 +5008,6 @@ pit-design-climbs = Monte
 pit-design-climbs-help = Dans quel sens la rampe monte autour de la fosse, vue de dessus.
 pit-design-clockwise = Sens horaire
 pit-design-anticlockwise = Sens antihoraire
-}
 pit-design-ramp-drag-hint = Faites glisser le long de la ligne pour déplacer le départ de la rampe. Suppr retire la rampe.
 pit-design-switch-refused = Aucun gradin à partir d'ici n'a la place de faire demi-tour : cliquez pour ne plus le demander
 pit-design-ramp-drag-prompt = Relâchez sur la ligne là où la rampe doit la quitter.

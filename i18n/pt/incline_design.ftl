@@ -5005,7 +5005,6 @@ pit-design-climbs = Sobe
 pit-design-climbs-help = Em que sentido a rampa sobe à volta da cava, vista de cima.
 pit-design-clockwise = No sentido horário
 pit-design-anticlockwise = No sentido anti-horário
-}
 pit-design-ramp-drag-hint = Arraste ao longo da linha para mover onde a rampa começa. Delete retira a rampa.
 pit-design-switch-refused = Nenhuma berma daqui em diante tem espaço para retornar: clique para deixar de pedir
 pit-design-ramp-drag-prompt = Solte sobre a linha onde a rampa deve deixá-la.

@@ -5388,7 +5388,6 @@ pit-design-climbs = Подъём
 pit-design-climbs-help = В каком направлении съезд поднимается вокруг карьера, если смотреть сверху.
 pit-design-clockwise = По часовой стрелке
 pit-design-anticlockwise = Против часовой стрелки
-}
 pit-design-ramp-drag-hint = Перетащите вдоль линии, чтобы перенести начало съезда. Delete убирает съезд.
 pit-design-switch-refused = Ни на одном уступе отсюда нет места для разворота: щёлкните, чтобы отменить запрос
 pit-design-ramp-drag-prompt = Отпустите на линии там, где съезд должен от неё отходить.

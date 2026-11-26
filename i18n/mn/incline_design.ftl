@@ -5058,7 +5058,6 @@ pit-design-climbs = Өгсөх чиглэл
 pit-design-climbs-help = Дээрээс харахад налуу зам уурхайг тойрон аль чиглэлд өгсөх.
 pit-design-clockwise = Цагийн зүүний дагуу
 pit-design-anticlockwise = Цагийн зүүний эсрэг
-}
 pit-design-ramp-drag-hint = Налуу замын эхлэлийг зөөхийн тулд шугамын дагуу чирнэ үү. Delete налуу замыг хасна.
 pit-design-switch-refused = Эндээс цааш аль ч шатанд эргэх зай алга: хүсэлтээ цуцлахын тулд товшино уу
 pit-design-ramp-drag-prompt = Налуу зам шугамаас гарах ёстой газарт суллана уу.

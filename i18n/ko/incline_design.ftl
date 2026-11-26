@@ -5041,7 +5041,6 @@ pit-design-climbs = 오르는 방향
 pit-design-climbs-help = 위에서 볼 때 램프가 피트를 따라 오르는 방향입니다.
 pit-design-clockwise = 시계 방향
 pit-design-anticlockwise = 반시계 방향
-}
 pit-design-ramp-drag-hint = 선을 따라 끌어서 램프 시작 위치 이동. Delete 키로 램프를 제거합니다.
 pit-design-switch-refused = 여기부터 어느 벤치에도 되돌아 돌 공간이 없습니다. 클릭하면 요청을 취소합니다
 pit-design-ramp-drag-prompt = 램프가 떠나야 할 선 위에서 놓으세요.

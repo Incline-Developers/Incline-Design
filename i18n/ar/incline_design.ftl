@@ -5049,7 +5049,6 @@ pit-design-climbs = اتجاه الصعود
 pit-design-climbs-help = الاتجاه الذي يصعد فيه المنحدر حول الحفرة، منظورًا من الأعلى.
 pit-design-clockwise = باتجاه عقارب الساعة
 pit-design-anticlockwise = عكس اتجاه عقارب الساعة
-}
 pit-design-ramp-drag-hint = اسحب على طول الخط لتغيير مكان بدء المنحدر. يزيل Delete المنحدر.
 pit-design-switch-refused = لا توجد مصطبة من هنا فما فوق فيها متسع للالتفاف: انقر للتوقف عن طلبه
 pit-design-ramp-drag-prompt = أفلت الزر على الخط حيث ينبغي أن يغادره المنحدر.

@@ -5035,7 +5035,6 @@ pit-design-climbs = Leo
 pit-design-climbs-help = Đường dốc leo quanh moong theo chiều nào, nhìn từ trên xuống.
 pit-design-clockwise = Theo chiều kim đồng hồ
 pit-design-anticlockwise = Ngược chiều kim đồng hồ
-}
 pit-design-ramp-drag-hint = Kéo dọc theo đường để dời điểm bắt đầu đường dốc. Delete gỡ bỏ đường dốc.
 pit-design-switch-refused = Không có tầng nào từ đây trở đi đủ chỗ để quay đầu: nhấp để thôi yêu cầu
 pit-design-ramp-drag-prompt = Thả trên đường tại nơi đường dốc nên rời khỏi nó.

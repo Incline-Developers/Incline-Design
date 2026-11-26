@@ -5036,7 +5036,6 @@ pit-design-climbs = 登る向き
 pit-design-climbs-help = 上から見て、ランプがピットの周りをどちら向きに登るか。
 pit-design-clockwise = 時計回り
 pit-design-anticlockwise = 反時計回り
-}
 pit-design-ramp-drag-hint = ラインに沿ってドラッグしてランプの開始位置を移動。Delete でランプを外します。
 pit-design-switch-refused = ここから先のどのベンチにも折り返す余地がありません: クリックすると要求をやめます
 pit-design-ramp-drag-prompt = ランプが出るべきライン上の位置で離してください。

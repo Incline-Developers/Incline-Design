@@ -5007,7 +5007,6 @@ pit-design-climbs = चढ़ाई
 pit-design-climbs-help = ऊपर से देखने पर रैंप पिट के चारों ओर किस दिशा में चढ़ता है।
 pit-design-clockwise = दक्षिणावर्त
 pit-design-anticlockwise = वामावर्त
-}
 pit-design-ramp-drag-hint = रैंप की शुरुआत खिसकाने के लिए रेखा के साथ खींचें। Delete रैंप हटा देता है।
 pit-design-switch-refused = यहाँ से आगे किसी बेंच पर मुड़ने की जगह नहीं है: इसे माँगना बंद करने के लिए क्लिक करें
 pit-design-ramp-drag-prompt = रेखा पर वहाँ छोड़ें जहाँ रैंप को उससे निकलना चाहिए।

@@ -5007,7 +5007,6 @@ pit-design-climbs = Naik
 pit-design-climbs-help = Arah ramp naik mengelilingi pit, dilihat dari atas.
 pit-design-clockwise = Searah jarum jam
 pit-design-anticlockwise = Berlawanan arah jarum jam
-}
 pit-design-ramp-drag-hint = Seret di sepanjang garis untuk memindahkan awal ramp. Delete menghapus ramp.
 pit-design-switch-refused = Tidak ada jenjang dari sini yang cukup untuk berbalik: klik untuk berhenti memintanya
 pit-design-ramp-drag-prompt = Lepaskan di garis tempat ramp seharusnya meninggalkannya.

@@ -1850,6 +1850,7 @@ dependencies = [
  "egui-winit",
  "egui_extras",
  "egui_system_font_provider",
+ "fluent-syntax",
  "foldhash 0.2.0",
  "fontmesh",
  "getrandom 0.4.3",

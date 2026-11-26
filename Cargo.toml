@@ -192,6 +192,9 @@ windows = { version = "0.62.2", features = [
 # `#[implement]` expands to paths into `windows_core`.
 windows-core = "0.62.2"
 
+[dev-dependencies]
+# Reads each translation whole in the tests, so one that only half parses fails them.
+fluent-syntax = "0.12.0"
 
 [profile.release]
 debug = 0

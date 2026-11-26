@@ -5117,7 +5117,6 @@ pit-design-climbs = Підйом
 pit-design-climbs-help = У якому напрямку з'їзд піднімається навколо кар'єру, якщо дивитися згори.
 pit-design-clockwise = За годинниковою стрілкою
 pit-design-anticlockwise = Проти годинникової стрілки
-}
 pit-design-ramp-drag-hint = Перетягніть уздовж лінії, щоб перенести початок з'їзду. Delete прибирає з'їзд.
 pit-design-switch-refused = Жоден уступ звідси не має місця для розвороту: клацніть, щоб скасувати запит
 pit-design-ramp-drag-prompt = Відпустіть на лінії там, де з'їзд має від неї відходити.

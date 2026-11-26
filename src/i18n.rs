@@ -298,6 +298,24 @@ mod tests {
             .collect()
     }
 
+    /// Every language's file parses without an error: a stray line drops no
+    /// message, but is an error the loader logs on every start.
+    #[test]
+    fn every_language_parses_cleanly() {
+        let mut errors = Vec::new();
+        for choice in LanguageChoice::ALL {
+            let path = format!("{}/i18n/{}/incline_design.ftl", env!("CARGO_MANIFEST_DIR"), choice.lang_id());
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"));
+            if let Err((_, found)) = fluent_syntax::parser::parse(text.as_str()) {
+                errors.extend(found.iter().map(|error| {
+                    let line = text[..error.pos.start.min(text.len())].matches('\n').count() + 1;
+                    format!("{choice:?} line {line}: {:?}", error.kind)
+                }));
+            }
+        }
+        assert!(errors.is_empty(), "parse errors:\n{}", errors.join("\n"));
+    }
+
     #[test]
     fn every_language_parses_whole() {
         let mut dropped = Vec::new();

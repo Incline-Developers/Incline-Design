@@ -5007,7 +5007,6 @@ pit-design-climbs = جهت بالا رفتن
 pit-design-climbs-help = جهتی که رمپ از دید بالا دور پیت بالا می‌رود.
 pit-design-clockwise = ساعتگرد
 pit-design-anticlockwise = پادساعتگرد
-}
 pit-design-ramp-drag-hint = برای جابه‌جا کردن آغاز رمپ در امتداد خط بکشید. Delete رمپ را برمی‌دارد.
 pit-design-switch-refused = هیچ پله‌ای از اینجا به بعد جای دور زدن ندارد: برای لغو آن کلیک کنید
 pit-design-ramp-drag-prompt = روی خط، جایی که رمپ باید از آن جدا شود، رها کنید.
