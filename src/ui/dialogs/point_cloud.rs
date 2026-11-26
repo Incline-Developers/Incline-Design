@@ -3,7 +3,7 @@
 use crate::{
     i18n::tr,
     model::{
-        ground_filter::{ClothTerrain, estimate_classify_memory_bytes, recommended_cloth_resolution},
+        ground_filter::{ClothTerrain, estimate_classify_memory_bytes, recommended_cloth_resolution, recommended_noise_radius},
         point_cloud::PointCloudId,
     },
     ui::{
@@ -263,6 +263,24 @@ pub(crate) fn draw_point_cloud_classify_dialog(ui: &mut egui::Ui, editor: &mut E
                     .max_decimals(2)
                     .width(220.0)
                     .show(ui);
+                // Sparse points are all "isolated" within a radius sized for
+                // dense ones, so the radius is suggested from their spacing
+                // as the cloth's resolution is.
+                if let Some(spacing) = editor.point_cloud_classify_spacing {
+                    let recommended = recommended_noise_radius(spacing);
+                    MenuField::new(tr!("point-cloud-recommended"))
+                        .help_text(tr!("point-cloud-noise-radius-about-spacing"))
+                        .show(ui, |ui, _row_height, _field_width| {
+                            ui.label(tr!(
+                                "point-cloud-resolution-m-points-spacing-m",
+                                resolution = recommended.to_string(),
+                                spacing = format!("{spacing:.2}")
+                            ));
+                            if params.noise_radius != recommended && ui.add(MenuButton::new(tr!("point-cloud-use"))).clicked() {
+                                params.noise_radius = recommended;
+                            }
+                        });
+                }
                 MenuFieldU32::new(tr!("point-cloud-minimum-neighbours"), &mut params.noise_min_neighbours, 1..=1000)
                     .help_text(tr!("point-cloud-points-fewer-neighbours-than-within"))
                     .width(220.0)

@@ -22,11 +22,12 @@ const DEFAULT_TRIANGULATION_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
 mod clean;
 mod contours;
-mod creation;
+pub(crate) mod creation;
 pub(crate) mod cuts;
 mod difference;
 mod geometry;
-mod include;
+pub(crate) mod include;
+mod join;
 mod point_cloud_tin;
 pub(crate) mod reference_surface;
 pub(crate) mod session;
@@ -35,6 +36,9 @@ mod smooth;
 pub(crate) mod solid_between;
 
 pub(crate) use contours::{CONTOUR_LABEL_HEIGHT, chain_contour_segments, contour_point_key, section_surface_lines};
+// For the MCP server, which says how far a weld reaches.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use creation::COARSE_WELD_TOL;
 pub(crate) use cuts::seam_targets;
 use geometry::*;
 pub(crate) use point_cloud_tin::{TerrainBudget, TerrainSampler, TerrainTinParams, estimate_terrain_tin_memory_bytes, terrain_budget_target};

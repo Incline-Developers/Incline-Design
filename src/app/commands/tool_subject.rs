@@ -291,6 +291,15 @@ impl App<'_> {
         }
     }
 
+    /// Open Join Surfaces with the selected surfaces ticked.
+    pub(crate) fn open_join_surfaces(&mut self) {
+        self.editor.tri_join_open = true;
+        self.editor.tri_join_sources = self.selected_triangulations();
+        if self.editor.tri_join_name_input.trim().is_empty() {
+            self.editor.tri_join_name_input = tr!("tri-joined-surface");
+        }
+    }
+
     /// Open the Classify dialog with the selected clouds ticked.
     pub(crate) fn open_point_cloud_classify(&mut self) {
         self.editor.point_cloud_classify_open = true;

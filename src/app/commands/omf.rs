@@ -181,7 +181,7 @@ impl<'a> App<'a> {
         self.project_snapshot(&OmfExportSelection::default(), FolderScope::Whole)
     }
 
-    pub(super) fn omf_export_snapshot(&mut self, selection: &OmfExportSelection) -> Result<ProjectSnapshot> {
+    pub(crate) fn omf_export_snapshot(&mut self, selection: &OmfExportSelection) -> Result<ProjectSnapshot> {
         self.project_snapshot(selection, FolderScope::Referenced)
     }
 

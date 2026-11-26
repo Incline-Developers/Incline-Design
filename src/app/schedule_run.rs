@@ -1274,7 +1274,7 @@ fn sentence(text: &str) -> String {
     if text.ends_with(['.', '!', '?']) { text.to_owned() } else { format!("{text}.") }
 }
 
-fn attempt_headline(attempt: &ScheduleAttempt) -> String {
+pub(crate) fn attempt_headline(attempt: &ScheduleAttempt) -> String {
     let run = attempt.serial.to_string();
     match attempt.outcome {
         // One reason fits the status line; several are listed beneath it.

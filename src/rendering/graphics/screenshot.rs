@@ -35,13 +35,13 @@ impl<'a> Graphics<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn request_screenshot(&mut self, path: PathBuf) {
         self.pending_screenshot = Some(ScreenshotTarget::Native(path));
-        self.window.request_redraw();
+        self.request_redraw();
     }
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn request_browser_screenshot(&mut self, file_name: String) {
         self.pending_screenshot = Some(ScreenshotTarget::Browser(file_name));
-        self.window.request_redraw();
+        self.request_redraw();
     }
 
     /// Render the scene into an offscreen texture and record a copy of it into
@@ -100,9 +100,7 @@ impl<'a> Graphics<'a> {
     pub(super) fn finish_screenshot_capture(&self, capture: PendingScreenshot) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let path = match &capture.target {
-                ScreenshotTarget::Native(path) => path.clone(),
-            };
+            let ScreenshotTarget::Native(path) = &capture.target;
             if let Err(error) = self.write_screenshot_png(&capture) {
                 userspace_warn!(
                     "{}",
@@ -152,6 +150,12 @@ impl<'a> Graphics<'a> {
 }
 
 fn encode_mapped_png(capture: &PendingScreenshot) -> Result<Vec<u8>> {
+    let (cropped, crop_width, crop_height) = cropped_rgba(capture)?;
+    encode_png(&cropped, crop_width, crop_height)
+}
+
+/// The mapped capture's visible-viewport part, and its width and height.
+fn cropped_rgba(capture: &PendingScreenshot) -> Result<(Vec<u8>, u32, u32)> {
     let rgba = capture.readback.unpack()?;
     let (width, height) = (capture.readback.width, capture.readback.height);
 
@@ -173,14 +177,18 @@ fn encode_mapped_png(capture: &PendingScreenshot) -> Result<Vec<u8>> {
         }
         out
     };
+    Ok((cropped, crop_width as u32, crop_height as u32))
+}
 
+/// `rgba`, `width` by `height`, as a PNG file's bytes.
+pub(crate) fn encode_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     {
-        let mut encoder = png::Encoder::new(&mut bytes, crop_width as u32, crop_height as u32);
+        let mut encoder = png::Encoder::new(&mut bytes, width, height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header()?;
-        writer.write_image_data(&cropped)?;
+        writer.write_image_data(rgba)?;
         writer.finish()?;
     }
     Ok(bytes)

@@ -44,10 +44,22 @@ const MEASURED_CHUNK: usize = 32_768;
 
 /// One block's overlaps with the partition, in the order a single-threaded
 /// scan would have found them.
-struct BlockOverlaps {
-    volume: f64,
-    hits: Vec<(usize, f64)>,
+/// One block measured: its volume, and the share of it each slot holds.
+pub(crate) struct BlockOverlaps {
+    pub(crate) volume: f64,
+    pub(crate) hits: Vec<(usize, f64)>,
 }
+
+/// What a worker measures blocks with, kept between blocks: the clipper's
+/// buffers and the pieces found near a block.
+#[derive(Default)]
+pub(crate) struct MeasureScratch {
+    clip: intersection::Scratch,
+    nearby: Vec<u32>,
+}
+
+/// Measures block `index`, with a worker's scratch.
+pub(crate) type BlockMeasure<'a> = dyn Fn(&mut MeasureScratch, usize) -> anyhow::Result<BlockOverlaps> + Sync + 'a;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct NumericTotal {
@@ -556,7 +568,76 @@ pub(crate) fn compute(
 ) -> anyhow::Result<ReserveOutcome> {
     anyhow::ensure!(blocks.len() == model.metadata.n_blocks, crate::i18n::tr!("err-solids-block-counts"));
     partition.validate()?;
+    if partition.is_empty() {
+        return compute_by(model, blocks, mapping, fields, partition.slots, capture, cancel, progress, None);
+    }
+    partition.bands.par_iter().flat_map(|band| &band.pieces).for_each(|piece| piece.spatial.ensure_built());
+    let grids: Vec<PieceGrid> = partition.bands.par_iter().map(|band| PieceGrid::new(&band.pieces)).collect();
+    let reach = partition.reach();
+    let measure = |scratch: &mut MeasureScratch, index: usize| -> anyhow::Result<BlockOverlaps> {
+        let MeasureScratch { clip: scratch, nearby } = scratch;
+        let bounds = blocks
+            .get(index)
+            .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-solids-missing-geometry", index = index.to_string())))?;
+        if intersection::Block::out_of_reach(model, bounds, reach) {
+            return Ok(BlockOverlaps { volume: 0.0, hits: Vec::new() });
+        }
+        let block = intersection::Block::new(model, bounds)?;
+        // Bands are ordered, so the first that can reach this block is
+        // found by bisection and the scan stops as soon as one starts
+        // above it.
+        let first = partition.bands.partition_point(|band| band.top <= block.min.z);
+        let mut hits = Vec::new();
+        for (band, grid) in partition.bands[first..].iter().zip(&grids[first..]) {
+            if band.base >= block.max.z {
+                break;
+            }
+            grid.pieces_near(block.min.truncate(), block.max.truncate(), nearby);
+            for piece in nearby.iter().map(|&piece| &band.pieces[piece as usize]) {
+                // Said with where, so a bad piece can be found: the
+                // fraction alone names neither the piece nor the block.
+                let fraction = block.fraction(piece, scratch, cancel).map_err(|error| {
+                    let (centre, size) = ((block.min + block.max) / 2.0, block.max - block.min);
+                    error.context(crate::i18n::tr!(
+                        "err-solids-piece-context",
+                        base = format!("{:.2}", band.base),
+                        top = format!("{:.2}", band.top),
+                        x = format!("{:.2}", centre.x),
+                        y = format!("{:.2}", centre.y),
+                        z = format!("{:.2}", centre.z),
+                        size_x = format!("{:.2}", size.x),
+                        size_y = format!("{:.2}", size.y),
+                        size_z = format!("{:.2}", size.z)
+                    ))
+                })?;
+                if fraction > 0.0 {
+                    hits.push((piece.slot, fraction));
+                }
+            }
+        }
+        Ok(BlockOverlaps {
+            volume: block.world_volume(),
+            hits,
+        })
+    };
+    compute_by(model, blocks, mapping, fields, partition.slots, capture, cancel, progress, Some(&measure))
+}
 
+/// [`compute`], each block measured by `measure` into `slots` slots: none
+/// measured without it. The figures are added up in block order, however
+/// the measuring was shared out.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compute_by(
+    model: &BlockModelData,
+    blocks: &BlockBoundsSource,
+    mapping: &[ReserveFieldMapping],
+    fields: &[ReserveField],
+    slot_count: usize,
+    capture: bool,
+    cancel: &crate::app::jobs::CancelFlag,
+    progress: &super::progress::Progress,
+    measure: Option<&BlockMeasure<'_>>,
+) -> anyhow::Result<ReserveOutcome> {
     let mut resolution = ReserveResolution::default();
     let note = |resolution: &mut ReserveResolution, id: ReserveFieldId, issue: ReserveFieldIssue| {
         if resolution.issue(id).is_none() {
@@ -634,7 +715,7 @@ pub(crate) fn compute(
             all: empty.clone(),
             categories: categories.iter().map(|field| (field.id, BTreeMap::new())).collect()
         };
-        partition.slots
+        slot_count
     ];
     // The captured value list: every numerical field the scan resolved, then
     // every categorical one, in the order they will be read back from.
@@ -652,11 +733,11 @@ pub(crate) fn compute(
     let mut material = capture.then(|| MaterialCapture {
         fields: captured_fields.clone(),
         labels: Vec::new(),
-        portions: vec![Arc::default(); partition.slots],
+        portions: vec![Arc::default(); slot_count],
     });
-    if partition.is_empty() {
+    let Some(measure) = measure else {
         return Ok(ReserveOutcome { totals, resolution, material });
-    }
+    };
 
     let mut counters = Counters::default();
     // Which fields have already had a missing value counted for the block
@@ -668,7 +749,7 @@ pub(crate) fn compute(
     // beside the totals rather than derived afterwards: the row values are only
     // in hand while the row is being accumulated.
     let mut slots: Vec<SlotPortions> = if capture {
-        (0..partition.slots).map(|_| SlotPortions::default()).collect()
+        (0..slot_count).map(|_| SlotPortions::default()).collect()
     } else {
         Vec::new()
     };
@@ -686,9 +767,6 @@ pub(crate) fn compute(
     // itself. The threads therefore only measure. The accumulation below walks
     // the measurements in the order one thread would have produced them, so
     // the figures are bit for bit the ones this scan has always reported.
-    partition.bands.par_iter().flat_map(|band| &band.pieces).for_each(|piece| piece.spatial.ensure_built());
-    let grids: Vec<PieceGrid> = partition.bands.par_iter().map(|band| PieceGrid::new(&band.pieces)).collect();
-    let reach = partition.reach();
     let mut chunk_start = 0usize;
     while chunk_start < blocks.len() {
         anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
@@ -698,54 +776,7 @@ pub(crate) fn compute(
         // are the reason a block costs what it does.
         let measured: Vec<anyhow::Result<BlockOverlaps>> = (chunk_start..chunk_end)
             .into_par_iter()
-            .map_init(
-                || (intersection::Scratch::default(), Vec::new()),
-                |(scratch, nearby), index| {
-                    let bounds = blocks
-                        .get(index)
-                        .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr!("err-solids-missing-geometry", index = index.to_string())))?;
-                    if intersection::Block::out_of_reach(model, bounds, reach) {
-                        return Ok(BlockOverlaps { volume: 0.0, hits: Vec::new() });
-                    }
-                    let block = intersection::Block::new(model, bounds)?;
-                    // Bands are ordered, so the first that can reach this block is
-                    // found by bisection and the scan stops as soon as one starts
-                    // above it.
-                    let first = partition.bands.partition_point(|band| band.top <= block.min.z);
-                    let mut hits = Vec::new();
-                    for (band, grid) in partition.bands[first..].iter().zip(&grids[first..]) {
-                        if band.base >= block.max.z {
-                            break;
-                        }
-                        grid.pieces_near(block.min.truncate(), block.max.truncate(), nearby);
-                        for piece in nearby.iter().map(|&piece| &band.pieces[piece as usize]) {
-                            // Said with where, so a bad piece can be found: the
-                            // fraction alone names neither the piece nor the block.
-                            let fraction = block.fraction(piece, scratch, cancel).map_err(|error| {
-                                let (centre, size) = ((block.min + block.max) / 2.0, block.max - block.min);
-                                error.context(crate::i18n::tr!(
-                                    "err-solids-piece-context",
-                                    base = format!("{:.2}", band.base),
-                                    top = format!("{:.2}", band.top),
-                                    x = format!("{:.2}", centre.x),
-                                    y = format!("{:.2}", centre.y),
-                                    z = format!("{:.2}", centre.z),
-                                    size_x = format!("{:.2}", size.x),
-                                    size_y = format!("{:.2}", size.y),
-                                    size_z = format!("{:.2}", size.z)
-                                ))
-                            })?;
-                            if fraction > 0.0 {
-                                hits.push((piece.slot, fraction));
-                            }
-                        }
-                    }
-                    Ok(BlockOverlaps {
-                        volume: block.world_volume(),
-                        hits,
-                    })
-                },
-            )
+            .map_init(MeasureScratch::default, |scratch, index| measure(scratch, index))
             .collect();
 
         for (offset, measured) in measured.into_iter().enumerate() {

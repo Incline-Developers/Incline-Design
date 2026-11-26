@@ -351,7 +351,11 @@ pub(crate) fn contour_point_key(p: glam::DVec3) -> (i64, i64, i64) {
     ((p.x / q).round() as i64, (p.y / q).round() as i64, (p.z / q).round() as i64)
 }
 
-pub(crate) fn chain_contour_segments(segments: Vec<[glam::DVec3; 2]>) -> Vec<Vec<glam::DVec3>> {
+pub(crate) fn chain_contour_segments(mut segments: Vec<[glam::DVec3; 2]>) -> Vec<Vec<glam::DVec3>> {
+    // A triangle touching the level at one vertex only (a block's wall
+    // standing on a step at the level) crosses it in a point. Kept, each
+    // such point is a line of its own lying on the real one.
+    segments.retain(|[a, b]| contour_point_key(*a) != contour_point_key(*b));
     // Endpoint key -> segments touching that point, for O(1) chain extension.
     let mut by_endpoint: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
     for (index, segment) in segments.iter().enumerate() {
@@ -755,5 +759,33 @@ fn contour_label_text(level: f64, decimals: usize) -> String {
     match text.strip_prefix('-') {
         Some(unsigned) if unsigned.chars().all(|c| c == '0' || c == '.') => unsigned.to_owned(),
         _ => text,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A ring of walls, each standing on the level and split into two
+    /// triangles as a block shell's faces are: one meets the level along
+    /// its foot, the other at a corner only.
+    #[test]
+    fn walls_standing_on_the_level_give_one_line() {
+        let corner = |x: f64, y: f64, z: f64| mesh_data::Vertex { x, y, z };
+        let ring = [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0), (20.0, 10.0), (20.0, 20.0), (10.0, 20.0), (0.0, 20.0), (0.0, 10.0)];
+        let mut segments = Vec::new();
+        for index in 0..ring.len() {
+            let ((x0, y0), (x1, y1)) = (ring[index], ring[(index + 1) % ring.len()]);
+            let [a, b, c, d] = [corner(x0, y0, 5.0), corner(x0, y0, 10.0), corner(x1, y1, 10.0), corner(x1, y1, 5.0)];
+            for triangle in [[a, b, c], [a, c, d]] {
+                if let Some([p, q]) = triangle_contour_segment(triangle, 5.0) {
+                    segments.push([glam::DVec3::new(p.x, p.y, p.z), glam::DVec3::new(q.x, q.y, q.z)]);
+                }
+            }
+        }
+        let chains = chain_contour_segments(segments);
+        assert_eq!(chains.len(), 1, "{chains:?}");
+        assert_eq!(chains[0].len(), ring.len() + 1);
+        assert_eq!(chains[0].first(), chains[0].last());
     }
 }

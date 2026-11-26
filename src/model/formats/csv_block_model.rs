@@ -403,7 +403,7 @@ pub(crate) fn parse_stream(mut input: impl Read, mapping: &CsvColumnMapping, mut
     }
     let geometry = geometry.finish();
     let retained_geometry_bytes = geometry.heap_bytes();
-    let columns = resource_names
+    let columns: Vec<BlockModelColumn> = resource_names
         .into_iter()
         .zip(builders)
         .zip(layout.resource_roles.iter().copied())
@@ -415,12 +415,64 @@ pub(crate) fn parse_stream(mut input: impl Read, mapping: &CsvColumnMapping, mut
             category_colors: BTreeMap::new(),
         })
         .collect();
+    if let Some(regular) = as_regular_grid(&geometry, columns.clone())? {
+        return Ok(regular);
+    }
     let model = BlockModelData::from_columns(block_count, overall_lower, overall_upper, columns, retained_geometry_bytes)
         .map_err(|error| CsvBlockModelError::Invalid(error.to_string()))?;
     Ok(ParsedCsvBlockModel {
         model,
         blocks: BlockBoundsSource::Explicit(geometry),
     })
+}
+
+/// The rows read as the regular model they make, where they fill a uniform
+/// grid exactly, each cell once, in any order: the values put in grid order
+/// (x fastest, then y, then z), and no bounds held for each block. A model
+/// with gaps, sub-blocks or a cell given twice is none.
+fn as_regular_grid(geometry: &crate::model::block_model::BlockGeometry, columns: Vec<BlockModelColumn>) -> Result<Option<ParsedCsvBlockModel>, CsvBlockModelError> {
+    let count = geometry.len();
+    let Some(grid) = crate::model::block_model::detect_uniform_grid(geometry).filter(|grid| grid.cell_count() == count) else {
+        return Ok(None);
+    };
+    let Some(first) = geometry.get(0) else {
+        return Ok(None);
+    };
+    let [nx, ny, _] = grid.dims;
+    // Which row fills each cell; a cell filled twice leaves another empty.
+    let mut order = vec![usize::MAX; count];
+    for row in 0..count {
+        let Some([x, y, z]) = geometry.get(row).and_then(|block| grid.cell_coords(block.lower)) else {
+            return Ok(None);
+        };
+        let cell = (z * ny + y) * nx + x;
+        if order[cell] != usize::MAX {
+            return Ok(None);
+        }
+        order[cell] = row;
+    }
+    let in_order = order.iter().enumerate().all(|(cell, row)| cell == *row);
+    let columns = columns
+        .into_iter()
+        .map(|column| {
+            if in_order {
+                return column;
+            }
+            let values: Vec<f64> = column.values.iter().collect();
+            let ordered: Vec<f64> = order.iter().map(|row| values[*row]).collect();
+            BlockModelColumn {
+                values: Arc::new(crate::model::formats::block_column::BlockColumn::from_values(&ordered)),
+                ..column
+            }
+        })
+        .collect();
+    let cell = first.upper - first.lower;
+    let model = BlockModelData::from_regular_grid(grid.origin, cell, grid.dims, columns).map_err(|error| CsvBlockModelError::Invalid(error.to_string()))?;
+    let bounds = crate::model::block_model::RegularBlockBounds::new(grid.origin, model.metadata.upper, grid.dims, None, count).map_err(CsvBlockModelError::Invalid)?;
+    Ok(Some(ParsedCsvBlockModel {
+        model,
+        blocks: BlockBoundsSource::Regular(bounds),
+    }))
 }
 
 fn count_newlines(text: &[u8]) -> usize {
@@ -752,4 +804,42 @@ fn parse_required_number(field: &str, row: usize, header: &str) -> Result<f64, C
         .trim()
         .parse::<f64>()
         .map_err(|_| CsvBlockModelError::Invalid(format!("CSV row {row}, column '{header}': expected a number, found '{}'", field.trim())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 2 by 2 by 2 grid of 10 m blocks, each with its cell's number as
+    /// grade, in the rows given (cells x fastest from 0).
+    fn grid_csv(cells: &[usize]) -> Vec<u8> {
+        let mut text = String::from("x,y,z,dx,dy,dz,grade\n");
+        for &cell in cells {
+            let (x, y, z) = (cell % 2, cell / 2 % 2, cell / 4);
+            text += &format!("{},{},{},10,10,10,{cell}\n", 5 + x * 10, 5 + y * 10, 5 + z * 10);
+        }
+        text.into_bytes()
+    }
+
+    fn parsed(bytes: &[u8]) -> ParsedCsvBlockModel {
+        let headers: Vec<String> = ["x", "y", "z", "dx", "dy", "dz", "grade"].map(str::to_owned).to_vec();
+        parse_stream(bytes, &auto_mapping(&headers), |_| {}).expect("a block model")
+    }
+
+    #[test]
+    fn a_whole_grid_in_any_order_is_read_as_regular() {
+        let model = parsed(&grid_csv(&[5, 2, 7, 0, 3, 6, 1, 4]));
+        assert!(matches!(model.blocks, BlockBoundsSource::Regular(_)));
+        assert!(!model.model.metadata.is_irregular);
+        assert_eq!(model.model.metadata.dims, [2, 2, 2]);
+        let grades = model.model.shared_numeric_values("grade").expect("the grade column");
+        let in_order: Vec<f64> = (0..8).map(|cell| grades.get(cell)).collect();
+        assert_eq!(in_order, (0..8).map(|cell| cell as f64).collect::<Vec<_>>(), "values put in grid order");
+    }
+
+    #[test]
+    fn a_grid_with_a_gap_or_a_cell_twice_stays_explicit() {
+        assert!(matches!(parsed(&grid_csv(&[0, 1, 2, 3, 4, 5, 6])).blocks, BlockBoundsSource::Explicit(_)));
+        assert!(matches!(parsed(&grid_csv(&[0, 1, 2, 3, 4, 5, 6, 6])).blocks, BlockBoundsSource::Explicit(_)));
+    }
 }

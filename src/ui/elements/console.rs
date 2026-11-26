@@ -6,6 +6,7 @@ use crate::{
     i18n::tr,
     logging::{ConsoleEntry, ConsoleEntryId, ConsoleEntryState, ConsoleSeverity},
     ui::{
+        state::UiCommand,
         themed_icon, unthemed_icon,
         widgets::context_menu::{ContextMenuAction, context_menu_popup},
     },
@@ -48,102 +49,122 @@ struct ConsolePresentationCache {
 /// the panel's resize interaction to light up its grip.
 pub(crate) const PANEL_ID: &str = "Console";
 
-/// Draw the console content, filling the remaining UI area.
+/// Draw the console docked along the bottom of the main window, with its
+/// pop-out button in its corner.
 ///
 /// Returns the panel's bounding rect.
-pub(crate) fn draw_console(ui: &mut egui::Ui, min_height: f32, max_height: f32, snapshot: &crate::logging::ConsoleSnapshot) -> egui::Rect {
-    let (log_revision, entries) = snapshot;
+pub(crate) fn draw_console(ui: &mut egui::Ui, min_height: f32, max_height: f32, snapshot: &crate::logging::ConsoleSnapshot, commands: &mut Vec<UiCommand>) -> egui::Rect {
     let surface_fill = ui.visuals().extreme_bg_color;
-    egui::Panel::bottom(PANEL_ID)
+    let rect = egui::Panel::bottom(PANEL_ID)
         .resizable(true)
         .show_separator_line(false)
         .min_size(min_height)
         .max_size(max_height)
         .frame(crate::ui::chrome::region_frame(ui).fill(surface_fill).inner_margin(egui::Margin::ZERO))
-        .show(ui, |ui| {
-            let contents_id = ui.make_persistent_id("console_contents");
-            ui.scope_builder(egui::UiBuilder::new().scope_id(contents_id), |ui| {
-                let state_id = ui.make_persistent_id("console_ui_state");
-                let mut state = ui.ctx().data_mut(|data| data.get_temp::<ConsoleUiState>(state_id).unwrap_or_default());
-                let expanded_this_frame = apply_pending_toggle(&mut state, ui.ctx().cumulative_frame_nr()) == Some(true);
+        .show(ui, |ui| draw_contents(ui, snapshot))
+        .response
+        .rect;
+    if crate::ui::widgets::pop_out::corner_button(ui.ctx(), "console", crate::ui::chrome::region_rect(rect), tr!("panel-pop-out")) {
+        commands.push(UiCommand::SetPanelPoppedOut(crate::ui::state::PanelKind::Console, true));
+    }
+    rect
+}
 
-                let font_id = egui::TextStyle::Monospace.resolve(ui.style());
-                let row_height = (font_id.size + 8.0).max(22.0);
-                let detail_indent = 114.0;
-                let detail_width = (ui.available_width() - detail_indent).max(1.0);
-                let char_width = ui.ctx().fonts_mut(|fonts| fonts.glyph_width(&font_id, '0')).max(1.0);
-                let columns = ((detail_width / char_width).floor() as usize).saturating_sub(1).max(1);
-
-                let cache_id = ui.make_persistent_id("console_presentation_rows");
-                let rows = ui.ctx().data_mut(|data| {
-                    let cache = data.get_temp_mut_or_default::<ConsolePresentationCache>(cache_id);
-                    if cache.log_revision != *log_revision || cache.presentation_revision != state.presentation_revision || cache.columns != columns {
-                        cache.log_revision = *log_revision;
-                        cache.presentation_revision = state.presentation_revision;
-                        cache.columns = columns;
-                        cache.rows = build_presentation_rows(entries, &state, columns).into();
-                    }
-                    Arc::clone(&cache.rows)
-                });
-
-                if rows.is_empty() {
-                    ui.add_sized(
-                        [ui.available_width(), row_height],
-                        egui::Label::new(egui::RichText::new(tr!("console-no-console-activity-yet")).weak()).halign(egui::Align::Center),
-                    );
-                } else {
-                    let visual_rows_id = ui.make_persistent_id("console_visual_rows");
-                    // Followed by setting the offset ourselves rather than by
-                    // `stick_to_bottom` alone: egui lets go of the bottom for
-                    // good after any frame it was not asked to hold it, such as
-                    // the one an entry opens in, and the console then sat on old
-                    // lines while new ones arrived below.
-                    let stride = row_height + ui.spacing().item_spacing.y;
-                    let bottom = (rows.len() as f32 * stride - ui.spacing().item_spacing.y - state.view_height).max(0.0);
-                    let mut area = egui::ScrollArea::vertical()
-                        .id_salt("console_scroll_area")
-                        .auto_shrink([false; 2])
-                        // A `ScrollArea` claims 64pt of height by default even
-                        // when the panel has less to give, and the overflow
-                        // pushes the panel past the window edge as the user
-                        // drags it shorter. Let it take what the panel has.
-                        .min_scrolled_height(0.0)
-                        .stick_to_bottom(!expanded_this_frame);
-                    let follow = !state.scrolled_up && !expanded_this_frame && state.view_height > 0.0;
-                    if follow {
-                        area = area.vertical_scroll_offset(bottom);
-                    }
-                    let output = area.show_rows(ui, row_height, rows.len(), |ui, visible| {
-                        for row in &rows[visible] {
-                            let (rect, row_id) = allocate_visual_row(ui, visual_rows_id, row_height);
-                            match *row {
-                                PresentationRow::Header { entry_index } => {
-                                    draw_header_row(ui, rect, row_id, entry_index, &entries[entry_index], entries, &mut state);
-                                }
-                                PresentationRow::Detail {
-                                    entry_index,
-                                    detail_index,
-                                    byte_range,
-                                } => {
-                                    let entry = &entries[entry_index];
-                                    let detail = &entry.details[detail_index];
-                                    draw_detail_row(ui, rect, row_id, entry_index, &detail[byte_range.0..byte_range.1], entry, entries, detail_indent, &font_id);
-                                }
-                            }
-                        }
-                    });
-                    let max_offset = (output.content_size.y - output.inner_rect.height()).max(0.0);
-                    state.view_height = output.inner_rect.height();
-                    if !expanded_this_frame {
-                        state.scrolled_up = output.state.clamped_offset().y < max_offset - 2.0;
-                    }
-                }
-
-                ui.ctx().data_mut(|data| data.insert_temp(state_id, state));
-            });
-        })
+/// Draw the console filling a window of its own, popped out
+/// (`app/panel_windows.rs`). Returns its region.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn draw_console_window(ui: &mut egui::Ui, snapshot: &crate::logging::ConsoleSnapshot) -> egui::Rect {
+    let surface_fill = ui.visuals().extreme_bg_color;
+    egui::CentralPanel::default()
+        .frame(crate::ui::chrome::region_frame(ui).fill(surface_fill).inner_margin(egui::Margin::ZERO))
+        .show(ui, |ui| draw_contents(ui, snapshot))
         .response
         .rect
+}
+
+/// The console's rows, filling `ui`.
+fn draw_contents(ui: &mut egui::Ui, snapshot: &crate::logging::ConsoleSnapshot) {
+    let (log_revision, entries) = snapshot;
+    let contents_id = ui.make_persistent_id("console_contents");
+    ui.scope_builder(egui::UiBuilder::new().scope_id(contents_id), |ui| {
+        let state_id = ui.make_persistent_id("console_ui_state");
+        let mut state = ui.ctx().data_mut(|data| data.get_temp::<ConsoleUiState>(state_id).unwrap_or_default());
+        let expanded_this_frame = apply_pending_toggle(&mut state, ui.ctx().cumulative_frame_nr()) == Some(true);
+
+        let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+        let row_height = (font_id.size + 8.0).max(22.0);
+        let detail_indent = 114.0;
+        let detail_width = (ui.available_width() - detail_indent).max(1.0);
+        let char_width = ui.ctx().fonts_mut(|fonts| fonts.glyph_width(&font_id, '0')).max(1.0);
+        let columns = ((detail_width / char_width).floor() as usize).saturating_sub(1).max(1);
+
+        let cache_id = ui.make_persistent_id("console_presentation_rows");
+        let rows = ui.ctx().data_mut(|data| {
+            let cache = data.get_temp_mut_or_default::<ConsolePresentationCache>(cache_id);
+            if cache.log_revision != *log_revision || cache.presentation_revision != state.presentation_revision || cache.columns != columns {
+                cache.log_revision = *log_revision;
+                cache.presentation_revision = state.presentation_revision;
+                cache.columns = columns;
+                cache.rows = build_presentation_rows(entries, &state, columns).into();
+            }
+            Arc::clone(&cache.rows)
+        });
+
+        if rows.is_empty() {
+            ui.add_sized(
+                [ui.available_width(), row_height],
+                egui::Label::new(egui::RichText::new(tr!("console-no-console-activity-yet")).weak()).halign(egui::Align::Center),
+            );
+        } else {
+            let visual_rows_id = ui.make_persistent_id("console_visual_rows");
+            // Followed by setting the offset ourselves rather than by
+            // `stick_to_bottom` alone: egui lets go of the bottom for
+            // good after any frame it was not asked to hold it, such as
+            // the one an entry opens in, and the console then sat on old
+            // lines while new ones arrived below.
+            let stride = row_height + ui.spacing().item_spacing.y;
+            let bottom = (rows.len() as f32 * stride - ui.spacing().item_spacing.y - state.view_height).max(0.0);
+            let mut area = egui::ScrollArea::vertical()
+                .id_salt("console_scroll_area")
+                .auto_shrink([false; 2])
+                // A `ScrollArea` claims 64pt of height by default even
+                // when the panel has less to give, and the overflow
+                // pushes the panel past the window edge as the user
+                // drags it shorter. Let it take what the panel has.
+                .min_scrolled_height(0.0)
+                .stick_to_bottom(!expanded_this_frame);
+            let follow = !state.scrolled_up && !expanded_this_frame && state.view_height > 0.0;
+            if follow {
+                area = area.vertical_scroll_offset(bottom);
+            }
+            let output = area.show_rows(ui, row_height, rows.len(), |ui, visible| {
+                for row in &rows[visible] {
+                    let (rect, row_id) = allocate_visual_row(ui, visual_rows_id, row_height);
+                    match *row {
+                        PresentationRow::Header { entry_index } => {
+                            draw_header_row(ui, rect, row_id, entry_index, &entries[entry_index], entries, &mut state);
+                        }
+                        PresentationRow::Detail {
+                            entry_index,
+                            detail_index,
+                            byte_range,
+                        } => {
+                            let entry = &entries[entry_index];
+                            let detail = &entry.details[detail_index];
+                            draw_detail_row(ui, rect, row_id, entry_index, &detail[byte_range.0..byte_range.1], entry, entries, detail_indent, &font_id);
+                        }
+                    }
+                }
+            });
+            let max_offset = (output.content_size.y - output.inner_rect.height()).max(0.0);
+            state.view_height = output.inner_rect.height();
+            if !expanded_this_frame {
+                state.scrolled_up = output.state.clamped_offset().y < max_offset - 2.0;
+            }
+        }
+
+        ui.ctx().data_mut(|data| data.insert_temp(state_id, state));
+    });
 }
 
 /// Apply a queued disclosure change after the click frame has completed.

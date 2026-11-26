@@ -100,6 +100,15 @@ fn for_each_visible_object_aabb(
                     include(verts_max);
                 }
             }
+            Object::PitDesign { verts, .. } => {
+                if let Some((verts_min, verts_max)) = polyline_bulge_bounds(verts, true) {
+                    include(verts_min);
+                    include(verts_max);
+                }
+                for point in object.pit_strings().flat_map(|string| &string.points) {
+                    include(*point);
+                }
+            }
         }
         if object_any {
             emit(object_min, object_max);

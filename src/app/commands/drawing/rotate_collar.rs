@@ -287,7 +287,7 @@ fn advance(start: CollarRotation, ring: u8, turn: f64) -> CollarRotation {
 /// Recover the world ring angle from its projected, uniformly sampled polyline.
 /// Measuring a screen-space polar angle instead makes foreshortened rings speed
 /// up near their narrow ends. Keep these samples fixed throughout the gesture.
-fn ring_angle(points: &[(f32, f32)], cursor: (f32, f32)) -> Option<f64> {
+pub(crate) fn ring_angle(points: &[(f32, f32)], cursor: (f32, f32)) -> Option<f64> {
     if points.len() < 3 {
         return None;
     }
