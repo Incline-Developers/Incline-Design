@@ -430,14 +430,114 @@ fn intersect_offset_edges(a: DVec2, r: DVec2, b: DVec2, s: DVec2) -> Option<DVec
 /// distance, the corner is bevelled instead to prevent self-intersecting output.
 const MITER_LIMIT: f64 = 4.0;
 
-/// Offset each edge of a polyline perpendicular to itself in the XY plane,
-/// then intersect adjacent offset edges to find the new vertices.
-///
-/// `signed_horiz_dist > 0` offsets to the **left** of each directed edge (CCW = inward).
-/// `z_delta` is added to every vertex Z (use `0.0` for a horizontal berm offset).
-///
-/// For open polylines the first/last vertices are the respective endpoints of the
-/// first/last offset edges (no intersection needed).
+/// Whether a closed string meets itself in plan anywhere but at its own
+/// corners: crossing, touching (a corner on another edge) or running along
+/// itself. A mitred offset of a concave shape does where part of it is set
+/// in past where that part shrinks to nothing, and its corners often land
+/// exactly on the edges beyond, so a touch counts. Swept along x, so a long
+/// contour is cheap to check.
+pub(crate) fn closed_meets_itself(points: &[DVec3]) -> bool {
+    let count = points.len();
+    if count < 4 {
+        return false;
+    }
+    let segment = |index: usize| (points[index].truncate(), points[(index + 1) % count].truncate());
+    let mut order: Vec<usize> = (0..count).collect();
+    order.sort_by(|a, b| {
+        let (left, right) = (segment(*a), segment(*b));
+        left.0.x.min(left.1.x).total_cmp(&right.0.x.min(right.1.x))
+    });
+    let mut active: Vec<usize> = Vec::new();
+    for index in order {
+        let (a, b) = segment(index);
+        let low = a.x.min(b.x);
+        active.retain(|&other| {
+            let (c, d) = segment(other);
+            c.x.max(d.x) >= low
+        });
+        for &other in &active {
+            let gap = index.abs_diff(other);
+            if gap == 1 || gap == count - 1 {
+                continue;
+            }
+            let (c, d) = segment(other);
+            if !matches!(crate::model::kernel::segment_segment(a, b, c, d), crate::model::kernel::SegSeg::Disjoint) {
+                return true;
+            }
+        }
+        active.push(index);
+    }
+    false
+}
+
+/// A closed string offset `signed_horiz_dist` to its left (as
+/// [`geometric_offset`] takes it) and raised `z_delta`, with what is set in
+/// past nothing cut away, as the pit designer sets off its rings: the
+/// simple rings that are left, largest first, wound as the string is, each
+/// point at the RL of the nearest point of the string. None where it all
+/// collapses; more than one where it pinches apart.
+pub(crate) fn untangled_closed_offset(verts: &[DVec3], signed_horiz_dist: f64, z_delta: f64) -> Vec<Vec<DVec3>> {
+    if verts.len() < 3 {
+        return Vec::new();
+    }
+    let anticlockwise = signed_area_xy(verts) > 0.0;
+    let mut ring: Vec<DVec2> = verts.iter().map(|vert| vert.truncate()).collect();
+    if !anticlockwise {
+        ring.reverse();
+    }
+    // Left of an anticlockwise ring is inside it.
+    let outward = if anticlockwise { -signed_horiz_dist } else { signed_horiz_dist };
+    let distances = vec![crate::model::pit_design::ring::EdgeOffset::even(outward); ring.len()];
+    let count = verts.len();
+    let rl_at = |point: DVec2| {
+        (0..count)
+            .map(|index| {
+                let (a, b) = (verts[index], verts[(index + 1) % count]);
+                let (along, offset) = (b.truncate() - a.truncate(), point - a.truncate());
+                let t = (offset.dot(along) / along.length_squared().max(f64::MIN_POSITIVE)).clamp(0.0, 1.0);
+                ((a.truncate() + along * t).distance_squared(point), a.z + (b.z - a.z) * t)
+            })
+            .min_by(|x, y| x.0.total_cmp(&y.0))
+            .map_or(0.0, |(_, z)| z)
+    };
+    crate::model::pit_design::ring::offset(&ring, &distances)
+        .into_iter()
+        .map(|piece| {
+            let mut points: Vec<DVec3> = piece.into_iter().map(|point| point.extend(rl_at(point) + z_delta)).collect();
+            if !anticlockwise {
+                points.reverse();
+            }
+            points
+        })
+        .collect()
+}
+
+/// Whether a closed string's mitred offset `offset` (vertex for vertex)
+/// needs untangling: it meets itself, or it comes out wound the other way
+/// round, part of it turned over past where it shrank to nothing.
+pub(crate) fn offset_needs_untangling(source: &[DVec3], offset: &[DVec3]) -> bool {
+    signed_area_xy(source).signum() != signed_area_xy(offset).signum() || closed_meets_itself(offset)
+}
+
+/// Whether a closed string's offset `offset` (vertex for vertex) is turned
+/// over: set in past where `source` shrinks to nothing, its corners pass
+/// through each other and every edge comes out running back the way its
+/// source edge runs (or not at all). Turned over through its middle, a
+/// shape keeps its winding, so its area says nothing of it; and a mitred
+/// offset has no other sign of having collapsed.
+pub(crate) fn offset_turned_over(source: &[DVec3], offset: &[DVec3]) -> bool {
+    let count = source.len();
+    if count < 2 || offset.len() != count {
+        return false;
+    }
+    (0..count).all(|index| {
+        let next = (index + 1) % count;
+        let along = (source[next] - source[index]).truncate();
+        let moved = (offset[next] - offset[index]).truncate();
+        along.dot(moved) <= 0.0
+    })
+}
+
 pub(crate) fn geometric_offset(verts: &[DVec3], closed: bool, signed_horiz_dist: f64, z_delta: f64) -> Vec<DVec3> {
     let n = verts.len();
     if n < 2 {
@@ -752,128 +852,6 @@ pub(crate) fn point_in_polyline_xy(point: DVec2, verts: &[DVec3]) -> bool {
     )
 }
 
-/// Check if segment AB strictly intersects segment CD (not at shared endpoints).
-/// Returns the intersection point and its parameter along AB if found.
-fn seg_seg_intersection_2d(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> Option<(DVec2, f64)> {
-    match crate::model::kernel::segment_segment(a, b, c, d) {
-        crate::model::kernel::SegSeg::Crossing { point, t, .. } => Some((point, t)),
-        _ => None,
-    }
-}
-
-/// Remove self-intersections from a closed polyline offset result (XY plane).
-///
-/// When an inward offset is too large for a sharp corner the adjacent edges
-/// fold back and cross, creating a small loop. Keeps the loop with the
-/// greatest XY area (the polyline body); see `split_self_intersection_loops`
-/// for callers that want the discarded lobes too.
-pub(crate) fn remove_self_intersections(verts: Vec<DVec3>) -> Vec<DVec3> {
-    if verts.len() < 4 {
-        return verts;
-    }
-    split_self_intersection_loops(verts).into_iter().next().unwrap_or_default()
-}
-
-/// Split a closed ring at its self-crossings into simple loops, largest
-/// XY area first, in a single sweep.
-///
-/// All pairwise edge crossings are collected once (`kernel::segment_segment`
-/// `Crossing`s only - endpoint touches don't split), inserted along their
-/// edges, then loops are peeled with a stack: when the ring returns to a
-/// crossing it has already passed, the vertices in between form one loop.
-/// Interleaved (non-nested) crossing pairs - which offset fold-backs don't
-/// produce - degrade gracefully: the orphaned occurrence stays a pass-through
-/// vertex. Each crossing keeps the Z interpolated on its own edge.
-pub(crate) fn split_self_intersection_loops(verts: Vec<DVec3>) -> Vec<Vec<DVec3>> {
-    let n = verts.len();
-    if n < 4 {
-        return vec![verts];
-    }
-
-    // Crossing occurrences per edge: (t along edge, pair id, position).
-    let mut edge_hits: Vec<Vec<(f64, usize, DVec3)>> = vec![Vec::new(); n];
-    let mut pair_count = 0usize;
-    for i in 0..n {
-        let a = verts[i];
-        let b = verts[(i + 1) % n];
-        // Adjacent edges share an endpoint and cannot properly cross.
-        let j_end = if i == 0 { n - 1 } else { n };
-        for j in (i + 2)..j_end {
-            let c = verts[j];
-            let d = verts[(j + 1) % n];
-            if let Some((point, t)) = seg_seg_intersection_2d(a.truncate(), b.truncate(), c.truncate(), d.truncate()) {
-                let u = {
-                    let cd = (d - c).truncate();
-                    let len_sq = cd.length_squared();
-                    if len_sq > 0.0 { (point - c.truncate()).dot(cd) / len_sq } else { 0.0 }
-                };
-                let z_i = a.z + t * (b.z - a.z);
-                let z_j = c.z + u * (d.z - c.z);
-                edge_hits[i].push((t, pair_count, DVec3::new(point.x, point.y, z_i)));
-                edge_hits[j].push((u, pair_count, DVec3::new(point.x, point.y, z_j)));
-                pair_count += 1;
-            }
-        }
-    }
-    if pair_count == 0 {
-        return vec![verts];
-    }
-
-    // The ring with crossings inserted in edge order.
-    struct AugVertex {
-        pos: DVec3,
-        pair: Option<usize>,
-    }
-    let mut ring: Vec<AugVertex> = Vec::with_capacity(n + 2 * pair_count);
-    for (i, hits) in edge_hits.iter_mut().enumerate() {
-        ring.push(AugVertex { pos: verts[i], pair: None });
-        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
-        for &(_, pair, pos) in hits.iter() {
-            ring.push(AugVertex { pos, pair: Some(pair) });
-        }
-    }
-
-    // Peel loops: `open[pair]` is the stack index of the crossing's first
-    // occurrence; the second occurrence closes the loop between them.
-    let mut open: Vec<Option<usize>> = vec![None; pair_count];
-    let mut stack: Vec<AugVertex> = Vec::with_capacity(ring.len());
-    let mut loops: Vec<Vec<DVec3>> = Vec::new();
-    for vertex in ring {
-        let Some(pair) = vertex.pair else {
-            stack.push(vertex);
-            continue;
-        };
-        match open[pair] {
-            None => {
-                open[pair] = Some(stack.len());
-                stack.push(vertex);
-            }
-            Some(start) => {
-                let peeled: Vec<DVec3> = stack.drain(start..).map(|v| v.pos).collect();
-                // Crossings whose partner left with the peeled loop become
-                // plain vertices when the partner shows up later.
-                for slot in open.iter_mut() {
-                    if slot.is_some_and(|index| index >= start) {
-                        *slot = None;
-                    }
-                }
-                if peeled.len() >= 3 {
-                    loops.push(peeled);
-                }
-                // The ring passes through the crossing once more.
-                stack.push(AugVertex { pos: vertex.pos, pair: None });
-            }
-        }
-    }
-    let remainder: Vec<DVec3> = stack.into_iter().map(|v| v.pos).collect();
-    if remainder.len() >= 3 {
-        loops.push(remainder);
-    }
-
-    loops.sort_by(|a, b| signed_area_xy(b).abs().total_cmp(&signed_area_xy(a).abs()));
-    loops
-}
-
 fn compute_offset_centroid(verts: &[DVec3], closed: bool, signed_dist: f64) -> DVec2 {
     let offset = geometric_offset(verts, closed, signed_dist, 0.0);
     if offset.is_empty() {
@@ -923,4 +901,53 @@ pub(crate) fn symmetric_eigen(matrix: DMat3) -> ([f64; 3], [DVec3; 3]) {
     let mut order = [0, 1, 2];
     order.sort_by(|&i, &j| a[j][j].total_cmp(&a[i][i]));
     (order.map(|i| a[i][i]), order.map(|i| DVec3::new(v[0][i], v[1][i], v[2][i])))
+}
+
+#[cfg(test)]
+mod offset_tests {
+    use glam::DVec3;
+
+    use super::{geometric_offset, offset_needs_untangling, untangled_closed_offset};
+
+    fn ring(points: &[(f64, f64)]) -> Vec<DVec3> {
+        points.iter().map(|&(x, y)| DVec3::new(x, y, 5.0)).collect()
+    }
+
+    /// Two 40 m lobes joined by a 10 m waist, anticlockwise.
+    fn dumbbell() -> Vec<DVec3> {
+        ring(&[
+            (0.0, 0.0),
+            (40.0, 0.0),
+            (40.0, 15.0),
+            (60.0, 15.0),
+            (60.0, 0.0),
+            (100.0, 0.0),
+            (100.0, 40.0),
+            (60.0, 40.0),
+            (60.0, 25.0),
+            (40.0, 25.0),
+            (40.0, 40.0),
+            (0.0, 40.0),
+        ])
+    }
+
+    #[test]
+    fn a_clean_offset_is_left_as_mitred() {
+        let square = ring(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]);
+        // Left of an anticlockwise ring is inside it.
+        assert!(!offset_needs_untangling(&square, &geometric_offset(&square, true, 2.0, 0.0)));
+    }
+
+    #[test]
+    fn a_pinched_offset_splits_and_a_spent_one_collapses() {
+        let shape = dumbbell();
+        let mitred = geometric_offset(&shape, true, 6.0, 1.0);
+        assert!(offset_needs_untangling(&shape, &mitred), "the waist folds over");
+        let pieces = untangled_closed_offset(&shape, 6.0, 1.0);
+        assert_eq!(pieces.len(), 2, "one piece for each lobe");
+        assert!(pieces.iter().flatten().all(|point| (point.z - 6.0).abs() < 1.0e-9), "raised as asked");
+        assert!(untangled_closed_offset(&shape, 25.0, 0.0).is_empty(), "set in past both lobes");
+        let reversed: Vec<DVec3> = shape.iter().rev().copied().collect();
+        assert_eq!(untangled_closed_offset(&reversed, -6.0, 0.0).len(), 2, "wound either way");
+    }
 }

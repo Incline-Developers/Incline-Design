@@ -535,7 +535,7 @@ impl<'a> App<'a> {
         Ok(())
     }
 
-    pub(super) fn execute_file_dialog_action(&mut self, action: FileDialogAction) -> Result<()> {
+    pub(crate) fn execute_file_dialog_action(&mut self, action: FileDialogAction) -> Result<()> {
         #[cfg(not(target_arch = "wasm32"))]
         let replaces_project = matches!(
             &action,
@@ -1498,6 +1498,26 @@ impl<'a> App<'a> {
         return !self.browser_project_loads_pending.is_empty();
     }
 
+    /// Take the welcome splash down, as its close does, and as the AI's
+    /// first change does: the user clicks it away to start work, but work
+    /// done over MCP never clicks, and would go on behind it.
+    pub(crate) fn dismiss_startup_dialog(&mut self) -> Result<()> {
+        // A project picked from the splash is still opening: leave the
+        // splash up until it lands rather than dropping the user on the
+        // empty startup project while the load runs behind it.
+        if self.startup_dialog_dismissed || self.project_open_pending() {
+            return Ok(());
+        }
+        self.startup_dialog_dismissed = true;
+        // Dismissing the splash leaves the application on a project,
+        // never on nothing: closing a project puts the splash back, so
+        // this is the path that has to restore one.
+        if !self.workspace.has_active_project() {
+            self.start_untitled_project()?;
+        }
+        Ok(())
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn activate_tracked_project(&mut self, path: PathBuf) -> Result<()> {
         if self.workspace.active_project().and_then(|project| project.path.as_ref()) == Some(&path) {
@@ -1840,22 +1860,7 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn choose_export_haul_roads(&mut self) {
-        let Some(document) = self.workspace.active_document() else { return };
-        let mut project = crate::model::project::new_empty(None);
-        let layer = project.document.add_layer(tr!("haul-roads"), None, [0.7, 0.8, 0.9, 1.0], true, 0.0);
-        for road in &document.haulage().roads {
-            let id = project.document.allocate_object_id();
-            let verts = document.haulage().points(road).into_iter().map(crate::model::PolyVertex::straight).collect();
-            project.document.insert_object(crate::model::Object::Polyline {
-                id,
-                layer,
-                verts,
-                closed: false,
-                color: crate::model::ObjectColor::ByLayer,
-                fill: crate::model::FillStyle::Clear,
-                line_weight: 3.0,
-            });
-        }
+        let Some(project) = self.haul_roads_project() else { return };
         #[cfg(target_arch = "wasm32")]
         match crate::model::formats::dxf::export_bytes(&project, None) {
             Ok(bytes) => Self::trigger_browser_download("haul-roads.dxf".to_owned(), bytes, "application/dxf", tr!("err-file-desc-haul-roads")),
@@ -1871,6 +1876,28 @@ impl<'a> App<'a> {
                 .into_path();
             Some(FileDialogAction::ExportHaulRoads { project: Box::new(project), path })
         });
+    }
+
+    /// The haul roads as a project of one layer of polylines, ready to write
+    /// as DXF. `None` with no project open.
+    pub(crate) fn haul_roads_project(&self) -> Option<crate::model::project::ProjectFile> {
+        let document = self.workspace.active_document()?;
+        let mut project = crate::model::project::new_empty(None);
+        let layer = project.document.add_layer(tr!("haul-roads"), None, [0.7, 0.8, 0.9, 1.0], true, 0.0);
+        for road in &document.haulage().roads {
+            let id = project.document.allocate_object_id();
+            let verts = document.haulage().points(road).into_iter().map(crate::model::PolyVertex::straight).collect();
+            project.document.insert_object(crate::model::Object::Polyline {
+                id,
+                layer,
+                verts,
+                closed: false,
+                color: crate::model::ObjectColor::ByLayer,
+                fill: crate::model::FillStyle::Clear,
+                line_weight: 3.0,
+            });
+        }
+        Some(project)
     }
 
     pub(crate) fn choose_export_project_dxf(&mut self, project_runtime_id: u32) {

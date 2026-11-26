@@ -66,6 +66,13 @@ impl Hint for Response {
     }
 }
 
+/// `text` on a hint's card beside the pointer, for something under it that
+/// is no widget: a marker in the viewport, say. Shown while this is called.
+pub(crate) fn hint_at_pointer(ctx: &egui::Context, id: egui::Id, text: impl Into<WidgetText>) {
+    let tooltip = egui::Tooltip::always_open(ctx.clone(), egui::LayerId::background(), id, egui::PopupAnchor::Pointer);
+    show(tooltip, |ui| hint_text(ui, text.into()));
+}
+
 /// The card's fill: a step below the panel it opens over, short of the gap
 /// between regions, so it reads as lying on the panel rather than as a hole.
 pub(crate) fn fill(visuals: &egui::Visuals) -> egui::Color32 {

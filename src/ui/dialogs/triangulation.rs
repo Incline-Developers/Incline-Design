@@ -55,7 +55,7 @@ fn selection_summary(object_ids: &[ObjectId], document: &Document) -> String {
     for &oid in object_ids {
         match document.get_object(oid) {
             Some(Object::Point { .. }) => points += 1,
-            Some(Object::Polyline { closed: true, .. }) => polylines += 1,
+            Some(Object::Polyline { closed: true, .. } | Object::PitDesign { .. }) => polylines += 1,
             Some(Object::Polyline { closed: false, .. }) => strings += 1,
             Some(Object::Circle { .. }) => circles += 1,
             Some(Object::Text { .. }) => texts += 1,
@@ -2829,6 +2829,97 @@ fn difference_surfaces_blocker(upper: Option<&crate::ui::state::UiTriangulationE
         }
     }
     name.trim().is_empty().then(|| tr!("tri-difference-need-name"))
+}
+
+/// Height the surface checklist is allowed before it scrolls.
+const JOIN_LIST_MAX_HEIGHT: f32 = 220.0;
+
+/// Join surfaces that fit together into one, sharing the points where they
+/// meet: a topography cut back to a pit shell and the pit trimmed to it, say.
+pub(crate) fn draw_join_surfaces_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    if !editor.tri_join_open {
+        return;
+    }
+
+    let loaded: Vec<_> = project.triangulations.iter().filter(|surface| surface.is_loaded).collect();
+    let mut open = true;
+    DragableMenu::new("join_surfaces_dialog", tr!("tri-join-surfaces"))
+        .open(&mut open)
+        .min_width(PICKER_DIALOG_MIN_WIDTH)
+        .max_width(PICKER_DIALOG_MAX_WIDTH)
+        .show(ui.ctx(), |ui| {
+            menu::menu_note(ui, tr!("tri-join-surfaces-note"));
+            ui.add_space(4.0);
+
+            // Surfaces unloaded or removed since the dialog opened can no
+            // longer be joined, so they leave the list rather than block it.
+            editor.tri_join_sources.retain(|id| loaded.iter().any(|surface| surface.id == *id));
+            MenuField::new(tr!("tri-surfaces"))
+                .help_text(tr!("tri-join-sources-help"))
+                .show(ui, |ui, _row_height, _field_width| {
+                    ui.label(tr!("tri-join-selected-count", count = editor.tri_join_sources.len().to_string()));
+                });
+            egui::ScrollArea::vertical()
+                .id_salt("join_surfaces_list")
+                .max_height(JOIN_LIST_MAX_HEIGHT)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    if loaded.is_empty() {
+                        ui.weak(tr!("tri-none-loaded"));
+                    }
+                    for surface in &loaded {
+                        if ChecklistRow::new(&surface.name, Tick::of(editor.tri_join_sources.contains(&surface.id), false))
+                            .show(ui)
+                            .toggled
+                        {
+                            match editor.tri_join_sources.iter().position(|id| *id == surface.id) {
+                                Some(index) => {
+                                    editor.tri_join_sources.remove(index);
+                                }
+                                None => editor.tri_join_sources.push(surface.id),
+                            }
+                        }
+                    }
+                });
+
+            ui.add_space(4.0);
+            ui.separator();
+
+            MenuFieldText::new(tr!("tri-create-output-name"), &mut editor.tri_join_name_input)
+                .width(picker_control_width(ui))
+                .hint_text(tr!("tri-joined-surface"))
+                .show(ui);
+            MenuFieldBool::new(tr!("tri-hide-unload-sources"), &mut editor.tri_join_unload_sources)
+                .help_text(tr!("tri-join-unload-help"))
+                .show(ui);
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            let can_run = editor.tri_join_sources.len() >= 2 && !editor.tri_join_name_input.trim().is_empty();
+            menu::menu_actions(ui, |ui| {
+                let confirm = menu::dialog_confirmed(ui.ctx());
+                // Joined in list order, so the result does not depend on the
+                // order they were ticked in.
+                if ui.add(MenuButton::new(tr!("tri-join")).primary().enabled(can_run)).clicked() || (confirm && can_run) {
+                    commands.push(UiCommand::ExecuteJoinSurfaces {
+                        surface_ids: loaded
+                            .iter()
+                            .filter(|surface| editor.tri_join_sources.contains(&surface.id))
+                            .map(|surface| surface.id)
+                            .collect(),
+                        name: editor.tri_join_name_input.trim().to_owned(),
+                        unload_sources: editor.tri_join_unload_sources,
+                    });
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                    editor.tri_join_open = false;
+                }
+            });
+        });
+    if !open {
+        editor.tri_join_open = false;
+    }
 }
 
 pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {

@@ -84,6 +84,19 @@ pub(crate) struct HaulRoad {
     pub(crate) to: NodeId,
     pub(crate) verts: Vec<DVec3>,
     pub(crate) speed_limit_kph: Option<f64>,
+    /// The pit design whose ramp it is, where it is one: kept in step with
+    /// the design, and gone with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pit: Option<PitRoad>,
+}
+
+/// A road that is a pit design's ramp: the design's object id, and what of
+/// the design it was made from, to tell when it is out of step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PitRoad {
+    pub(crate) design: u64,
+    pub(crate) from: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -233,6 +246,7 @@ impl HaulNetwork {
             to,
             verts,
             speed_limit_kph: None,
+            pit: None,
         });
         Ok(id)
     }

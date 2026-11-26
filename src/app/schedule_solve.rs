@@ -576,13 +576,17 @@ pub(crate) fn validate_input(input: &BlendInput, horizon: Option<&BlendInput>, o
     if destinations.len() != input.destinations.len() {
         return Err(crate::i18n::tr!("err-sched-duplicate-destination"));
     }
+    // A stockpile nothing delivers to or reclaims from is not built (capture
+    // leaves it out of the piles), so its destination names a pile that is
+    // not there; only one a movement goes to has to have its pile.
+    let delivered_to: BTreeSet<_> = input.movements.iter().map(|movement| movement.destination).collect();
     for destination in &input.destinations {
         if cancel.is_cancelled() {
             return Ok(());
         }
         if destination.capacity_t.is_some_and(|cap| !cap.is_finite() || cap < 0.0)
             || destination.crusher_daily_t.iter().flatten().any(|cap| !cap.is_finite() || *cap < 0.0)
-            || matches!(destination.kind, DestinationKind::Stockpile(pile) if !pile_ids.contains(&pile))
+            || matches!(destination.kind, DestinationKind::Stockpile(pile) if !pile_ids.contains(&pile) && delivered_to.contains(&destination.id))
         {
             return Err(crate::i18n::tr!("err-sched-invalid-destination", id = destination.id.0.to_string()));
         }

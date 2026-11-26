@@ -437,10 +437,13 @@ fn collapsed_polyline_vertex(object: &Object, vertex_index: usize) -> Option<Obj
 
 fn without_polyline_vertex(object: &Object, vertex_index: usize) -> Option<Object> {
     let mut result = object.clone();
-    let Object::Polyline { verts, closed, .. } = &mut result else {
-        return None;
+    // A pit design's string is always closed; its benches follow it.
+    let (verts, closed) = match &mut result {
+        Object::Polyline { verts, closed, .. } => (verts, *closed),
+        Object::PitDesign { verts, .. } => (verts, true),
+        _ => return None,
     };
-    let minimum = if *closed { 3 } else { 2 };
+    let minimum = if closed { 3 } else { 2 };
     if verts.len() <= minimum || vertex_index >= verts.len() {
         return None;
     }
@@ -449,7 +452,7 @@ fn without_polyline_vertex(object: &Object, vertex_index: usize) -> Option<Objec
     // single bulge for that new segment, so make only the joined segment
     // straight. Endpoint removal from an open line keeps the untouched
     // outgoing bulges exactly as authored.
-    if *closed {
+    if closed {
         let previous = if vertex_index == 0 { verts.len() - 1 } else { vertex_index - 1 };
         verts[previous].bulge = 0.0;
     } else if vertex_index > 0 {

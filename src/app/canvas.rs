@@ -145,11 +145,40 @@ impl<'a> App<'a> {
         self.invalidate_geometry();
     }
 
+    /// A click with no tool up on `clicked`: the second on the same bench
+    /// design in quick succession opens it in Bench Design, as a double click
+    /// opens a thing to edit it. Whether it did.
+    fn double_clicked_pit(&mut self, clicked: Option<SceneEntityId>) -> bool {
+        let pit = match clicked {
+            Some(SceneEntityId::Object(id)) if self.editor.active_tool == ActiveTool::None && matches!(self.operand_object(id), Some(Object::PitDesign { .. })) => id,
+            _ => {
+                self.last_pit_click = None;
+                return false;
+            }
+        };
+        let now = web_time::Instant::now();
+        let again = self.last_pit_click.is_some_and(|(last, at)| last == pit && now.duration_since(at) <= DOUBLE_CLICK);
+        self.last_pit_click = (!again).then_some((pit, now));
+        if !again {
+            return false;
+        }
+        self.activate_project_for_object(pit);
+        self.editor.selected_handles.clear();
+        self.editor.selected_handles.insert(SceneEntityId::Object(pit));
+        self.refresh_selection_counts();
+        self.open_pit_design();
+        self.invalidate_geometry();
+        true
+    }
+
     /// Update the candidate highlight and description shown by dialog-driven
     /// viewport pickers. Work is invoked at the existing bounded hover-poll
     /// rate, and geometry is invalidated only when the candidate changes.
     pub(crate) fn update_viewport_field_pick_hover(&mut self) {
-        let boundary_picker = self.editor.triangulation_pick_target.is_some_and(TriangulationPickTarget::picks_boundary);
+        // A Pit Design slope region's outline is any closed polyline, as a
+        // boundary is.
+        let boundary_picker =
+            self.editor.triangulation_pick_target.is_some_and(TriangulationPickTarget::picks_boundary) || self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_region);
         if self.editor.triangulation_pick_target.is_some() && !boundary_picker {
             let hovered = self
                 .graphics
@@ -545,6 +574,9 @@ impl<'a> App<'a> {
             // Prismoids' pick a click in front of what it hit takes it.
             if self.pick_masked_prismoid_cell(pending_selection_click.as_ref()) {
                 self.invalidate_geometry();
+                return;
+            }
+            if self.double_clicked_pit(pending_selection_click.map(|pick| pick.entity)) {
                 return;
             }
             if let Some(pick) = pending_selection_click {
@@ -1060,8 +1092,10 @@ fn update_auto_derived_name(output: &mut String, is_auto: bool, source: &str, su
     }
 }
 
+/// Whether Create Triangulation takes this object: a polyline, or a pit
+/// design, which gives it every string it draws.
 pub(crate) fn is_triangulation_polyline(obj: &Object) -> bool {
-    matches!(obj, Object::Polyline { .. }) && obj.tessellated_path().is_some_and(|(points, closed)| points.len() >= if closed { 3 } else { 2 })
+    matches!(obj, Object::Polyline { .. } | Object::PitDesign { .. }) && obj.tessellated_path().is_some_and(|(points, closed)| points.len() >= if closed { 3 } else { 2 })
 }
 
 fn is_drill_pattern_boundary(object: &Object) -> bool {
@@ -1084,3 +1118,6 @@ fn fill_seam_slot(seam: &mut [Option<crate::model::triangulation::TriangulationI
         seam[1 - slot] = None;
     }
 }
+
+/// How soon a second click must follow the first to make a double click.
+const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(450);

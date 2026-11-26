@@ -272,3 +272,70 @@ macro_rules! tr {
     };
 }
 pub(crate) use tr;
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::{LOADER, LanguageChoice, select_language};
+
+    /// The ids of the messages `choice`'s bundle parsed: a message that
+    /// does not parse is dropped from it, not reported.
+    fn parsed(choice: LanguageChoice) -> BTreeSet<String> {
+        select_language(choice);
+        LOADER.with_message_iter(&choice.lang_id(), |messages| messages.map(|message| message.id.name.to_owned()).collect())
+    }
+
+    /// The ids of the messages `choice`'s file holds, read as text.
+    fn written(choice: LanguageChoice) -> BTreeSet<String> {
+        let path = format!("{}/i18n/{}/incline_design.ftl", env!("CARGO_MANIFEST_DIR"), choice.lang_id());
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"));
+        text.lines()
+            .filter_map(|line| {
+                let (id, _) = line.split_once(" =")?;
+                (!id.is_empty() && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')).then(|| id.to_owned())
+            })
+            .collect()
+    }
+
+    /// Every language's file parses without an error: a stray line drops no
+    /// message, but is an error the loader logs on every start.
+    #[test]
+    fn every_language_parses_cleanly() {
+        let mut errors = Vec::new();
+        for choice in LanguageChoice::ALL {
+            let path = format!("{}/i18n/{}/incline_design.ftl", env!("CARGO_MANIFEST_DIR"), choice.lang_id());
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"));
+            if let Err((_, found)) = fluent_syntax::parser::parse(text.as_str()) {
+                errors.extend(found.iter().map(|error| {
+                    let line = text[..error.pos.start.min(text.len())].matches('\n').count() + 1;
+                    format!("{choice:?} line {line}: {:?}", error.kind)
+                }));
+            }
+        }
+        assert!(errors.is_empty(), "parse errors:\n{}", errors.join("\n"));
+    }
+
+    #[test]
+    fn every_language_parses_whole() {
+        let mut dropped = Vec::new();
+        for choice in LanguageChoice::ALL {
+            let have = parsed(choice);
+            dropped.extend(written(choice).difference(&have).map(|id| format!("{choice:?}: {id}")));
+        }
+        select_language(LanguageChoice::English);
+        assert!(dropped.is_empty(), "messages that do not parse:\n{}", dropped.join("\n"));
+    }
+
+    /// Pit Design's messages, in every language.
+    #[test]
+    fn pit_design_is_translated() {
+        let english: BTreeSet<String> = written(LanguageChoice::English).into_iter().filter(|id| id.starts_with("pit-design-")).collect();
+        assert!(english.len() > 100);
+        let mut missing = Vec::new();
+        for choice in LanguageChoice::ALL {
+            missing.extend(english.difference(&written(choice)).map(|id| format!("{choice:?}: {id}")));
+        }
+        assert!(missing.is_empty(), "untranslated:\n{}", missing.join("\n"));
+    }
+}

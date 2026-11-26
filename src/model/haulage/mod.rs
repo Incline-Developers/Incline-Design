@@ -3,4 +3,4 @@
 pub(crate) mod network;
 pub(crate) mod routing;
 
-pub(crate) use network::{HaulNetwork, HaulRoad, NodeId, NodeRole, RoadId};
+pub(crate) use network::{HaulNetwork, HaulRoad, NodeId, NodeRole, PitRoad, RoadId};

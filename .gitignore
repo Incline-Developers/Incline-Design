@@ -10,6 +10,8 @@ tmp/
 .codex/
 .qwen/
 .zcode/
+AGENTS.md
+CLAUDE.md
 
 # Profiling
 flamegraph.svg

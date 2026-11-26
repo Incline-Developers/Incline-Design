@@ -125,6 +125,18 @@ pub(crate) fn transform_object(transform: &crate::model::crs::SurveyTransform, o
                 vertex.pos = transform.point(vertex.pos)?;
             }
         }
+        // Its string and ramp starts are restated; its benches are worked out
+        // again from them, so none are kept in the old coordinates.
+        Object::PitDesign { verts, pit, .. } => {
+            let level = verts.iter().map(|vertex| vertex.pos.z).sum::<f64>() / verts.len().max(1) as f64;
+            for vertex in verts.iter_mut() {
+                vertex.pos = transform.point(vertex.pos)?;
+            }
+            for start in pit.settings.ramps.iter_mut().filter_map(|ramp| ramp.start.as_mut()) {
+                *start = transform.point(start.extend(level))?.truncate();
+            }
+            pit.derived = None;
+        }
         Object::Text { pos, rotation, height, .. } => {
             *pos = transform.point(*pos)?;
             if let Some(grid) = transform.grid() {

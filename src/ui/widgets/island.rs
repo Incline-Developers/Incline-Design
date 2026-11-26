@@ -125,6 +125,11 @@ impl Island {
         if let Some(fill) = self.fill {
             frame = frame.fill(fill);
         }
+        let frame = match (self.bare, self.flush) {
+            (true, _) => egui::Frame::NONE,
+            (false, true) => frame.inner_margin(egui::Margin::ZERO),
+            (false, false) => frame,
+        };
         // No island takes more than half of what is left when it is claimed.
         // Each one would otherwise keep the width it was dragged to until the
         // window ran out, leaving the last island and the workspace to absorb
@@ -154,11 +159,7 @@ impl Island {
             .min_size(min_width)
             .max_size(max_width)
             .show_separator_line(false)
-            .frame(match (self.bare, self.flush) {
-                (true, _) => egui::Frame::NONE,
-                (false, true) => frame.inner_margin(egui::Margin::ZERO),
-                (false, false) => frame,
-            })
+            .frame(frame)
             .show(ui, |ui| {
                 let rect = ui.available_rect_before_wrap();
                 ui.set_clip_rect(ui.clip_rect().intersect(rect));
