@@ -179,6 +179,9 @@ pub(crate) struct Walls<'a> {
     pub(crate) fixed_berm: Option<f64>,
     /// The tightest the walls may turn: the design's, or the zone's.
     pub(crate) wall_radius: f64,
+    /// Whether a bench's start ring has its noses rounded for its face, so
+    /// the ring the face reaches comes out round them at `wall_radius`.
+    pub(crate) round_noses: bool,
 }
 
 impl Walls<'_> {

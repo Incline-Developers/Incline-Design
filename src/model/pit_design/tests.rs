@@ -764,15 +764,17 @@ fn conditioned_rings_are_lighter_and_no_steeper() {
             let name = format!("{kind} {direction:?} {layout:?}");
             let design = built(kind, elevation, &spec, None);
             let points: Vec<DVec3> = outline(kind).iter().map(|point| point.extend(elevation)).collect();
-            let raw = super::design_with(&Base::from_points(&points).unwrap(), &spec, None, &|| false, Additions::FlatsFirst, false)
+            // Its rings left as they come: neither conditioned nor with their
+            // noses rounded for their faces.
+            let raw = super::design_with(&Base::from_points(&points).unwrap(), &spec, None, &|| false, Additions::FlatsFirst, false, false)
                 .unwrap()
                 .0;
             assert_sound(&name, &design, &spec.ramps[0]);
             assert!(design.benches >= raw.benches, "{name}: {} benches conditioned, {} not", design.benches, raw.benches);
             let short = steeper_than_cut(&design, spec.face_angle);
             assert!(short <= 1.0e-3, "{name}: a crest {short:.4} m nearer its toe than the face's run");
-            // Lighter wherever the design built with conditioned rings got
-            // as far as one without.
+            // Lighter wherever the design built with its rings tidied got as
+            // far as one without.
             if crowded(&design) != crowded(&raw) {
                 assert!(
                     crowded(&design) * 2 <= crowded(&raw),
@@ -1749,6 +1751,39 @@ fn flag_look() {
     let base: Vec<DVec3> = points.iter().map(|p| p.extend(if down { 500.0 } else { 100.0 })).collect();
     let design = design(&Base::from_points(&base).unwrap(), &spec, None, &|| false).unwrap();
     println!("end {:?} benches {}", design.end, design.benches);
+    // The surface Create Triangulation makes through it, as OBJ.
+    if let Ok(path) = std::env::var("ZZ_OBJ") {
+        let strings: Vec<(Vec<DVec3>, bool)> = design
+            .strings
+            .iter()
+            .filter(|string| string.kind != StringKind::RampCentreline)
+            .map(|string| (string.points.clone(), string.closed))
+            .collect();
+        let (vertices, faces) = crate::app::commands::triangulation::creation::surface_points_through_strings(strings).unwrap();
+        let mut obj = String::new();
+        for v in &vertices {
+            obj += &format!("v {} {} {}\n", v.x, v.z, -v.y);
+        }
+        for f in &faces {
+            obj += &format!("f {} {} {}\n", f[0] + 1, f[1] + 1, f[2] + 1);
+        }
+        std::fs::write(path, obj).unwrap();
+    }
+    if let Ok(text) = std::env::var("ZZ_NEAR") {
+        let v: Vec<f64> = text.split(',').map(|v| v.parse().unwrap()).collect();
+        let (at, reach) = (DVec2::new(v[0], v[1]), v[2]);
+        for string in design.strings.iter().filter(|string| string.closed) {
+            let near: Vec<String> = string
+                .points
+                .iter()
+                .filter(|p| p.truncate().distance(at) < reach)
+                .map(|p| format!("({:.1},{:.1})", p.x, p.y))
+                .collect();
+            if !near.is_empty() {
+                println!("near {:?} z {:.0}: {}", string.kind, string.points[0].z, near.join(" "));
+            }
+        }
+    }
     for (index, bench) in design.report.iter().enumerate() {
         for road in &bench.ramps {
             println!("bench {index} at {:.1}: switchback {} turn at {:?}", bench.elevation, road.switchback, road.turn_at);
@@ -1836,4 +1871,116 @@ fn flag_look() {
     }
     svg += "</svg>";
     std::fs::write(std::env::var("ZZ_SVG").unwrap(), svg).unwrap();
+}
+
+/// The triangles of each design's surface, as Create Triangulation makes
+/// it, that stand steeper than its faces are cut: slivers where a toe and a
+/// crest do not line up. `ZZ_STEEP_LIST` prints each.
+#[test]
+#[ignore]
+fn steep_triangles() {
+    let mut total = 0;
+    for kind_name in ["rect", "circle", "ell", "star", "floor", "crest"] {
+        let points = outline(kind_name);
+        for direction in [Direction::Up, Direction::Down] {
+            for layout in [
+                Layout::Spiral,
+                Layout::Switchback {
+                    every: 3,
+                    inside_radius: 15.0,
+                    widening: 0.0,
+                    grade: 0.0,
+                },
+            ] {
+                for (bench, face, berm) in [(10.0, 70.0, 6.0), (15.0, 60.0, 8.0)] {
+                    let mut spec = with_ramp(direction, layout, points[2], false, Stop::Benches(8), (0.1, berm));
+                    spec.bench_height = bench;
+                    spec.face_angle = face;
+                    spec.wall_radius = 20.0;
+                    spec.ramps[0].width = 25.0;
+                    let elevation = if direction == Direction::Up { 100.0 } else { 500.0 };
+                    let pts: Vec<DVec3> = points.iter().map(|p| p.extend(elevation)).collect();
+                    let Ok(design) = design(&Base::from_points(&pts).unwrap(), &spec, None, &|| false) else {
+                        continue;
+                    };
+                    let strings: Vec<(Vec<DVec3>, bool)> = design
+                        .strings
+                        .iter()
+                        .filter(|string| string.kind != StringKind::RampCentreline)
+                        .map(|string| (string.points.clone(), string.closed))
+                        .collect();
+                    let (vertices, faces) = crate::app::commands::triangulation::creation::surface_points_through_strings(strings).unwrap();
+                    let limit = (face + 3.0).to_radians().tan();
+                    let mut off = 0;
+                    let mut on_faces = 0;
+                    for face_indices in &faces {
+                        let [a, b, c] = face_indices.map(|index| {
+                            let v = vertices[index as usize];
+                            DVec3::new(v.x, v.y, v.z)
+                        });
+                        let (low, high) = (a.z.min(b.z).min(c.z), a.z.max(b.z).max(c.z));
+                        // A face's own: its points on two levels a bench apart.
+                        let level = |z: f64| (z - low).abs() < 1.0e-6 || (z - high).abs() < 1.0e-6;
+                        if (high - low - bench).abs() > 1.0e-6 || ![a, b, c].iter().all(|p| level(p.z)) {
+                            continue;
+                        }
+                        let normal = (b - a).cross(c - a);
+                        if normal.length() < 0.1 {
+                            continue;
+                        }
+                        on_faces += 1;
+                        let slope = (normal.truncate().length() / normal.z.abs()).atan().to_degrees();
+                        if (slope - face).abs() > 8.0 {
+                            off += 1;
+                        }
+                    }
+                    println!("  faces {on_faces} off {off}");
+                    let mut steep = 0;
+                    let mut worst: (f64, DVec3) = (0.0, DVec3::ZERO);
+                    for face_indices in &faces {
+                        let [a, b, c] = face_indices.map(|index| {
+                            let v = vertices[index as usize];
+                            DVec3::new(v.x, v.y, v.z)
+                        });
+                        let normal = (b - a).cross(c - a);
+                        let flat = normal.truncate().length();
+                        if normal.z.abs() < 1.0e-9 || flat / normal.z.abs() <= limit {
+                            continue;
+                        }
+                        let area = normal.length() * 0.5;
+                        if area < 0.05 {
+                            continue;
+                        }
+                        steep += 1;
+                        let slope = (flat / normal.z.abs()).atan().to_degrees();
+                        if slope > worst.0 {
+                            worst = (slope, (a + b + c) / 3.0);
+                        }
+                        if std::env::var("ZZ_STEEP_LIST").is_ok() {
+                            println!("  steep {slope:.1}° area {area:.1} at {:.1}", (a + b + c) / 3.0);
+                        }
+                    }
+                    total += steep;
+                    let close = design
+                        .strings
+                        .iter()
+                        .filter(|string| string.closed)
+                        .map(|string| {
+                            let n = string.points.len();
+                            (0..n).filter(|&i| string.points[i].truncate().distance(string.points[(i + 1) % n].truncate()) < 0.3).count()
+                        })
+                        .sum::<usize>();
+                    println!("  close pairs {close}");
+                    println!(
+                        "{kind_name:6} {direction:?} {} {bench}/{face}: {steep} steep of {}, worst {:.1}° at {:.1}",
+                        if matches!(layout, Layout::Spiral) { "spiral    " } else { "switchback" },
+                        faces.len(),
+                        worst.0,
+                        worst.1
+                    );
+                }
+            }
+        }
+    }
+    println!("total steep triangles {total}");
 }

@@ -892,6 +892,39 @@ pub(crate) fn rounded_along(ring: &[DVec2], side: f64, radius: f64, (from, direc
     if count < 3 || radius <= 0.0 || length <= 0.0 {
         return None;
     }
+    let arcs = arcs(ring);
+    let around = arcs[count];
+    let start = arc_at(&arcs, from);
+    // How far along the stretch a parameter is, the way the road runs.
+    let along = |parameter: f64| ((arc_at(&arcs, parameter) - start) * direction).rem_euclid(around);
+    // Only the corners the stretch meets, clear of its start: a corner
+    // whose span reaches back past the start, or lies within `clear` of it
+    // either way, is left.
+    rounded_where(ring, side, radius, &|before, after, _| {
+        // Before and after run the ring's way; the road may run the other,
+        // meeting a corner's after first.
+        let (first, last) = if direction < 0.0 {
+            (along(after), along(before))
+        } else {
+            (along(before), along(after))
+        };
+        // Its span runs on through the start where its end comes round
+        // before its beginning.
+        let spans_start = last < first;
+        !spans_start && first >= clear && first <= length && around - last >= clear
+    })
+}
+
+/// `ring` (anticlockwise) with the corners an offset to `side` would close
+/// rounded to `radius` (see [`rounded_along`]), but only those `wanted`
+/// says: each by the ring parameters its rounding spans, from the last
+/// point of the ring before it to the first after, and its rounded points.
+/// `None` where no corner wanted is tighter.
+pub(crate) fn rounded_where(ring: &[DVec2], side: f64, radius: f64, wanted: &dyn Fn(f64, f64, &[DVec2]) -> bool) -> Option<Vec<DVec2>> {
+    let count = ring.len();
+    if count < 3 || radius <= 0.0 {
+        return None;
+    }
     let even = |distance: f64, points: &[DVec2]| vec![EdgeOffset::even(distance); points.len()];
     let there = offset(ring, &even(side * radius, ring)).into_iter().next()?;
     let rounded = offset(&there, &even(-side * radius, &there)).into_iter().next()?;
@@ -909,11 +942,6 @@ pub(crate) fn rounded_along(ring: &[DVec2], side: f64, radius: f64, (from, direc
             (parameter, distance > ROUNDED_OFF)
         })
         .collect();
-    let arcs = arcs(ring);
-    let around = arcs[count];
-    let start = arc_at(&arcs, from);
-    // How far along the stretch a parameter is, the way the road runs.
-    let along = |parameter: f64| ((arc_at(&arcs, parameter) - start) * direction).rem_euclid(around);
     let total = rounded.len();
     let first_on = placed.iter().position(|(_, off)| !off)?;
     // The runs off the ring, each with the parameters it spans on the ring:
@@ -935,25 +963,7 @@ pub(crate) fn rounded_along(ring: &[DVec2], side: f64, radius: f64, (from, direc
         let after = placed[(first_on + step) % total].0;
         runs.push((before, after, points));
     }
-    // Only the corners the stretch meets, clear of its start: a corner
-    // whose span reaches back past the start, or lies within `clear` of it
-    // either way, is left.
-    let met: Vec<&(f64, f64, Vec<DVec2>)> = runs
-        .iter()
-        .filter(|(before, after, _)| {
-            // Before and after run the ring's way; the road may run the
-            // other, meeting a corner's after first.
-            let (first, last) = if direction < 0.0 {
-                (along(*after), along(*before))
-            } else {
-                (along(*before), along(*after))
-            };
-            // Its span runs on through the start where its end comes round
-            // before its beginning.
-            let spans_start = last < first;
-            !spans_start && first >= clear && first <= length && around - last >= clear
-        })
-        .collect();
+    let met: Vec<&(f64, f64, Vec<DVec2>)> = runs.iter().filter(|(before, after, points)| wanted(*before, *after, points)).collect();
     if met.is_empty() {
         return None;
     }

@@ -354,6 +354,7 @@ impl Cut {
             zone_berm: self.zone_berm,
             fixed_berm: self.fixed_berm,
             wall_radius: self.wall_radius,
+            round_noses: true,
         }
     }
 }
@@ -960,16 +961,26 @@ fn design_pit(base: &Base, spec: &Spec, ground: Option<Ground<'_>>, cancelled: &
     // where one climbing a little flatter would have found it, the benches
     // before having put it somewhere else; and conditioned rings, a hair
     // different, can put it somewhere with no way on where rings left as
-    // they were would not. Where a design runs out of room, the others are
-    // tried: the one that gets furthest is given, the first of those that
-    // get as far. They are worked out side by side, then taken in turn.
-    let mut best = design_with(base, spec, ground, cancelled, Additions::FlatsFirst, true)?;
+    // they were would not; nor would a ring with its noses rounded for its
+    // faces (see [`start_ring`]), a little further in. Where a design runs
+    // out of room, the others are tried: the one that gets furthest is
+    // given, the first of those that get as far. They are worked out side by
+    // side, then taken in turn.
+    let mut best = design_with(base, spec, ground, cancelled, Additions::FlatsFirst, true, true)?;
     if best.0.end == End::OutOfRoom && !cancelled() {
-        let others: Vec<Result<(Design, Vec<Road>), Problem>> = [(Additions::LongerOnly, true), (Additions::FlatsFirst, false), (Additions::LongerOnly, false)]
-            .into_par_iter()
-            .filter(|(additions, _)| *additions != Additions::LongerOnly || !spec.ramps.is_empty())
-            .map(|(additions, condition)| design_with(base, spec, ground, cancelled, additions, condition))
-            .collect();
+        let others: Vec<Result<(Design, Vec<Road>), Problem>> = [
+            (Additions::LongerOnly, true, true),
+            (Additions::FlatsFirst, false, true),
+            (Additions::LongerOnly, false, true),
+            (Additions::FlatsFirst, true, false),
+            (Additions::LongerOnly, true, false),
+            (Additions::FlatsFirst, false, false),
+            (Additions::LongerOnly, false, false),
+        ]
+        .into_par_iter()
+        .filter(|(additions, _, _)| *additions != Additions::LongerOnly || !spec.ramps.is_empty())
+        .map(|(additions, condition, noses)| design_with(base, spec, ground, cancelled, additions, condition, noses))
+        .collect();
         for other in others {
             if best.0.end != End::OutOfRoom || cancelled() {
                 break;
@@ -998,7 +1009,8 @@ enum Additions {
 }
 
 /// A design built with only `additions` to its stretches, its end rings
-/// conditioned where `condition` says.
+/// conditioned where `condition` says, and its rings' noses rounded for
+/// their faces where `round_noses` does (see [`start_ring`]).
 /// Its walls and flags are left for [`design_pit`] to work out, once it is
 /// the one given; its roads, which its checks need, come with it.
 fn design_with(
@@ -1008,6 +1020,7 @@ fn design_with(
     cancelled: &(dyn Fn() -> bool + Sync),
     additions: Additions,
     condition: bool,
+    round_noses: bool,
 ) -> Result<(Design, Vec<Road>), Problem> {
     if let Some(problem) = spec.problem() {
         return Err(problem);
@@ -1025,6 +1038,7 @@ fn design_with(
             sign,
             additions,
             condition,
+            round_noses,
             strings: vec![level_string(spec, &start, base.elevation, true)],
             roads: vec![Road::default(); spec.ramps.len()],
             ramp_length: 0.0,
@@ -1497,6 +1511,9 @@ struct Builder<'a> {
     additions: Additions,
     /// Whether its end rings are conditioned.
     condition: bool,
+    /// Whether its rings' noses are rounded for their faces (see
+    /// [`start_ring`]).
+    round_noses: bool,
     strings: Vec<DesignString>,
     /// Each ramp's strings, joined up bench to bench.
     roads: Vec<Road>,
@@ -1672,7 +1689,10 @@ impl Builder<'_> {
         let spec = self.spec;
         let sign = self.sign;
         let height = cut.height;
-        let walls = cut.walls(spec);
+        let walls = walls::Walls {
+            round_noses: self.round_noses,
+            ..cut.walls(spec)
+        };
         let leaves_berm = !walls.no_berm();
         // Where a road will turn round a corner of the ring tighter than it
         // can, the corner is rounded first: a road set off from it turns no
@@ -2671,6 +2691,42 @@ fn start_ring(spec: &Spec, from: &[DVec2], walls: &walls::Walls<'_>, placed: &[P
             start_ring = with_pad(&start_ring, &turn.pad).ok_or(End::OutOfRoom)?;
         }
     }
+    // A nose the face's offset would close, rounded so the ring the face
+    // reaches comes out concentric with it, at the wall's radius: the face
+    // round it a cone of one slope. Rounded only after, the face would fan
+    // from a sharp toe to a rounded crest, steep at its sides and flat at
+    // its middle. Rounding only moves the ring toward the face's side, so
+    // the berm comes out wider at the nose. Left as they are: corners under
+    // or beside a road or a pad, which are rounded for the road.
+    let start_ring = if walls.no_berm() || walls.wall_radius <= 0.0 || !walls.round_noses {
+        start_ring
+    } else {
+        let mut keep: Vec<DVec2> = Vec::new();
+        for placed in placed {
+            keep.extend(placed.stretch.edges.near.iter().chain(&placed.stretch.edges.far).map(|(point, _)| *point));
+            if let Join::TurnsBack(turn) = placed.join {
+                keep.extend(turn.inner.iter().chain(&turn.outer).copied());
+            }
+        }
+        // As wide as the widest face: round a nose its face is narrower,
+        // the ring it reaches comes out a little rounder than the wall's.
+        let facings = walls.facings(&start_ring);
+        let face = (0..start_ring.len()).map(|index| walls.face_at(start_ring[index], facings[index])).fold(0.0, f64::max);
+        let radius = walls.wall_radius + face;
+        let clear = 2.0 * face;
+        let away = |points: &[DVec2]| points.iter().all(|point| keep.iter().all(|kept| kept.distance(*point) > clear));
+        match ring::rounded_where(&start_ring, sign, radius, &|before, after, points| {
+            away(points) && away(&[ring::point_at(&start_ring, before), ring::point_at(&start_ring, after)])
+        }) {
+            // The points rounding added that crowd the ring where it
+            // rejoins it, taken out only where the berm below comes out no
+            // narrower for it: the ring's own points stay.
+            Some(rounded) => ring::conditioned(&rounded, sign, &|point| {
+                start_ring.iter().any(|own| own.distance(point) <= ring::SAME_POINT)
+            }),
+            None => start_ring,
+        }
+    };
     // Near a slope region, the start ring with points enough to follow its
     // blend across the face.
     Ok(match walls.splits(&start_ring) {
