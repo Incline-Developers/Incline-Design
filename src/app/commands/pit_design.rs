@@ -35,7 +35,7 @@ use crate::{
         triangulation::{GeometryVersion, TriangulationId},
     },
     ui::{
-        dialogs::pit_design::{DraftFacts, NoDesign, PitDesignDraft, PitStage, Preview, PreviewKey},
+        dialogs::pit_design::{DraftFacts, NoDesign, PitDesignDraft, Preview, PreviewKey},
         state::ActiveTool,
     },
     userspace_log,
@@ -136,15 +136,47 @@ fn with_pit(object: &Object, pit: PitObject) -> Object {
 }
 
 /// Start ramp `index` of `settings` at `start`: a new ramp, cut as the last
-/// one is, where `index` is one past the last.
-fn place_ramp(settings: &mut PitDesignSettings, index: usize, start: DVec2) {
+/// one is (but for where it runs and turns back, which are its own), where
+/// `index` is one past the last. The ramp's place in the list.
+fn place_ramp(settings: &mut PitDesignSettings, index: usize, start: DVec2) -> usize {
     let ramps = &mut settings.ramps;
     if index >= ramps.len() {
         let like = ramps.last().cloned().unwrap_or_default();
-        ramps.push(crate::model::pit_design::settings::RampSettings { from: None, to: None, ..like });
+        ramps.push(crate::model::pit_design::settings::RampSettings {
+            from: None,
+            to: None,
+            switchback: false,
+            switchback_every: 0,
+            turns_at: Vec::new(),
+            ..like
+        });
     }
     let index = index.min(ramps.len() - 1);
     ramps[index].start = Some(start);
+    index
+}
+
+/// The way along the closed string through `points` it runs at `at`, in
+/// the order of its points, and whether that order goes round clockwise.
+fn string_way_at(points: &[DVec3], at: DVec3) -> Option<(DVec2, bool)> {
+    let count = points.len();
+    if count < 3 {
+        return None;
+    }
+    let ring: Vec<DVec2> = points.iter().map(|point| point.truncate()).collect();
+    let edge = (crate::model::pit_design::ring::nearest(&ring, at.truncate()).0.floor() as usize).min(count - 1);
+    let way = (ring[(edge + 1) % count] - ring[edge]).try_normalize()?;
+    let twice_area: f64 = (0..count).map(|index| ring[index].perp_dot(ring[(index + 1) % count])).sum();
+    Some((way, twice_area < 0.0))
+}
+
+/// The way along the string through `points` a ramp climbing clockwise or
+/// not leaves its foot at `foot`, in plan: the way it climbs where the
+/// design is built up from the string, the way it falls where down.
+fn leaving_way(points: &[DVec3], foot: DVec3, climbs_clockwise: bool, direction: pit_design::Direction) -> Option<DVec2> {
+    let (along, order_clockwise) = string_way_at(points, foot)?;
+    let leaves_clockwise = climbs_clockwise == (direction == pit_design::Direction::Up);
+    Some(if leaves_clockwise == order_clockwise { along } else { -along })
 }
 
 impl App<'_> {
@@ -371,7 +403,8 @@ impl App<'_> {
                     // The topography most projects have is the obvious ground
                     // to daylight against, and a pit with ground to meet is
                     // built until it meets it.
-                    let topography = self.pit_topography_guess();
+                    let middle = points.iter().map(|point| point.truncate()).sum::<DVec2>() / points.len().max(1) as f64;
+                    let topography = self.pit_topography_guess(Some(middle));
                     let stop = if topography.is_some() { StopMode::Daylight } else { StopMode::Benches };
                     PitDesignSettings {
                         topography,
@@ -405,16 +438,34 @@ impl App<'_> {
         PitObject::new(name, settings)
     }
 
-    /// The topography a new pit would be designed against: the last pit's,
-    /// while it is still loaded, or else the first loaded.
-    fn pit_topography_guess(&self) -> Option<TriangulationId> {
-        let loaded = |id: TriangulationId| self.triangulations.iter().any(|surface| surface.id == id && surface.state.loaded);
+    /// The topography a new pit at `at` would be designed against: the last
+    /// pit's, while it is still loaded and reaches there; or else the widest
+    /// loaded surface that does (a topography spreads far beyond the shells
+    /// and designs that sit in it), or failing any, the widest loaded.
+    fn pit_topography_guess(&self, at: Option<DVec2>) -> Option<TriangulationId> {
+        let reaches = |surface: &&crate::model::triangulation::OpenTriangulation| {
+            at.is_none_or(|at| {
+                let bounds = surface.mesh.bounds();
+                at.x >= bounds.min.x && at.x <= bounds.max.x && at.y >= bounds.min.y && at.y <= bounds.max.y
+            })
+        };
+        let loaded = || self.triangulations.iter().filter(|surface| surface.state.loaded);
+        let widest = |surfaces: &mut dyn Iterator<Item = &crate::model::triangulation::OpenTriangulation>| {
+            surfaces
+                .map(|surface| {
+                    let bounds = surface.mesh.bounds();
+                    ((bounds.max.x - bounds.min.x) * (bounds.max.y - bounds.min.y), surface.id)
+                })
+                .max_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, id)| id)
+        };
         self.editor
             .pit_last_settings
             .as_ref()
             .and_then(|settings| settings.topography)
-            .filter(|id| loaded(*id))
-            .or_else(|| self.triangulations.iter().find(|surface| surface.state.loaded).map(|surface| surface.id))
+            .filter(|id| loaded().filter(reaches).any(|surface| surface.id == *id))
+            .or_else(|| widest(&mut loaded().filter(reaches)))
+            .or_else(|| widest(&mut loaded()))
     }
 
     /// Work `pit`'s design out here and now, so a new one draws at once.
@@ -595,11 +646,15 @@ impl App<'_> {
             return;
         };
         let mut settings = working.settings();
-        // While a ramp's start is picked, the design is worked out with the
-        // ramp where a click would start it, so it follows the pointer.
-        let following = draft.picking_ramp.is_some();
-        if let Some((index, start)) = draft.ramp_previewed() {
-            place_ramp(&mut settings, index, start.truncate());
+        // While a ramp's start is dragged, the design is worked out with the
+        // ramp where letting go would start it, so it follows the pointer;
+        // while one is added, with it climbing the way it is dragged.
+        let following = draft.placing_ramp() || draft.pointer_held;
+        if let Some((index, start, clockwise)) = draft.ramp_previewed() {
+            let index = place_ramp(&mut settings, index, start.truncate());
+            if let Some(clockwise) = clockwise {
+                settings.ramps[index].climbs_clockwise = clockwise;
+            }
         }
         let Some((verts, _)) = self.operand_object(id).and_then(pit_parts) else {
             return;
@@ -621,9 +676,9 @@ impl App<'_> {
         if draft.built_for.as_ref() == Some(&key) || draft.building.as_ref().is_some_and(|(_, building)| *building == key) {
             return;
         }
-        // Following the pointer, a design under way is let finish: cut off
-        // at every move, none would ever be shown. The next starts from
-        // wherever the pointer is then.
+        // Following the pointer, or anything dragged, a design under way is
+        // let finish: cut off at every move, none would show until the drag
+        // stopped. The next starts from wherever the drag is then.
         if following && draft.building.is_some() {
             return;
         }
@@ -790,22 +845,6 @@ impl App<'_> {
         })
     }
 
-    /// Go to a step of the panel: on to the ramp, its start picked first
-    /// if it has none, or back to the benches.
-    pub(crate) fn set_pit_stage(&mut self, stage: PitStage) {
-        let Some(draft) = self.editor.pit_design.as_mut() else {
-            return;
-        };
-        draft.stage = stage;
-        let has_ramp = draft.working.as_ref().is_some_and(|working| !working.settings().ramps.is_empty());
-        match stage {
-            PitStage::Ramp if !has_ramp => self.begin_pit_ramp_start_pick(0),
-            PitStage::Ramp => {}
-            PitStage::Benches => self.cancel_pit_ramp_start_pick(),
-        }
-        self.invalidate_overlay();
-    }
-
     /// Where on the string the ramp would start were the cursor clicked:
     /// the marker that follows it while the start is picked.
     pub(crate) fn update_pit_ramp_hover(&mut self) {
@@ -839,14 +878,15 @@ impl App<'_> {
     /// topography the new pit would meet, read where the pointer points.
     pub(crate) fn update_pit_ground_under_cursor(&mut self) {
         let reading = if self.editor.pit_drawing() {
-            self.pit_topography_guess()
-                .and_then(|topography| self.pit_design_ground(Some(topography)).ok())
-                .map(|ground| {
-                    let level = self.editor.z_level;
-                    self.graphics
-                        .as_ref()
-                        .and_then(|graphics| graphics.cursor_on_plane(level, crate::app::PICK_THRESHOLD_PX))
-                        .and_then(|(cursor, _)| ground.rl(cursor.truncate()))
+            let level = self.editor.z_level;
+            self.graphics
+                .as_ref()
+                .and_then(|graphics| graphics.cursor_on_plane(level, crate::app::PICK_THRESHOLD_PX))
+                .map(|(cursor, _)| cursor.truncate())
+                .map(|cursor| {
+                    self.pit_topography_guess(Some(cursor))
+                        .and_then(|topography| self.pit_design_ground(Some(topography)).ok())
+                        .and_then(|ground| ground.rl(cursor))
                 })
         } else {
             None
@@ -913,8 +953,8 @@ impl App<'_> {
         }
     }
 
-    /// Wait for a click on the string where ramp `index` starts: a new
-    /// ramp, where it is one past the last.
+    /// Take up ramp `index`'s start, to drag along the string: the preview
+    /// follows the pointer until it is let go.
     pub(crate) fn begin_pit_ramp_start_pick(&mut self, index: usize) {
         if let Some(draft) = self.editor.pit_design.as_mut()
             && draft.object_id().is_some()
@@ -940,12 +980,7 @@ impl App<'_> {
         let under = (|| {
             // A handle under the pointer, or one being dragged, has it.
             let draft = self.editor.pit_design.as_ref().filter(|draft| {
-                draft.picking_ramp.is_none()
-                    && !draft.picking_region
-                    && draft.gizmo_hover.is_none()
-                    && draft.widening.is_none()
-                    && draft.grading.is_none()
-                    && draft.wall_drag.is_none()
+                !draft.placing_ramp() && !draft.picking_region && draft.gizmo_hover.is_none() && draft.widening.is_none() && draft.grading.is_none() && draft.wall_drag.is_none()
             })?;
             let graphics = self.graphics.as_ref()?;
             let cursor = graphics.window_to_viewport_px(self.editor.cursor_screen_px?);
@@ -977,7 +1012,7 @@ impl App<'_> {
         self.editor
             .pit_design
             .as_ref()
-            .is_some_and(|draft| draft.widening.is_some() || draft.grading.is_some() || draft.wall_drag.is_some())
+            .is_some_and(|draft| draft.widening.is_some() || draft.grading.is_some() || draft.wall_drag.is_some() || draft.moving_wall)
     }
 
     /// Escape while a gizmo's handle is dragged: the drag is let go of and
@@ -990,6 +1025,7 @@ impl App<'_> {
             draft.widening = None;
             draft.grading = None;
             draft.wall_drag = None;
+            draft.moving_wall = false;
         }
         self.redraw_requested = true;
     }
@@ -1007,6 +1043,7 @@ impl App<'_> {
         // In round steps, or with Shift held, in fine ones.
         let step = if self.modifiers.shift_key() { 0.1 } else { 0.5 };
         let snapped = |value: f64| (value / step).round() * step;
+        let pixels_per_point = self.points_to_px(1.0);
         let Some(draft) = self.editor.pit_design.as_mut() else {
             return;
         };
@@ -1044,18 +1081,19 @@ impl App<'_> {
             return;
         }
         if let Some(drag) = draft.wall_drag {
-            let (Some(gizmo), Some(working)) = (draft.wall_gizmo.as_ref(), draft.working.as_mut()) else {
+            let Some(working) = draft.working.as_mut() else {
                 return;
             };
             let settings = &mut working.settings;
-            // Along the arm as it was taken up, signed: past the toe, the
-            // walls go the other way.
+            // Along the way it was taken up, signed: past the toe, the walls
+            // go the other way.
             let pulled = drag.value + f64::from(((cursor.0 - drag.from.0) * drag.way.0 + (cursor.1 - drag.from.1) * drag.way.1) / drag.per_metre.max(1.0e-3));
             let (kind, direction) = match drag.part {
                 // Up or down, out or in as it was.
                 GizmoPart::BenchHeight if pulled < 0.0 => (drag.kind.other(), drag.direction.other()),
-                // Out or in, up or down as it was.
-                GizmoPart::Berm if pulled < 0.0 => (drag.kind.other(), drag.direction),
+                // Out or in, up or down as it was: a berm pulled back past
+                // the crest it starts from.
+                GizmoPart::Berm if pulled < -FLIP_BERM => (drag.kind.other(), drag.direction),
                 _ => (drag.kind, drag.direction),
             };
             if (settings.kind, settings.direction) != (kind, direction) {
@@ -1064,16 +1102,15 @@ impl App<'_> {
             }
             let (field, changed) = match drag.part {
                 GizmoPart::BenchHeight => (&mut settings.bench_height, snapped(pulled.abs()).max(1.0)),
-                GizmoPart::Berm => (&mut settings.berm_width, snapped(pulled.abs())),
+                GizmoPart::Berm => (
+                    &mut settings.berm_width,
+                    snapped((pulled.abs() - if pulled < -FLIP_BERM { FLIP_BERM } else { 0.0 }).max(0.0)),
+                ),
+                // The crest pushed in or out across the bench at its height:
+                // the face turns about the toe to meet it.
                 GizmoPart::FaceAngle => {
-                    let Some(angle) = ring_angle(&gizmo.angle_ring, cursor) else {
-                        return;
-                    };
-                    let turned = (angle - drag.pressed + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
-                    (
-                        &mut settings.face_angle,
-                        snapped(drag.value + turned.to_degrees() * FACE_RING_GEAR).clamp(MIN_FACE_ANGLE, MAX_FACE_ANGLE),
-                    )
+                    let angle = if pulled <= 1.0e-6 { MAX_FACE_ANGLE } else { drag.height.atan2(pulled).to_degrees() };
+                    (&mut settings.face_angle, snapped(angle).clamp(MIN_FACE_ANGLE, MAX_FACE_ANGLE))
                 }
                 _ => return,
             };
@@ -1083,61 +1120,85 @@ impl App<'_> {
             }
             return;
         }
-        let near = |point: (f32, f32)| (point.0 - cursor.0).hypot(point.1 - cursor.1) <= GIZMO_REACH;
-        let near_chain = |chain: &[(f32, f32)]| {
-            chain.windows(2).any(|pair| {
-                let (a, b) = (glam::Vec2::from(pair[0]), glam::Vec2::from(pair[1]));
-                let point = glam::Vec2::from(cursor);
-                let along = (b - a).length_squared();
-                let t = if along > 0.0 { ((point - a).dot(b - a) / along).clamp(0.0, 1.0) } else { 0.0 };
-                (a + (b - a) * t).distance(point) <= GIZMO_REACH
-            })
-        };
-        let wall = draft.wall_gizmo.as_ref().and_then(|gizmo| {
-            if gizmo.ring_fade > 0.0 && (near(gizmo.angle_handle) || near_chain(&gizmo.angle_ring[..=RING_STEPS / 4])) {
-                Some(GizmoPart::FaceAngle)
-            } else if gizmo.height_fade > 0.0 && near_chain(&[gizmo.height_from, gizmo.height_tip]) {
-                Some(GizmoPart::BenchHeight)
-            } else if gizmo.berm_fade > 0.0 && near_chain(&[gizmo.berm_from, gizmo.berm_tip]) {
-                Some(GizmoPart::Berm)
-            } else {
-                None
-            }
-        });
-        let hover = wall.or_else(|| {
-            draft.gizmos.iter().find_map(|gizmo| {
-                // The handles first, then the ring and arrow they sit on.
-                if gizmo.ring_fade > 0.0 && near(gizmo.turn_handle) {
-                    Some(GizmoPart::Turn(gizmo.ramp))
-                } else if gizmo.ring_fade > 0.0 && (near(gizmo.grade_handle) || near_chain(&gizmo.ring[..=RING_STEPS / 2])) {
-                    Some(GizmoPart::Grade(gizmo.ramp))
-                } else if gizmo.width_fade > 0.0
-                    && near_chain(&[
-                        // Clear of the foot, which the ramp's start is dragged by.
-                        (
-                            gizmo.width_from.0 + (gizmo.width_tip.0 - gizmo.width_from.0) * 0.25,
-                            gizmo.width_from.1 + (gizmo.width_tip.1 - gizmo.width_from.1) * 0.25,
-                        ),
-                        gizmo.width_tip,
-                    ])
+        if draft.moving_wall {
+            // Its foot follows the pointer along the string.
+            let Some(id) = draft.object_id() else {
+                return;
+            };
+            let Some(points) = self.operand_object(id).and_then(Object::tessellated_path).map(|(points, _)| points) else {
+                return;
+            };
+            let level = points.iter().map(|point| point.z).sum::<f64>() / points.len().max(1) as f64;
+            if let Some((cursor, _)) = self.graphics.as_ref().and_then(|graphics| graphics.cursor_on_plane(level, crate::app::PICK_THRESHOLD_PX)) {
+                let place = nearest_on_string(&points, cursor.truncate()).truncate();
+                if let Some(draft) = self.editor.pit_design.as_mut()
+                    && draft.wall_place != Some(place)
                 {
-                    Some(GizmoPart::Width(gizmo.ramp))
-                } else {
-                    None
+                    draft.wall_place = Some(place);
+                    self.redraw_requested = true;
                 }
-            })
-        });
-        // A ramp's switchback spots, the nearest under the pointer.
-        let hover = hover.or_else(|| {
-            draft
-                .switch_spots
-                .iter()
-                .enumerate()
-                .map(|(index, spot)| (index, (spot.at.0 - cursor.0).hypot(spot.at.1 - cursor.1)))
-                .filter(|(_, distance)| *distance <= GIZMO_REACH)
-                .min_by(|a, b| a.1.total_cmp(&b.1))
-                .map(|(index, _)| GizmoPart::Switch(index))
-        });
+            }
+            return;
+        }
+        // Every part within reach, the nearest taking it: a ball or spot, a
+        // small mark, before the long arm or ring it stands on, by a few
+        // pixels, so a spot a road's arrow crosses can still be clicked.
+        let to_point = |point: (f32, f32)| (point.0 - cursor.0).hypot(point.1 - cursor.1) - POINT_PREFERENCE;
+        let to_chain = |chain: &[(f32, f32)]| {
+            chain
+                .windows(2)
+                .map(|pair| {
+                    let (a, b) = (glam::Vec2::from(pair[0]), glam::Vec2::from(pair[1]));
+                    let point = glam::Vec2::from(cursor);
+                    let along = (b - a).length_squared();
+                    let t = if along > 0.0 { ((point - a).dot(b - a) / along).clamp(0.0, 1.0) } else { 0.0 };
+                    (a + (b - a) * t).distance(point)
+                })
+                .fold(f32::INFINITY, f32::min)
+        };
+        let mut parts: Vec<(f32, GizmoPart)> = Vec::new();
+        if let Some(gizmo) = draft.wall_gizmo.as_ref() {
+            // Only its handles: its lines are drawn, the string about its
+            // foot left free for a ramp.
+            parts.push((to_point(gizmo.toe), GizmoPart::WallFoot));
+            if gizmo.out_fade > 0.0 && gizmo.handles_apart(pixels_per_point) {
+                parts.push((to_point(gizmo.crest), GizmoPart::FaceAngle));
+                parts.push((to_point(gizmo.berm_end), GizmoPart::Berm));
+            }
+            if gizmo.height_fade > 0.0 {
+                let middle = ((gizmo.height_from.0 + gizmo.height_tip.0) * 0.5, (gizmo.height_from.1 + gizmo.height_tip.1) * 0.5);
+                parts.push((to_point(gizmo.height_tip).min(to_chain(&[middle, gizmo.height_tip])), GizmoPart::BenchHeight));
+            }
+        }
+        for gizmo in &draft.gizmos {
+            let [corner, tip, other] = gizmo.climbs_back;
+            parts.push((
+                to_point(((corner.0 + tip.0 + other.0) / 3.0, (corner.1 + tip.1 + other.1) / 3.0)),
+                GizmoPart::Turn(gizmo.ramp),
+            ));
+            if gizmo.ring_fade > 0.0 {
+                parts.push((to_point(gizmo.grade_handle).min(to_chain(&gizmo.ring[..=RING_STEPS / 2])), GizmoPart::Grade(gizmo.ramp)));
+            }
+            // Long enough on screen to be drawn: at its true width, a road
+            // seen from far off is too narrow to take.
+            let reach = (gizmo.width_tip.0 - gizmo.width_from.0).hypot(gizmo.width_tip.1 - gizmo.width_from.1);
+            if gizmo.width_fade > 0.0 && reach > crate::ui::GIZMO_HEAD_LENGTH * pixels_per_point {
+                // Clear of the foot, which the ramp's start is dragged by.
+                let from = (
+                    gizmo.width_from.0 + (gizmo.width_tip.0 - gizmo.width_from.0) * 0.25,
+                    gizmo.width_from.1 + (gizmo.width_tip.1 - gizmo.width_from.1) * 0.25,
+                );
+                parts.push((to_chain(&[from, gizmo.width_tip]), GizmoPart::Width(gizmo.ramp)));
+            }
+        }
+        for (index, spot) in draft.switch_spots.iter().enumerate() {
+            parts.push((to_point(spot.at), GizmoPart::Switch(index)));
+        }
+        let hover = parts
+            .into_iter()
+            .filter(|(distance, _)| *distance <= GIZMO_REACH)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, part)| part);
         if draft.gizmo_hover != hover {
             draft.gizmo_hover = hover;
             self.redraw_requested = true;
@@ -1214,57 +1275,321 @@ impl App<'_> {
                     return;
                 }
                 Some(part @ (GizmoPart::BenchHeight | GizmoPart::Berm | GizmoPart::FaceAngle)) => {
-                    let (Some(at), Some(settings)) = (pressed_at, draft.working.as_ref().map(|working| &working.settings)) else {
+                    let (Some(at), Some(settings), Some(gizmo)) = (pressed_at, draft.working.as_ref().map(|working| &working.settings), draft.wall_gizmo.as_ref()) else {
                         return;
                     };
+                    let height = settings.bench_height;
+                    // The face is pushed by its crest, which stands this far out.
                     let value = match part {
-                        GizmoPart::BenchHeight => settings.bench_height,
+                        GizmoPart::BenchHeight => height,
                         GizmoPart::Berm => settings.berm_width,
-                        _ => settings.face_angle,
+                        _ => height / settings.face_angle.to_radians().tan(),
                     };
-                    let (kind, direction) = (settings.kind, settings.direction);
-                    let Some(gizmo) = draft.wall_gizmo.as_ref() else {
-                        return;
-                    };
-                    let pressed = crate::app::commands::drawing::rotate_collar::ring_angle(&gizmo.angle_ring, at).unwrap_or(0.0);
                     let (way, per_metre) = match part {
-                        GizmoPart::Berm => (gizmo.out, gizmo.pixels_per_metre_out),
-                        _ => (gizmo.up, gizmo.pixels_per_metre_up),
+                        GizmoPart::BenchHeight => (gizmo.up, gizmo.pixels_per_metre_up),
+                        _ => (gizmo.out, gizmo.pixels_per_metre_out),
                     };
                     draft.wall_drag = Some(crate::ui::dialogs::pit_design::WallDrag {
                         part,
                         from: at,
                         value,
-                        pressed,
+                        height,
                         way,
                         per_metre,
-                        kind,
-                        direction,
+                        kind: settings.kind,
+                        direction: settings.direction,
                     });
+                    return;
+                }
+                Some(GizmoPart::WallFoot) => {
+                    draft.moving_wall = true;
                     return;
                 }
                 None => {}
             }
         }
-        let Some(index) = self.editor.pit_design.as_ref().and_then(|draft| draft.ramp_marker_under_cursor) else {
+        if let Some(index) = self.editor.pit_design.as_ref().and_then(|draft| draft.ramp_marker_under_cursor) {
+            self.begin_pit_ramp_start_pick(index);
+            if let Some(draft) = self.editor.pit_design.as_mut() {
+                draft.dragging_ramp = pressed_at.or(Some((0.0, 0.0)));
+                draft.ramp_marker_under_cursor = None;
+            }
+            self.update_pit_ramp_hover();
+            return;
+        }
+        // On the string with nothing else there, a new ramp: it climbs the
+        // way the last does until dragged along the string.
+        let (Some(foot), Some(pressed)) = (self.editor.pit_design.as_ref().and_then(|draft| draft.string_hover), pressed_at) else {
             return;
         };
-        self.begin_pit_ramp_start_pick(index);
+        let Some(id) = self.editor.pit_design.as_ref().and_then(PitDesignDraft::object_id) else {
+            return;
+        };
+        let Some((points, _)) = self.operand_object(id).and_then(Object::tessellated_path) else {
+            return;
+        };
+        let Some(settings) = self.editor.pit_design.as_ref().and_then(|draft| draft.working.as_ref()).map(PitObject::settings) else {
+            return;
+        };
+        let clockwise = settings.ramps.last().map_or_else(
+            || crate::model::pit_design::settings::RampSettings::default().climbs_clockwise,
+            |ramp| ramp.climbs_clockwise,
+        );
+        let Some(way) = leaving_way(&points, foot, clockwise, settings.direction) else {
+            return;
+        };
         if let Some(draft) = self.editor.pit_design.as_mut() {
-            draft.dragging_ramp = pressed_at.or(Some((0.0, 0.0)));
-            draft.ramp_marker_under_cursor = None;
+            draft.adding_ramp = Some(crate::ui::dialogs::pit_design::AddingRamp {
+                foot,
+                pressed,
+                clockwise,
+                way,
+                dragged: false,
+            });
+            draft.string_hover = None;
+            draft.string_hover_px = None;
         }
-        self.update_pit_ramp_hover();
+        self.update_pit_design_preview();
+        self.invalidate_overlay();
     }
 
-    /// The left button let go: a ramp start dragged is placed where it was
-    /// let go; one pressed and let go where it was waits for a click, as
-    /// Move does.
+    /// While a ramp is added, the way it climbs: as the pointer has been
+    /// dragged along the string from its foot.
+    pub(crate) fn update_pit_adding_ramp(&mut self) {
+        let Some(adding) = self.editor.pit_design.as_ref().and_then(|draft| draft.adding_ramp) else {
+            return;
+        };
+        let (Some(id), Some(cursor_px)) = (self.editor.pit_design.as_ref().and_then(PitDesignDraft::object_id), self.editor.cursor_screen_px) else {
+            return;
+        };
+        let dragged = adding.dragged || (cursor_px.0 - adding.pressed.0).hypot(cursor_px.1 - adding.pressed.1) > crate::app::PICK_THRESHOLD_PX;
+        if !dragged {
+            return;
+        }
+        let Some((points, _)) = self.operand_object(id).and_then(Object::tessellated_path) else {
+            return;
+        };
+        let Some(direction) = self
+            .editor
+            .pit_design
+            .as_ref()
+            .and_then(|draft| draft.working.as_ref())
+            .map(|working| working.settings.direction)
+        else {
+            return;
+        };
+        let Some((cursor, _)) = self
+            .graphics
+            .as_ref()
+            .and_then(|graphics| graphics.cursor_on_plane(adding.foot.z, crate::app::PICK_THRESHOLD_PX))
+        else {
+            return;
+        };
+        let Some((along, order_clockwise)) = string_way_at(&points, adding.foot) else {
+            return;
+        };
+        // Short of a metre either way, it keeps the way it had.
+        let moved = (cursor.truncate() - adding.foot.truncate()).dot(along);
+        let clockwise = if moved.abs() < 1.0 {
+            adding.clockwise
+        } else {
+            let leaves_clockwise = (moved > 0.0) == order_clockwise;
+            leaves_clockwise == (direction == pit_design::Direction::Up)
+        };
+        let way = leaving_way(&points, adding.foot, clockwise, direction).unwrap_or(adding.way);
+        if let Some(draft) = self.editor.pit_design.as_mut()
+            && let Some(held) = draft.adding_ramp.as_mut()
+            && (held.clockwise, held.dragged) != (clockwise, true)
+        {
+            (held.clockwise, held.way, held.dragged) = (clockwise, way, true);
+            self.redraw_requested = true;
+            self.invalidate_overlay();
+        }
+    }
+
+    /// A ramp just put down at `foot`: the walls' gizmo, standing where its
+    /// gizmo would cover it on screen, is put somewhere clear of it. Only
+    /// then: turning the view never moves it.
+    fn make_way_for_ramp(&mut self, foot: DVec3) {
+        let Some(graphics) = self.graphics.as_ref() else {
+            return;
+        };
+        let (view_proj, screen) = (graphics.view_proj(), graphics.screen_size_pub());
+        let on_screen = |point: DVec3| crate::rendering::pick::world_to_screen(&view_proj, point, screen);
+        let wanted = crate::rendering::graphics::projections::WALL_GIZMO_CLEAR_POINTS * f64::from(self.points_to_px(1.0));
+        let Some(draft) = self.editor.pit_design.as_mut() else {
+            return;
+        };
+        let level = draft.built_for.as_ref().and_then(|key| key.verts.first()).map_or(foot.z, |vertex| vertex.pos.z);
+        let covered = draft
+            .wall_place
+            .and_then(|place| Some(on_screen(place.extend(level))?.distance(on_screen(foot)?)))
+            .is_some_and(|apart| apart < wanted);
+        if covered {
+            draft.wall_place = None;
+        }
+    }
+
+    /// Escape while a ramp is added: it is not.
+    pub(crate) fn cancel_pit_adding_ramp(&mut self) {
+        if let Some(draft) = self.editor.pit_design.as_mut() {
+            draft.adding_ramp = None;
+            draft.adding_arrow = None;
+        }
+        self.invalidate_overlay();
+    }
+
+    /// Whether a ramp is being added.
+    pub(crate) fn adding_pit_ramp(&self) -> bool {
+        self.editor.pit_design.as_ref().is_some_and(|draft| draft.adding_ramp.is_some())
+    }
+
+    /// The place on the pit's string under the pointer, where nothing else
+    /// is: where a press would add a ramp.
+    pub(crate) fn update_pit_string_hover(&mut self) {
+        let hover = (|| {
+            let draft = self.editor.pit_design.as_ref().filter(|draft| {
+                !draft.placing_ramp()
+                    && !draft.picking_region
+                    && draft.gizmo_hover.is_none()
+                    && draft.field_hover.is_none()
+                    && draft.ramp_marker_under_cursor.is_none()
+                    && draft.flag_under_cursor.is_none()
+                    && draft.widening.is_none()
+                    && draft.grading.is_none()
+                    && draft.wall_drag.is_none()
+            })?;
+            let (points, _) = self.operand_object(draft.object_id()?)?.tessellated_path()?;
+            let graphics = self.graphics.as_ref()?;
+            let cursor = graphics.window_to_viewport_px(self.editor.cursor_screen_px?);
+            let cursor = DVec2::new(f64::from(cursor.0), f64::from(cursor.1));
+            let (view_proj, screen) = (graphics.view_proj(), graphics.screen_size_pub());
+            let on_screen: Vec<Option<DVec2>> = points.iter().map(|point| crate::rendering::pick::world_to_screen(&view_proj, *point, screen)).collect();
+            let count = points.len();
+            let reach = f64::from(crate::app::PICK_THRESHOLD_PX * 1.5);
+            (0..count)
+                .filter_map(|index| {
+                    let next = (index + 1) % count;
+                    let (a, b) = (on_screen[index]?, on_screen[next]?);
+                    let (foot, t) = crate::model::kernel::project_onto_segment(cursor, a, b);
+                    Some((foot.distance(cursor), points[index].lerp(points[next], t)))
+                })
+                .filter(|(distance, _)| *distance <= reach)
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, at)| at)
+        })();
+        if let Some(draft) = self.editor.pit_design.as_mut()
+            && draft.string_hover != hover
+        {
+            draft.string_hover = hover;
+            self.invalidate_overlay();
+            self.redraw_requested = true;
+        }
+    }
+
+    /// Where an orbit begun at `at` (window pixels) turns about while a
+    /// bench design is open: the point of its strings nearest the pointer,
+    /// within reach; or begun over the pit, its middle, halfway down. The
+    /// open design is drawn through the ground, so the ground over it would
+    /// swing it off to one side.
+    pub(crate) fn pit_orbit_pivot(&self, at: (f32, f32)) -> Option<DVec3> {
+        let draft = self.editor.pit_design.as_ref().filter(|draft| draft.object_id().is_some())?;
+        let design = draft.preview.as_ref()?.design.as_ref().ok()?;
+        let graphics = self.graphics.as_ref()?;
+        let cursor = graphics.window_to_viewport_px(at);
+        let cursor = DVec2::new(f64::from(cursor.0), f64::from(cursor.1));
+        let (view_proj, screen) = (graphics.view_proj(), graphics.screen_size_pub());
+        let on_screen = |point: DVec3| crate::rendering::pick::world_to_screen(&view_proj, point, screen);
+        let reach = f64::from(crate::app::PICK_THRESHOLD_PX * 3.0);
+        let nearest = design
+            .strings
+            .iter()
+            .flat_map(|string| string.points.iter())
+            .filter_map(|point| Some((on_screen(*point)?.distance(cursor), *point)))
+            .filter(|(distance, _)| *distance <= reach)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, point)| point);
+        if nearest.is_some() {
+            return nearest;
+        }
+        // The widest ring, which holds the rest in plan.
+        let area = |points: &[DVec3]| {
+            let count = points.len();
+            (0..count)
+                .map(|index| points[index].truncate().perp_dot(points[(index + 1) % count].truncate()))
+                .sum::<f64>()
+                .abs()
+        };
+        let outer = design
+            .strings
+            .iter()
+            .filter(|string| string.closed && string.points.len() >= 3)
+            .max_by(|a, b| area(&a.points).total_cmp(&area(&b.points)))?;
+        let ring: Vec<DVec2> = outer.points.iter().map(|point| on_screen(*point)).collect::<Option<_>>()?;
+        let inside = (0..ring.len()).fold(false, |inside, index| {
+            let (a, b) = (ring[index], ring[(index + 1) % ring.len()]);
+            if (a.y > cursor.y) != (b.y > cursor.y) && cursor.x < a.x + (cursor.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+                !inside
+            } else {
+                inside
+            }
+        });
+        if !inside {
+            return None;
+        }
+        let middle = outer.points.iter().map(|point| point.truncate()).sum::<DVec2>() / outer.points.len() as f64;
+        let (low, high) = design
+            .levels
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), level| (low.min(*level), high.max(*level)));
+        Some(middle.extend(0.5 * (low + high)))
+    }
+
+    /// Delete with the pointer on a ramp's start: the ramp is taken off the
+    /// pit. Whether there was one to take.
+    pub(crate) fn remove_pit_ramp_under_cursor(&mut self) -> bool {
+        let Some(draft) = self.editor.pit_design.as_mut() else {
+            return false;
+        };
+        let Some(index) = draft.ramp_marker_under_cursor.filter(|_| !draft.placing_ramp()) else {
+            return false;
+        };
+        let Some(working) = draft.working.as_mut().filter(|working| index < working.settings.ramps.len()) else {
+            return false;
+        };
+        working.settings.ramps.remove(index);
+        draft.ramp_marker_under_cursor = None;
+        self.update_pit_design_preview();
+        self.invalidate_overlay();
+        true
+    }
+
+    /// The left button let go: a ramp being added is made, climbing the way
+    /// it was dragged; a ramp's start dragged is placed where it was let go
+    /// (one let go where it was pressed stays where it was).
     pub(crate) fn release_pit_design(&mut self) {
         if let Some(draft) = self.editor.pit_design.as_mut()
-            && (draft.widening.take().is_some() | draft.grading.take().is_some() | draft.wall_drag.take().is_some() | draft.drag_from.take().is_some())
+            && (draft.widening.take().is_some()
+                | draft.grading.take().is_some()
+                | draft.wall_drag.take().is_some()
+                | draft.drag_from.take().is_some()
+                | std::mem::take(&mut draft.moving_wall))
         {
             self.redraw_requested = true;
+        }
+        if let Some(draft) = self.editor.pit_design.as_mut()
+            && let Some(adding) = draft.adding_ramp.take()
+        {
+            draft.adding_arrow = None;
+            if let Some(working) = draft.working.as_mut() {
+                let settings = &mut working.settings;
+                let index = place_ramp(settings, settings.ramps.len(), adding.foot.truncate());
+                settings.ramps[index].climbs_clockwise = adding.clockwise;
+            }
+            self.make_way_for_ramp(adding.foot);
+            self.update_pit_design_preview();
+            self.invalidate_overlay();
+            return;
         }
         let Some(pressed_at) = self.editor.pit_design.as_mut().and_then(|draft| draft.dragging_ramp.take()) else {
             return;
@@ -1275,6 +1600,8 @@ impl App<'_> {
             .is_some_and(|(x, y)| (x - pressed_at.0).hypot(y - pressed_at.1) > crate::app::PICK_THRESHOLD_PX);
         if moved {
             self.pick_pit_ramp_start_at_cursor();
+        } else {
+            self.cancel_pit_ramp_start_pick();
         }
         self.invalidate_overlay();
     }
@@ -1314,6 +1641,7 @@ impl App<'_> {
         if let Some(working) = self.editor.pit_design.as_mut().and_then(|draft| draft.working.as_mut()) {
             place_ramp(&mut working.settings, index, nearest.truncate());
         }
+        self.make_way_for_ramp(nearest);
         if let Some(draft) = self.editor.pit_design.as_mut() {
             draft.picking_ramp = None;
             draft.ramp_hover = None;
@@ -1450,10 +1778,17 @@ impl App<'_> {
 /// pixels.
 const GIZMO_REACH: f32 = 10.0;
 
+/// How much nearer than it is a ball or spot counts against an arm or ring
+/// it stands on or crosses, in physical pixels.
+const POINT_PREFERENCE: f32 = 4.0;
+
 /// How much of a sweep round a ring turns what it sets: geared down, as the
-/// rings are small on screen and faces and grades are set to fine steps.
-const FACE_RING_GEAR: f64 = 0.25;
+/// rings are small on screen and grades are set to fine steps.
 const GRADE_RING_GEAR: f64 = 0.5;
+
+/// How far past no berm at all a berm's end is pulled back before the walls
+/// step the other way, in metres: a berm taken to nothing stays nothing.
+const FLIP_BERM: f64 = 1.0;
 
 /// The gentlest and steepest a face's ring turns a bench face to, in
 /// degrees.

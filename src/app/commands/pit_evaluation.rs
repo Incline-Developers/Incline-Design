@@ -313,7 +313,13 @@ fn measure(inputs: &Inputs, cancel: &crate::app::jobs::CancelFlag, progress: &cr
     let surface = super::triangulation::creation::surface_through_strings(strings)?;
     anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
     let region = if design.dump { SolidRegion::Fill } else { SolidRegion::Cut };
-    let solid = super::triangulation::solid_between::build_solid_mesh(&surface, &inputs.topography, region, "", &progress.phase(0.0, 0.3))?;
+    let solid = super::triangulation::solid_between::build_solid_mesh(
+        &surface,
+        &inputs.topography,
+        region,
+        super::triangulation::solid_between::BuiltFor::Measure,
+        &progress.phase(0.0, 0.3),
+    )?;
     anyhow::ensure!(!cancel.is_cancelled(), crate::app::jobs::Cancelled);
 
     // The benches, bottom up, the lowest and highest reaching as far as the

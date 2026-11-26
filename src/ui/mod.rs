@@ -568,11 +568,11 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
     {
         return Some(ViewportMessage::text(tr!("pit-design-gizmo-dragging")).minor(tr!("pit-design-gizmo-fine")));
     }
+    if editor.pit_design.as_ref().is_some_and(|draft| draft.adding_ramp.is_some()) {
+        return Some(ViewportMessage::text(tr!("pit-design-ramp-add-prompt")).minor(tr!("ui-esc-cancels")));
+    }
     if editor.pit_design.as_ref().is_some_and(|draft| draft.dragging_ramp.is_some()) {
         return Some(ViewportMessage::text(tr!("pit-design-ramp-drag-prompt")).minor(tr!("ui-esc-cancels")));
-    }
-    if editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp.is_some()) {
-        return Some(ViewportMessage::text(tr!("pit-design-ramp-start-prompt")).minor(tr!("ui-esc-cancels")));
     }
     if editor.pit_design.as_ref().is_some_and(|draft| draft.picking_region) {
         return Some(ViewportMessage::text(tr!("pit-design-region-prompt")).minor(tr!("ui-esc-cancels")));

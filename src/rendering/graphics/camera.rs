@@ -1088,6 +1088,14 @@ impl<'a> Graphics<'a> {
         self.orbit_marker = rotation_centre.is_none().then_some(pt);
     }
 
+    /// Begin an orbit about `pivot`, a point the caller chose, marked as the
+    /// one picked under the cursor is.
+    pub(crate) fn begin_orbit_about(&mut self, pivot: DVec3) {
+        self.camera.sync_angles_from_forward();
+        self.camera_controller.begin_orbit(self.exaggerate_point(pivot));
+        self.orbit_marker = Some(pivot);
+    }
+
     /// Asset under the cursor, else object, working plane, or eye depth.
     /// `overlay` holds surfaces drawn in place of or over the project's own
     /// - planning solids, Animate's ground - so the pivot lands on them too.

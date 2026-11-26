@@ -1393,15 +1393,7 @@ impl<'a> App<'a> {
                 self.finish_pit_editing();
                 Ok(())
             }
-            UiCommand::PitDesignStage(stage) => {
-                self.set_pit_stage(stage);
-                Ok(())
-            }
             UiCommand::ExplodePitDesign(id) => self.explode_pit_design(id).map(|_| ()),
-            UiCommand::BeginPitRampStartPick(index) => {
-                self.begin_pit_ramp_start_pick(index);
-                Ok(())
-            }
             UiCommand::BeginPitRegionPick => {
                 self.begin_pit_region_pick();
                 Ok(())

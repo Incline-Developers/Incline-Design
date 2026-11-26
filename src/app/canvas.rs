@@ -151,6 +151,32 @@ impl<'a> App<'a> {
         self.invalidate_geometry();
     }
 
+    /// A click with no tool up on `clicked`: the second on the same bench
+    /// design in quick succession opens it in Bench Design, as a double click
+    /// opens a thing to edit it. Whether it did.
+    fn double_clicked_pit(&mut self, clicked: Option<SceneEntityId>) -> bool {
+        let pit = match clicked {
+            Some(SceneEntityId::Object(id)) if self.editor.active_tool == ActiveTool::None && matches!(self.operand_object(id), Some(Object::PitDesign { .. })) => id,
+            _ => {
+                self.last_pit_click = None;
+                return false;
+            }
+        };
+        let now = web_time::Instant::now();
+        let again = self.last_pit_click.is_some_and(|(last, at)| last == pit && now.duration_since(at) <= DOUBLE_CLICK);
+        self.last_pit_click = (!again).then_some((pit, now));
+        if !again {
+            return false;
+        }
+        self.activate_project_for_object(pit);
+        self.editor.selected_handles.clear();
+        self.editor.selected_handles.insert(SceneEntityId::Object(pit));
+        self.refresh_selection_counts();
+        self.open_pit_design();
+        self.invalidate_geometry();
+        true
+    }
+
     /// Update the candidate highlight and description shown by dialog-driven
     /// viewport pickers. Work is invoked at the existing bounded hover-poll
     /// rate, and geometry is invalidated only when the candidate changes.
@@ -451,6 +477,9 @@ impl<'a> App<'a> {
 
         if !dragged {
             if self.editor.active_tool == ActiveTool::None && self.select_tie_at_cursor() {
+                return;
+            }
+            if self.double_clicked_pit(pending_selection_click.map(|pick| pick.entity)) {
                 return;
             }
             if let Some(pick) = pending_selection_click {
@@ -957,3 +986,6 @@ fn is_drill_pattern_boundary(object: &Object) -> bool {
 fn is_drapeable(object: &Object) -> bool {
     !matches!(object, Object::Circle { .. })
 }
+
+/// How soon a second click must follow the first to make a double click.
+const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(450);

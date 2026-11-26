@@ -677,6 +677,9 @@ pub(crate) struct App<'a> {
     pub(crate) water: crate::app::water::WaterRuns,
     pub(crate) solid_preview_restore_requested: Option<crate::app::commands::solids::SolidPreviewKey>,
     pending_selection_click: Option<crate::rendering::graphics::camera::ScenePick>,
+    /// The bench design last clicked with no tool up, and when: a second
+    /// click on it soon after opens it in Bench Design.
+    last_pit_click: Option<(crate::model::ObjectId, Instant)>,
     move_session_original: Option<MoveSession>,
     /// Captured collar placements, shared by Move Collar and Rotate Collar:
     /// both rewrite the same holes from the same originals, and only one of
@@ -902,6 +905,7 @@ impl<'a> Default for App<'a> {
             water: Default::default(),
             solid_preview_restore_requested: None,
             pending_selection_click: None,
+            last_pit_click: None,
             move_session_original: None,
             collar_move_session: None,
             collar_rotation: None,

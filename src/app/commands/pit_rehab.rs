@@ -200,7 +200,13 @@ pub(super) fn rehabilitate(
     // however small its top is left.
     let (found, (reshaped, surface)) = best.ok_or_else(|| anyhow::anyhow!(tr!("pit-design-rehab-too-flat")))?;
     anyhow::ensure!(found.abs() <= dump_volume * 0.01, tr!("pit-design-rehab-too-flat"));
-    let solid = super::triangulation::solid_between::build_solid_mesh(&surface, ground_mesh, SolidRegion::Fill, "", &crate::model::progress::Progress::new().phase(0.0, 1.0))?;
+    let solid = super::triangulation::solid_between::build_solid_mesh(
+        &surface,
+        ground_mesh,
+        SolidRegion::Fill,
+        super::triangulation::solid_between::BuiltFor::Measure,
+        &crate::model::progress::Progress::new().phase(0.0, 1.0),
+    )?;
     // The earthworks: each landform set into the ground round both, and the
     // solid between them; where the dump's lies below the reshaped one's,
     // ground placed, above, ground cut.
@@ -264,7 +270,14 @@ mod tests {
         let strings = design.strings.iter().map(|string| (string.points.clone(), string.closed)).collect();
         let surface = crate::app::commands::triangulation::creation::surface_through_strings(strings).unwrap();
         let progress = crate::model::progress::Progress::new();
-        let dump = super::super::triangulation::solid_between::build_solid_mesh(&surface, &ground, SolidRegion::Fill, "", &progress.phase(0.0, 1.0)).unwrap();
+        let dump = super::super::triangulation::solid_between::build_solid_mesh(
+            &surface,
+            &ground,
+            SolidRegion::Fill,
+            super::super::triangulation::solid_between::BuiltFor::Measure,
+            &progress.phase(0.0, 1.0),
+        )
+        .unwrap();
         let cancel = crate::app::jobs::CancelFlag::default();
         let mut spread = 0.0;
         for top in [None, Some(35.0)] {

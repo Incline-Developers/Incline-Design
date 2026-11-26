@@ -714,6 +714,8 @@ impl<'a> App<'a> {
                         self.update_pit_flag_hover();
                         self.update_pit_gizmo();
                         self.update_pit_ramp_marker_hover();
+                        self.update_pit_adding_ramp();
+                        self.update_pit_string_hover();
                     }
                     if self.editor.active_tool == ActiveTool::PitDesign {
                         self.update_pit_ground_under_cursor();
@@ -1303,21 +1305,28 @@ impl<'a> App<'a> {
         // The Layout's blocks are flat fills in the scene, not surfaces; their
         // pick surface stands in so an orbit pivots on the block it starts on.
         let overlay = if self.editor.is_haulage_page() { &self.haul_block_surface[..] } else { drawn.1 };
+        // A bench design open in its tool is seen through the ground: begun
+        // over it, the orbit turns about it, not the ground above it.
+        let pit_pivot = self.editor.rotation_centre.is_none().then(|| self.pit_orbit_pivot(press)).flatten();
         let Some(graphics) = self.graphics.as_mut() else {
             return;
         };
-        graphics.begin_orbit_at_surface(
-            drawn.0,
-            overlay,
-            &self.drill_holes,
-            &self.editor.hidden_handles,
-            &self.editor.orbit_frozen,
-            &self.scene_document,
-            &self.snap_index,
-            self.editor.z_level,
-            self.editor.rotation_centre,
-            self.editor.xray_enabled,
-        );
+        if let Some(pivot) = pit_pivot {
+            graphics.begin_orbit_about(pivot);
+        } else {
+            graphics.begin_orbit_at_surface(
+                drawn.0,
+                overlay,
+                &self.drill_holes,
+                &self.editor.hidden_handles,
+                &self.editor.orbit_frozen,
+                &self.scene_document,
+                &self.snap_index,
+                self.editor.z_level,
+                self.editor.rotation_centre,
+                self.editor.xray_enabled,
+            );
+        }
         graphics.begin_right_orbit_drag();
         self.right_orbit_active = true;
         self.redraw_requested = true;
@@ -1459,6 +1468,8 @@ impl<'a> App<'a> {
                     self.cancel_text_edit();
                 } else if self.dragging_pit_gizmo() {
                     self.cancel_pit_gizmo_drag();
+                } else if self.adding_pit_ramp() {
+                    self.cancel_pit_adding_ramp();
                 } else if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_ramp.is_some()) {
                     self.cancel_pit_ramp_start_pick();
                 } else if self.editor.pit_design.as_ref().is_some_and(|draft| draft.picking_region) {
@@ -1602,6 +1613,11 @@ impl<'a> App<'a> {
                 self.invalidate_overlay();
             }
             KeyCode::Delete | KeyCode::Backspace if !self.editor.text_editing_enabled && self.editor.object_edit_dialog.is_none() => {
+                // A bench design's ramp under the pointer is taken off it,
+                // whatever else is selected.
+                if self.remove_pit_ramp_under_cursor() {
+                    return;
+                }
                 // The Gantt shows no scene objects, so Delete there is for the
                 // selected bars only - never a prompt to delete objects
                 // selected out of sight. Not while a bar's editor is open over it.

@@ -6227,13 +6227,8 @@ pub(crate) enum UiCommand {
     OpenPitDesign,
     /// Done with the pit in Pit Design's panel: the tool is put down.
     FinishPitDesign,
-    /// Go to a step of Pit Design's panel.
-    PitDesignStage(crate::ui::dialogs::pit_design::PitStage),
     /// Turn a pit design object into polylines.
     ExplodePitDesign(ObjectId),
-    /// Wait for a click on Pit Design's string where a ramp starts: the
-    /// ramp at this place in the list, or a new one one past the last.
-    BeginPitRampStartPick(usize),
     /// Wait for a click on a closed polyline, a new Pit Design slope
     /// region's outline.
     BeginPitRegionPick,
@@ -6500,8 +6495,6 @@ impl UiCommand {
             | Self::OpenInsertPointAtElevationDialog
             | Self::OpenPitDesign
             | Self::FinishPitDesign
-            | Self::PitDesignStage(_)
-            | Self::BeginPitRampStartPick(_)
             | Self::BeginPitRegionPick
             | Self::PitDesignHover(_)
             | Self::FramePitFlag(_)

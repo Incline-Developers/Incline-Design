@@ -624,10 +624,21 @@ impl<'a> Graphics<'a> {
         let project = |world: DVec3| self.world_to_window_px(&view_proj, world);
         let design = draft.preview.as_ref().and_then(|preview| preview.design.as_ref().ok());
         draft.flag_px = design.map_or_else(Vec::new, |design| design.flags.iter().map(|flag| project(flag.at)).collect());
-        // While a start is picked or a region chosen, the handles stand down.
-        if draft.picking_ramp.is_some() || draft.picking_region {
-            return;
-        }
+        // Where a press on the string would add a ramp, and while one is
+        // added, the way it climbs from its foot.
+        draft.string_hover_px = draft.string_hover.and_then(project);
+        draft.adding_arrow = draft.adding_ramp.filter(|adding| adding.dragged).and_then(|adding| {
+            let centre = project(adding.foot)?;
+            let scale = gizmo_screen_scale(adding.foot, centre, self.camera.forward(), self.camera.up(), &project)?;
+            let reach = 1.6 * CLIMB_ARROW_POINTS * self.scale_factor() / scale.px_per_world;
+            let way = adding.way.extend(0.0);
+            let across = DVec3::new(-adding.way.y, adding.way.x, 0.0);
+            let (tip, back) = (adding.foot + way * reach, adding.foot + way * (reach * 0.7));
+            Some([centre, project(tip)?, project(back + across * (reach * 0.18))?, project(back - across * (reach * 0.18))?])
+        });
+        // While a start is moved, a ramp added or a region chosen, the
+        // ramps' handles stand down; the walls' stay where they are.
+        let placing = draft.placing_ramp() || draft.picking_region;
         let (Some(id), Some(working), Some(preview), Some(design)) = (draft.object_id(), draft.working.as_ref(), draft.preview.as_ref(), design) else {
             return;
         };
@@ -647,7 +658,7 @@ impl<'a> Graphics<'a> {
             .collect();
         let mut gizmos = Vec::new();
         let mut spots = Vec::new();
-        for (index, (ramp, foot)) in working.settings.ramps.iter().zip(&preview.ramp_starts).enumerate() {
+        for (index, (ramp, foot)) in working.settings.ramps.iter().zip(&preview.ramp_starts).enumerate().filter(|_| !placing) {
             let at = foot.truncate();
             let edge = (ring::nearest(&ring, at).0.floor() as usize).min(count - 1);
             let Some(tangent) = (ring[(edge + 1) % count] - ring[edge]).try_normalize() else {
@@ -708,29 +719,27 @@ impl<'a> Graphics<'a> {
             }
             let goes = tangent * (next_sign(ahead - leaving, tangent));
             let across = normal * next_sign(leaving - at, normal);
-            if let Some(gizmo) = self.ramp_gizmo(index, *foot, goes, across, ramp.gradient, &project) {
+            if let Some(gizmo) = self.ramp_gizmo(index, *foot, (goes, across), (ramp.gradient, ramp.width), &project) {
                 gizmos.push(gizmo);
             }
         }
-        // Each step its own handles: the ramps' on the ramp's, the walls' on
-        // the benches'.
-        let benches = draft.stage == crate::ui::dialogs::pit_design::PitStage::Benches;
+        // The walls' handles and the ramps' are up together: each stands
+        // where it sets what it sets.
         let (clear_view, kept) = (draft.clear_view, draft.wall_place);
-        let wall = if benches {
-            self.wall_gizmo(working, design, &ring, (&preview.ramp_starts, clear_view, kept), &project)
-        } else {
-            None
-        };
-        draft.wall_place = wall.as_ref().map(|(_, place)| *place).or(kept);
-        draft.wall_gizmo = wall.map(|(gizmo, _)| gizmo);
-        draft.gizmos = if benches { Vec::new() } else { gizmos };
-        draft.switch_spots = if benches { Vec::new() } else { spots };
+        let (wall, place) = self.wall_gizmo(working, design, &ring, (&preview.ramp_starts, clear_view, kept), &project);
+        draft.wall_place = place;
+        draft.wall_gizmo = wall;
+        draft.gizmos = gizmos;
+        draft.switch_spots = spots;
     }
 
-    /// The walls' gizmo, on the pit's string where it stands furthest from
-    /// the ramps: a section of the first bench as the settings cut it, at a
-    /// fixed size on screen, standing up from the string as it stands in the
-    /// ground.
+    /// The walls' gizmo: the first two benches' section as the settings cut
+    /// them, standing upright on the pit's string at their true size, so its
+    /// corners lie on the design's rings. It stays where it was put on the string (its
+    /// foot is dragged to move it), so turning the view walks round it; it
+    /// is put somewhere else only when it has no place yet, or a ramp now
+    /// starts on it. Gone from the view while its foot is out of it, when
+    /// the panel sets what it sets.
     fn wall_gizmo(
         &self,
         working: &crate::model::pit_design::object::PitObject,
@@ -738,48 +747,82 @@ impl<'a> Graphics<'a> {
         ring: &[glam::DVec2],
         (ramp_starts, clear_view, kept): (&[DVec3], Option<[f32; 4]>, Option<glam::DVec2>),
         project: &impl Fn(DVec3) -> Option<(f32, f32)>,
-    ) -> Option<(crate::ui::dialogs::pit_design::WallGizmo, glam::DVec2)> {
-        use crate::{
-            model::pit_design::ring as rings,
-            ui::dialogs::pit_design::{RING_STEPS, WallGizmo},
-        };
+    ) -> (Option<crate::ui::dialogs::pit_design::WallGizmo>, Option<glam::DVec2>) {
+        use crate::model::pit_design::ring as rings;
         let count = ring.len();
-        let (&base, &top) = (design.levels.first()?, design.levels.get(1)?);
-        // Places along the string clear of the ramps: the one nearest the
-        // middle of what the panel leaves of the view, or failing any in
-        // view, the one furthest from the ramps.
-        let places: Vec<(glam::DVec2, f64)> = (0..count)
-            .flat_map(|edge| {
-                let (a, b) = (ring[edge], ring[(edge + 1) % count]);
-                let steps = (a.distance(b) / WALL_GIZMO_STEP).ceil().max(1.0) as usize;
-                (0..steps).map(move |step| a.lerp(b, (step as f64 + 0.5) / steps as f64))
-            })
-            .map(|place| (place, ramp_starts.iter().map(|start| start.truncate().distance(place)).fold(f64::INFINITY, f64::min)))
-            .collect();
+        let (Some(&base), Some(&top)) = (design.levels.first(), design.levels.get(1)) else {
+            return (None, kept);
+        };
         let margin = (WALL_GIZMO_MARGIN * self.scale_factor()) as f32;
         let shown = |place: glam::DVec2| {
             clear_view.is_none_or(|[left, top, right, bottom]| {
                 project(place.extend(base)).is_some_and(|(x, y)| x > left + margin && x < right - margin && y > top + margin && y < bottom - margin)
             })
         };
-        // Where it was left, while that is still on the string and in view;
-        // or else the place clear of the ramps nearest the middle of the
-        // clear view.
-        let kept = kept.filter(|place| rings::nearest(ring, *place).1 < 0.5 && shown(*place));
-        let in_view = kept.or_else(|| {
-            let [left, top, right, bottom] = clear_view?;
-            let (middle_x, middle_y) = ((left + right) * 0.5, (top + bottom) * 0.5);
-            places
-                .iter()
-                .filter(|(place, clear)| *clear >= WALL_GIZMO_RAMP_CLEAR && shown(*place))
-                .filter_map(|(place, _)| {
-                    let (x, y) = project(place.extend(base))?;
-                    Some((*place, (x - middle_x).hypot(y - middle_y)))
+        let clear_of_ramps = |place: glam::DVec2| ramp_starts.iter().map(|start| start.truncate().distance(place)).fold(f64::INFINITY, f64::min);
+        // Where it was put, on the string as it is now, unless a ramp starts
+        // on it; or else the place clear of the ramps nearest the middle of
+        // what the panel leaves of the view, or failing any in view, the one
+        // furthest from the ramps.
+        let kept = kept
+            .map(|place| rings::point_at(ring, rings::nearest(ring, place).0))
+            .filter(|place| clear_of_ramps(*place) >= WALL_GIZMO_RAMP_ON);
+        let at = kept.or_else(|| {
+            let places: Vec<(glam::DVec2, f64)> = (0..count)
+                .flat_map(|edge| {
+                    let (a, b) = (ring[edge], ring[(edge + 1) % count]);
+                    let steps = (a.distance(b) / WALL_GIZMO_STEP).ceil().max(1.0) as usize;
+                    (0..steps).map(move |step| a.lerp(b, (step as f64 + 0.5) / steps as f64))
                 })
-                .min_by(|a, b| a.1.total_cmp(&b.1))
-                .map(|(place, _)| place)
+                .map(|place| (place, clear_of_ramps(place)))
+                .collect();
+            // Clear of the ramps' gizmos on screen, as they are seen now.
+            let feet: Vec<(f32, f32)> = ramp_starts.iter().filter_map(|start| project(*start)).collect();
+            let wanted = (WALL_GIZMO_CLEAR_POINTS * self.scale_factor()) as f32;
+            let clear_on_screen = |(x, y): (f32, f32)| feet.iter().map(|foot| (foot.0 - x).hypot(foot.1 - y)).fold(f32::INFINITY, f32::min);
+            clear_view
+                .and_then(|[left, top, right, bottom]| {
+                    let (middle_x, middle_y) = ((left + right) * 0.5, (top + bottom) * 0.5);
+                    let in_view: Vec<(glam::DVec2, f32, f32)> = places
+                        .iter()
+                        .filter(|(place, clear)| *clear >= WALL_GIZMO_RAMP_ON && shown(*place))
+                        .filter_map(|(place, _)| {
+                            let at = project(place.extend(base))?;
+                            Some((*place, (at.0 - middle_x).hypot(at.1 - middle_y), clear_on_screen(at)))
+                        })
+                        .collect();
+                    // Nearest the middle of the view among those clear of the
+                    // ramps; or failing any, the clearest.
+                    in_view
+                        .iter()
+                        .filter(|(_, _, clear)| *clear >= wanted)
+                        .min_by(|a, b| a.1.total_cmp(&b.1))
+                        .or_else(|| in_view.iter().max_by(|a, b| a.2.total_cmp(&b.2)))
+                        .map(|(place, ..)| *place)
+                })
+                .or_else(|| places.iter().max_by(|a, b| a.1.total_cmp(&b.1)).map(|(place, _)| *place))
         });
-        let at = in_view.or_else(|| places.iter().max_by(|a, b| a.1.total_cmp(&b.1)).map(|(place, _)| *place))?;
+        let Some(at) = at else {
+            return (None, None);
+        };
+        if !shown(at) {
+            return (None, Some(at));
+        }
+        (self.bench_section(working, design, ring, at, (base, top), project), Some(at))
+    }
+
+    /// [`Self::wall_gizmo`]'s section, standing on the string at `at`.
+    fn bench_section(
+        &self,
+        working: &crate::model::pit_design::object::PitObject,
+        design: &crate::model::pit_design::Design,
+        ring: &[glam::DVec2],
+        at: glam::DVec2,
+        (base, top): (f64, f64),
+        project: &impl Fn(DVec3) -> Option<(f32, f32)>,
+    ) -> Option<crate::ui::dialogs::pit_design::WallGizmo> {
+        use crate::{model::pit_design::ring as rings, ui::dialogs::pit_design::WallGizmo};
+        let count = ring.len();
         // Out across the bench: the way to its end ring there.
         let crest_ring: Vec<glam::DVec2> = design
             .strings
@@ -798,66 +841,65 @@ impl<'a> Graphics<'a> {
         let forward = self.camera.forward();
         let centre = project(toe)?;
         let scale = gizmo_screen_scale(toe, centre, forward, self.camera.up(), project)?;
-        // A section metre's world length, so it draws the same size at any zoom.
-        let metre = SECTION_POINTS_PER_METRE * self.scale_factor() / scale.px_per_world;
-        // Standing as it is in the ground, as a Blender gizmo does: seen down
-        // its height, the height arrow fades out, and seen edge on, the
-        // face's ring.
-        let rise = (top - base).signum();
-        let up = DVec3::Z * rise;
+        // At its true size, up the way the design is built: its corners lie
+        // on the design's own rings, as the settings cut them. Its marks are
+        // a size on screen, short of the bench they mark.
         let out3 = out.extend(0.0);
-        let ring_fade = fade_ramp(out3.cross(DVec3::Z).dot(forward).abs() as f32, ROTATE_RING_FADE_MIN, ROTATE_RING_FADE_FULL);
-        let height_fade = fade_ramp((1.0 - forward.z * forward.z).max(0.0).sqrt() as f32, GIZMO_AXIS_FADE_MIN, GIZMO_AXIS_FADE_FULL);
-        let berm_fade = fade_ramp((1.0 - out3.dot(forward).powi(2)).max(0.0).sqrt() as f32, GIZMO_AXIS_FADE_MIN, GIZMO_AXIS_FADE_FULL);
+        let up3 = DVec3::Z * (top - base).signum();
         let settings = &working.settings;
+        let (height, berm) = (settings.bench_height, settings.berm_width);
         let angle = settings.face_angle.to_radians();
-        let radius = SECTION_RING_POINTS * self.scale_factor() / scale.px_per_world;
-        let on_ring = |turn: f64| toe + (out3 * turn.cos() + up * turn.sin()) * radius;
-        let angle_ring: Vec<(f32, f32)> = (0..RING_STEPS)
-            .map(|step| project(on_ring(std::f64::consts::TAU * step as f64 / RING_STEPS as f64)))
-            .collect::<Option<_>>()?;
-        let arm = SECTION_ARM_POINTS * self.scale_factor() / scale.px_per_world;
-        let toe_px = centre;
-        let unit_px = |from: (f32, f32), to: (f32, f32)| {
-            let length = (to.0 - from.0).hypot(to.1 - from.1);
-            (length > 1.0e-3).then_some(((to.0 - from.0) / length, (to.1 - from.1) / length, length))
+        let run = height / angle.tan();
+        let section = |x: f64, y: f64| project(toe + out3 * x + up3 * y);
+        let points = |points: f64| points * self.scale_factor() / scale.px_per_world;
+        let gap = points(HEIGHT_MARK_POINTS).min(height * 0.6);
+        let arc = points(ANGLE_ARC_POINTS).min(0.45 * height / angle.sin());
+        // The pixels a metre takes up and out, from a reach a size on screen.
+        let probe = points(SECTION_PROBE_POINTS);
+        let unit_px = |to: (f32, f32)| {
+            let length = (to.0 - centre.0).hypot(to.1 - centre.1);
+            (length > 1.0e-3).then_some(((to.0 - centre.0) / length, (to.1 - centre.1) / length, length / probe as f32))
         };
-        // Seen down it, up has no way on screen: its arrow is faded out.
-        let (up_x, up_y, up_px) = unit_px(toe_px, project(toe + up * metre)?).unwrap_or((0.0, -1.0, 1.0e-3));
-        let (out_x, out_y, out_px) = unit_px(toe_px, project(toe + out3 * metre)?).unwrap_or((1.0, 0.0, 1.0e-3));
-        Some((
-            WallGizmo {
-                ring_fade,
-                height_fade,
-                berm_fade,
-                toe: toe_px,
-                up: (up_x, up_y),
-                out: (out_x, out_y),
-                pixels_per_metre_up: up_px,
-                pixels_per_metre_out: out_px,
-                angle_ring,
-                angle_handle: project(on_ring(angle))?,
-                // Both from the toe, the ring's corner, a fixed length on
-                // screen whatever they set, as a Blender gizmo's arms.
-                height_from: toe_px,
-                height_tip: project(toe + up * arm)?,
-                berm_from: toe_px,
-                berm_tip: project(toe + out3 * arm)?,
-            },
-            at,
-        ))
+        // Seen down a way, it has none on screen: what moves along it fades.
+        let (up_x, up_y, up_px) = unit_px(section(0.0, probe)?).unwrap_or((0.0, -1.0, 1.0e-3));
+        let (out_x, out_y, out_px) = unit_px(section(probe, 0.0)?).unwrap_or((1.0, 0.0, 1.0e-3));
+        let along = project(toe + tangent.extend(0.0) * probe).and_then(unit_px).map_or((1.0, 0.0), |(x, y, _)| (x, y));
+        let seen = |way: DVec3| (1.0 - way.dot(forward).powi(2)).max(0.0).sqrt() as f32;
+        Some(WallGizmo {
+            height_fade: fade_ramp(seen(up3), GIZMO_AXIS_FADE_MIN, GIZMO_AXIS_FADE_FULL),
+            arc_fade: fade_ramp(out3.cross(up3).dot(forward).abs() as f32, ROTATE_RING_FADE_MIN, ROTATE_RING_FADE_FULL),
+            out_fade: fade_ramp(seen(out3), GIZMO_AXIS_FADE_MIN, GIZMO_AXIS_FADE_FULL),
+            toe: centre,
+            crest: section(run, height)?,
+            berm_end: section(run + berm, height)?,
+            next_top: section(run + berm + run, height * 2.0)?,
+            floor_back: section(-points(FLOOR_STUB_POINTS).min(height), 0.0)?,
+            height_from: section(-gap, 0.0)?,
+            height_tip: section(-gap, height)?,
+            angle_arc: (0..=ANGLE_ARC_STEPS)
+                .map(|step| {
+                    let turn = angle * step as f64 / ANGLE_ARC_STEPS as f64;
+                    section(arc * turn.cos(), arc * turn.sin())
+                })
+                .collect::<Option<_>>()?,
+            up: (up_x, up_y),
+            out: (out_x, out_y),
+            along,
+            pixels_per_metre_up: up_px,
+            pixels_per_metre_out: out_px,
+        })
     }
 
-    /// A ramp's gizmo at its foot: its grade ring standing on the road's
-    /// line, faded out as it turns edge on, and its width arrow out across
-    /// the road, both a fixed size on screen.
+    /// A ramp's gizmo at its foot: its grade ring standing upright on the
+    /// road's line, faded out as it goes edge on, and arrows along the string
+    /// the way it leaves its foot and the other way, a fixed size on screen;
+    /// and its width arrow across the road at its true width.
     fn ramp_gizmo(
         &self,
         ramp: usize,
         foot: DVec3,
-        goes: glam::DVec2,
-        across: glam::DVec2,
-        gradient: f64,
+        (goes, across): (glam::DVec2, glam::DVec2),
+        (gradient, width): (f64, f64),
         project: &impl Fn(DVec3) -> Option<(f32, f32)>,
     ) -> Option<crate::ui::dialogs::pit_design::RampGizmo> {
         use crate::ui::dialogs::pit_design::{RING_STEPS, RampGizmo};
@@ -866,12 +908,12 @@ impl<'a> Graphics<'a> {
         let scale = gizmo_screen_scale(foot, centre, forward, self.camera.up(), project)?;
         let length = GIZMO_LENGTH_POINTS * self.scale_factor();
         let radius = length * ROTATE_RING_RATIO / scale.px_per_world;
-        // Standing upright on the road's line, as a Blender rotate ring: seen
-        // edge on, from straight above, it fades out.
-        let lean = DVec3::Z;
-        let ring_fade = fade_ramp(goes.extend(0.0).cross(DVec3::Z).dot(forward).abs() as f32, ROTATE_RING_FADE_MIN, ROTATE_RING_FADE_FULL);
         let goes3 = goes.extend(0.0);
-        let on_ring = |angle: f64| foot + (goes3 * angle.cos() + lean * angle.sin()) * radius;
+        let across3 = across.extend(0.0);
+        // Seen edge on, from straight above, as a Blender rotate ring, it
+        // fades out; its value stays in its card.
+        let ring_fade = fade_ramp(goes3.cross(DVec3::Z).dot(forward).abs() as f32, ROTATE_RING_FADE_MIN, ROTATE_RING_FADE_FULL);
+        let on_ring = |angle: f64| foot + (goes3 * angle.cos() + DVec3::Z * angle.sin()) * radius;
         let ring: Vec<(f32, f32)> = (0..RING_STEPS)
             .map(|step| project(on_ring(std::f64::consts::TAU * step as f64 / RING_STEPS as f64)))
             .collect::<Option<_>>()?;
@@ -880,18 +922,23 @@ impl<'a> Graphics<'a> {
         let grade = (gradient / 100.0 * crate::ui::dialogs::pit_design::GRADE_EXAGGERATION).atan();
         let steps = ((grade / GRADE_ARC_STEP).ceil() as usize).max(1);
         let grade_arc: Vec<(f32, f32)> = (0..=steps).filter_map(|step| project(on_ring(grade * step as f64 / steps as f64))).collect();
-        // From the foot, the ring's centre, as the walls' arms are from
-        // their toe, and as long.
-        let arm = SECTION_ARM_POINTS * self.scale_factor();
+        // From the foot, the ring's centre, across the road at its true
+        // width: its tip on the road's far edge.
         let width_from = centre;
-        let width_tip = project(foot + across.extend(0.0) * (arm / scale.px_per_world))?;
+        let width_tip = project(foot + across3 * width)?;
         let run = (width_tip.0 - width_from.0).hypot(width_tip.1 - width_from.1).max(1.0e-3);
         // Pointing at the camera, as a Blender axis arrow, it fades out.
-        let width_fade = fade_ramp(
-            (1.0 - across.extend(0.0).dot(forward).powi(2)).max(0.0).sqrt() as f32,
-            GIZMO_AXIS_FADE_MIN,
-            GIZMO_AXIS_FADE_FULL,
-        );
+        let width_fade = fade_ramp((1.0 - across3.dot(forward).powi(2)).max(0.0).sqrt() as f32, GIZMO_AXIS_FADE_MIN, GIZMO_AXIS_FADE_FULL);
+        // The way it climbs, along the string from the foot, and the way
+        // it would the other way round: arrows a click turns it by.
+        // Clear of the start's marker, which a press there drags.
+        let chevron = |way: f64| -> Option<[(f32, f32); 3]> {
+            let reach = CLIMB_ARROW_POINTS * self.scale_factor() / scale.px_per_world;
+            let tip = foot + goes3 * (way * reach);
+            let back = foot + goes3 * (way * reach * 0.7);
+            let wing = across3 * (reach * 0.17);
+            Some([project(back + wing)?, project(tip)?, project(back - wing)?])
+        };
         Some(RampGizmo {
             ramp,
             ring_fade,
@@ -900,11 +947,12 @@ impl<'a> Graphics<'a> {
             ring,
             grade_arc,
             grade_handle: project(on_ring(grade)).unwrap_or(centre),
-            turn_handle: project(on_ring(std::f64::consts::PI - grade)).unwrap_or(centre),
+            climbs: chevron(1.0)?,
+            climbs_back: chevron(-1.0)?,
             width_from,
             width_tip,
             across: ((width_tip.0 - width_from.0) / run, (width_tip.1 - width_from.1) / run),
-            pixels_per_metre: (scale.px_per_world as f32) * (run / arm as f32).max(1.0e-3),
+            pixels_per_metre: run / (width as f32).max(1.0e-3),
         })
     }
 
@@ -1416,14 +1464,30 @@ const GRADE_ARC_STEP: f64 = 0.02;
 /// string, how far from any ramp's start they must be, in metres, and how
 /// far inside the clear view, in logical points.
 const WALL_GIZMO_STEP: f64 = 5.0;
-const WALL_GIZMO_RAMP_CLEAR: f64 = 40.0;
 const WALL_GIZMO_MARGIN: f64 = 130.0;
 
-/// The walls' gizmo: the points a metre dragged takes, the radius of its
-/// face's ring, and the length of its arms from the toe, in logical points.
-const SECTION_POINTS_PER_METRE: f64 = 6.0;
-const SECTION_RING_POINTS: f64 = 44.0;
-const SECTION_ARM_POINTS: f64 = 110.0;
+/// How far on screen the walls' gizmo is put from the ramps' feet, when it is
+/// put somewhere, in logical points: clear of their gizmos.
+pub(crate) const WALL_GIZMO_CLEAR_POINTS: f64 = 170.0;
+
+/// How near a ramp's start the walls' gizmo may stand before it is put
+/// somewhere else, in metres: on it, the two would cover each other.
+const WALL_GIZMO_RAMP_ON: f64 = 15.0;
+
+/// The walls' section's marks, in logical points: how far off its face the
+/// mark of its height stands, the radius of the arc of its face's angle, and
+/// how far the floor is drawn behind its toe, each no more than the bench
+/// it marks allows; the reach a metre's pixels are measured over; and the
+/// arc's steps.
+const HEIGHT_MARK_POINTS: f64 = 18.0;
+const ANGLE_ARC_POINTS: f64 = 30.0;
+const FLOOR_STUB_POINTS: f64 = 30.0;
+const SECTION_PROBE_POINTS: f64 = 50.0;
+const ANGLE_ARC_STEPS: usize = 24;
+
+/// How far along the string from a ramp's foot the arrow saying which way
+/// it climbs reaches, in logical points.
+const CLIMB_ARROW_POINTS: f64 = 46.0;
 
 /// Which way along `axis` a vector points: 1 or -1.
 fn next_sign(vector: glam::DVec2, axis: glam::DVec2) -> f64 {
