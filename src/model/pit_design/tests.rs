@@ -2018,3 +2018,92 @@ fn steep_triangles() {
     }
     println!("total steep triangles {total}");
 }
+
+/// A design from a saved project (`ZZ_OMF`), worked out again: its
+/// settings, its flags, and with `ZZ_OBJ` its surface as OBJ.
+#[test]
+#[ignore]
+fn from_project() {
+    let path = std::env::var("ZZ_OMF").unwrap();
+    let progress = crate::model::progress::Progress::new();
+    let bundle = crate::model::formats::omf::from_path("project", std::path::Path::new(&path), &progress.phase(0.0, 1.0)).unwrap();
+    for file in &bundle.designs {
+        for object in file.document.objects() {
+            let crate::model::Object::PitDesign { verts, pit, .. } = object else {
+                continue;
+            };
+            let settings = pit.settings();
+            println!("design {:?}: {:#?}", pit.name, settings);
+            let points = super::object::base_points(verts);
+            let base = Base::from_points(&points).unwrap();
+            let spec = settings.spec(points[0].truncate());
+            let design = design(&base, &spec, None, &|| false).unwrap();
+            println!("end {:?} benches {}", design.end, design.benches);
+            for (index, bench) in design.report.iter().enumerate() {
+                for road in bench.ramps.iter().filter(|road| road.switchback) {
+                    println!("turn bench {index} at {:.1?}", road.turn_at);
+                }
+            }
+            for flag in &design.flags {
+                println!("flag {:?} value {:.2} asked {:.2} len {:.1} bench {} at {:.1}", flag.check, flag.value, flag.asked, flag.length, flag.bench, flag.at);
+            }
+            if let Ok(out) = std::env::var("ZZ_OBJ") {
+                let strings: Vec<(Vec<DVec3>, bool)> = design
+                    .strings
+                    .iter()
+                    .filter(|string| string.kind != StringKind::RampCentreline)
+                    .map(|string| (string.points.clone(), string.closed))
+                    .collect();
+                let (vertices, faces) = crate::app::commands::triangulation::creation::surface_points_through_strings(strings).unwrap();
+                let mut obj = String::new();
+                for v in &vertices {
+                    obj += &format!("v {} {} {}\n", v.x, v.z, -v.y);
+                }
+                for f in &faces {
+                    obj += &format!("f {} {} {}\n", f[0] + 1, f[1] + 1, f[2] + 1);
+                }
+                std::fs::write(out, obj).unwrap();
+            }
+            if let (Ok(out), Ok(text)) = (std::env::var("ZZ_SVG"), std::env::var("ZZ_AT")) {
+                let v: Vec<f64> = text.split(',').map(|v| v.parse().unwrap()).collect();
+                let (cx, cy, size) = (v[0], v[1], v[2]);
+                let mut svg = format!(
+                    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='{} {} {size} {size}' width='1400' height='1400'><rect x='{}' y='{}' width='{size}' height='{size}' fill='white'/>",
+                    cx - size / 2.0,
+                    -cy - size / 2.0,
+                    cx - size / 2.0,
+                    -cy - size / 2.0
+                );
+                let stroke = size / 1500.0;
+                for string in &design.strings {
+                    let colour = match string.kind {
+                        StringKind::Toe => "#2a6fdb",
+                        StringKind::Crest => "#d9452b",
+                        StringKind::RampEdge => "#2f9e44",
+                        _ => "#999",
+                    };
+                    let path: Vec<String> = string.points.iter().map(|p| format!("{:.2},{:.2}", p.x, -p.y)).collect();
+                    let tag = if string.closed { "polygon" } else { "polyline" };
+                    svg += &format!("<{tag} points='{}' fill='none' stroke='{colour}' stroke-width='{stroke}'/>", path.join(" "));
+                    for p in &string.points {
+                        if (p.x - cx).abs() < size / 2.0 && (p.y - cy).abs() < size / 2.0 {
+                            svg += &format!("<circle cx='{:.2}' cy='{:.2}' r='{}' fill='{colour}'/>", p.x, -p.y, stroke * 1.5);
+                        }
+                    }
+                }
+                svg += "</svg>";
+                std::fs::write(out, svg).unwrap();
+            }
+            if let Ok(text) = std::env::var("ZZ_NEAR") {
+                let v: Vec<f64> = text.split(',').map(|v| v.parse().unwrap()).collect();
+                let (at, reach) = (DVec2::new(v[0], v[1]), v[2]);
+                for string in &design.strings {
+                    let near: Vec<String> = string.points.iter().filter(|p| p.truncate().distance(at) < reach).map(|p| format!("({:.2},{:.2},{:.2})", p.x, p.y, p.z)).collect();
+                    if !near.is_empty() {
+                        println!("near {:?} closed {}: {}", string.kind, string.closed, near.join(" "));
+                    }
+                }
+            }
+        }
+    }
+}
