@@ -1555,6 +1555,8 @@ fn flag_census() {
     let mut designs = 0;
     let mut flagged = 0;
     let mut turns = 0;
+    let (mut ramp_run, mut level_run, mut given_flats) = (0.0, 0.0, 0.0);
+    let mut grades: Vec<f64> = Vec::new();
     let mut ends: BTreeMap<String, usize> = BTreeMap::new();
     let mut groups: BTreeMap<(String, String), usize> = BTreeMap::new();
     let mut berm_road: BTreeMap<&str, usize> = BTreeMap::new();
@@ -1572,7 +1574,8 @@ fn flag_census() {
                     },
                 ] {
                     for clockwise in [false, true] {
-                        for (bench, face, berm) in [(10.0, 70.0, 6.0), (15.0, 60.0, 8.0)] {
+                        for (bench_height, face, berm) in [(10.0, 70.0, 6.0), (15.0, 60.0, 8.0)] {
+                            let bench = bench_height;
                             let start = points[2];
                             let mut spec = with_ramp(direction, layout, start, clockwise, Stop::Benches(8), (0.1, berm));
                             spec.bench_height = bench;
@@ -1588,6 +1591,26 @@ fn flag_census() {
                                 continue;
                             };
                             designs += 1;
+                            // How much of the ramp runs level beyond the flats
+                            // it was given, and how long it is.
+                            for string in design.strings.iter().filter(|string| string.kind == StringKind::RampCentreline) {
+                                for pair in string.points.windows(2) {
+                                    let run = pair[0].truncate().distance(pair[1].truncate());
+                                    ramp_run += run;
+                                    if (pair[1].z - pair[0].z).abs() < 1.0e-6 {
+                                        level_run += run;
+                                    }
+                                }
+                            }
+                            for (index, bench) in design.report.iter().enumerate() {
+                                for road in bench.ramps.iter().filter(|road| road.lengthened == 0.0) {
+                                    grades.push(road.grade);
+                                    if road.grade < 0.095 {
+                                        println!("low grade {:.4} {kind_name} {direction:?} dump={dump} {layout:?} cw={clockwise} {bench_height} bench {index} switchback {} flat {:.1}", road.grade, road.switchback, road.flat);
+                                    }
+                                }
+                            }
+                            given_flats += design.report.iter().flat_map(|bench| &bench.ramps).map(|road| road.flat).sum::<f64>();
                             turns += design.report.iter().flat_map(|bench| &bench.ramps).filter(|road| road.switchback).count();
                             *ends.entry(format!("{:?}", design.end)).or_default() += 1;
                             if std::env::var("ZZ_LIST").is_ok() {
@@ -1666,6 +1689,17 @@ fn flag_census() {
         }
     }
     println!("{designs} designs, {flagged} with flags, {turns} switchback turns; ends {ends:?}");
+    println!("ramp centreline {ramp_run:.0} m, level {level_run:.0} m, flats given {given_flats:.0} m");
+    grades.sort_by(f64::total_cmp);
+    let below = |limit: f64| grades.iter().filter(|grade| **grade < limit).count();
+    println!(
+        "stretches not lengthened {}: grade under 0.099 {}, under 0.095 {}, least {:.4}, mean {:.5}",
+        grades.len(),
+        below(0.099),
+        below(0.095),
+        grades.first().copied().unwrap_or(0.0),
+        grades.iter().sum::<f64>() / grades.len().max(1) as f64
+    );
     for (check, (count, miss, worst)) in by_check {
         println!("{check}: {count} flags, worst {:.1}% off, {worst}", miss * 100.0);
     }
@@ -1786,7 +1820,7 @@ fn flag_look() {
     }
     for (index, bench) in design.report.iter().enumerate() {
         for road in &bench.ramps {
-            println!("bench {index} at {:.1}: switchback {} turn at {:?}", bench.elevation, road.switchback, road.turn_at);
+            println!("bench {index} at {:.1}: switchback {} turn at {:?} lengthened {:.1} flat {:.1} grade {:.4} steepest {:.4}", bench.elevation, road.switchback, road.turn_at, road.lengthened, road.flat, road.grade, road.steepest);
         }
     }
     for string in &design.strings {
