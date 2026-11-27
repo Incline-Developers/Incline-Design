@@ -111,6 +111,53 @@ impl PitObject {
             .is_some_and(|derived| derived.inputs == inputs_key(verts, &settings) && (settings.ground().is_none() || derived.ground == ground))
     }
 
+    /// It as it stands once designed: no longer tied to the topography it
+    /// was designed against, nor the block model and shell it was measured
+    /// against. A design that daylit keeps the bench count it reached, so it
+    /// comes out the same without the ground; the design and its measure,
+    /// both current, are kept as they are, under the settled settings.
+    /// `None` when there is nothing to settle, or it cannot be yet: a
+    /// daylighting design not worked out for what it is now has no count to
+    /// keep.
+    pub(crate) fn settled(&self, verts: &[PolyVertex]) -> Option<PitObject> {
+        if !self.has_links() {
+            return None;
+        }
+        let before = inputs_key(verts, &self.settings);
+        let current = self.derived.as_ref().filter(|derived| derived.inputs == before);
+        let mut settled = self.clone();
+        if self.settings.daylights() {
+            let benches = match &current?.outcome {
+                Outcome::Design(design) => design.benches,
+                // Settings that make no design have no count to keep: what
+                // they make without the ground is the same nothing.
+                Outcome::NotClosed | Outcome::Problem(_) => self.settings.benches,
+            };
+            settled.settings.stop = super::settings::StopMode::Benches;
+            settled.settings.benches = benches.max(1);
+        }
+        settled.settings.topography = None;
+        settled.settings.evaluation.block_model = None;
+        settled.settings.evaluation.shell = None;
+        let after = inputs_key(verts, &settled.settings);
+        if current.is_some()
+            && let Some(derived) = &mut settled.derived
+        {
+            derived.inputs = after;
+            derived.ground = None;
+        }
+        if let Some(evaluation) = settled.evaluation.as_mut().filter(|evaluation| evaluation.design == before) {
+            evaluation.design = after;
+        }
+        Some(settled)
+    }
+
+    /// Whether it links to anything it is designed or measured against: what
+    /// it lets go of as it settles.
+    pub(crate) fn has_links(&self) -> bool {
+        self.settings.topography.is_some() || self.settings.evaluation.block_model.is_some() || self.settings.evaluation.shell.is_some()
+    }
+
     /// Move it by `delta` with its string: its ramp starts, and the design
     /// worked out, which moves with the string unless it daylights against
     /// ground that stays put. `verts` is the string after the move.

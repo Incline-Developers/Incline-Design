@@ -436,7 +436,8 @@ fn draw_drawing_settings(ui: &mut egui::Ui, editor: &mut EditorState, project: &
         .width(SELECTOR_COMBO_WIDTH)
         .show_ui(ui, |ui| {
             ui.selectable_value(&mut editor.active_layer, None, tr!("common-none"));
-            for layer in active_layers.iter().filter(|layer| layer.is_loaded) {
+            // The layer drawn onto: never one a data reference shows.
+            for layer in active_layers.iter().filter(|layer| layer.is_loaded && layer.reference.is_none()) {
                 ui.selectable_value(&mut editor.active_layer, Some(layer.id), &layer.name);
             }
         });

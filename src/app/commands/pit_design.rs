@@ -104,6 +104,11 @@ fn derived_from(verts: &[PolyVertex], settings: &PitDesignSettings, ground: Opti
     })
 }
 
+/// The pit an object holds, if it is a pit design.
+fn before_pit(object: &Object) -> Option<&PitObject> {
+    pit_parts(object).map(|(_, pit)| pit)
+}
+
 /// The point of a closed string nearest `point` in plan, at the string's RL
 /// there.
 fn nearest_on_string(points: &[DVec3], point: DVec2) -> DVec3 {
@@ -480,13 +485,21 @@ impl App<'_> {
     /// Write the window's copy into the project now, settled or not, with
     /// the design the preview worked out for it if it has one.
     pub(crate) fn flush_pit_design_draft(&mut self) {
+        self.write_pit_design_draft(false);
+    }
+
+    /// [`Self::flush_pit_design_draft`], and with `finished`, the design
+    /// settled as it is put down: see [`PitObject::settled`]. In the same
+    /// undo step as the edits, so undo takes it back to where it was being
+    /// designed.
+    fn write_pit_design_draft(&mut self, finished: bool) {
         let Some(draft) = self.editor.pit_design.as_ref() else {
             return;
         };
         let (Some(id), Some(working), Some(synced)) = (draft.object_id(), draft.working.clone(), draft.synced.as_ref()) else {
             return;
         };
-        if working == *synced {
+        if working == *synced && !finished {
             return;
         }
         let Some(before) = self.operand_object(id).filter(|object| matches!(object, Object::PitDesign { .. })).cloned() else {
@@ -505,6 +518,17 @@ impl App<'_> {
             && let Some(derived) = derived_from(verts, &settings, key.ground, &preview.design)
         {
             working.derived = Some(derived);
+        }
+        // Settled as it is put down, once it is measured; one put down before
+        // its measure lands settles when it does.
+        if finished
+            && self.pit_ready_to_settle(id)
+            && let Some(settled) = working.settled(verts)
+        {
+            working = settled;
+        }
+        if before_pit(&before) == Some(&working) {
+            return;
         }
         let after = with_pit(&before, working.clone());
         self.execute_edit(Command::Replace { before, after });
@@ -583,6 +607,7 @@ impl App<'_> {
             waiting: self.pit_evaluation_waiting(id),
             fields: self.workspace.active_document().map(|document| document.reserve_fields().to_vec()).unwrap_or_default(),
             designs: self.compared_pit_designs(id),
+            ground_guess: self.pit_topography_guess(verts.first().map(|vertex| vertex.pos.truncate())),
         };
         if let Some(draft) = self.editor.pit_design.as_mut() {
             draft.facts = facts;
@@ -620,7 +645,7 @@ impl App<'_> {
     /// Put the panel away, with what it was editing written to the object:
     /// the tool is being put down.
     pub(crate) fn close_pit_design(&mut self) {
-        self.flush_pit_design_draft();
+        self.write_pit_design_draft(true);
         if let Some(settings) = self.editor.pit_design.as_ref().and_then(|draft| draft.working.as_ref()).map(PitObject::settings) {
             self.editor.pit_last_settings = Some(settings);
         }
@@ -746,11 +771,65 @@ impl App<'_> {
     pub(crate) fn refresh_pit_designs(&mut self) {
         let checked = self.editor.pit_refresh_checked;
         self.refresh_stale_pit_designs();
+        self.settle_designed_pits();
         // Whatever changed the project (an edit, undo or redo, a design
         // worked out), the pits' ramps are the network's roads still.
         if self.editor.pit_refresh_checked != checked {
             self.keep_pit_roads();
         }
+    }
+
+    /// Whether pit design `id` is ready to settle: its design worked out for
+    /// what it is now and measured, or with nothing it can be measured
+    /// against loaded. Not while it is being measured, since that needs the
+    /// topography settling lets go of.
+    fn pit_ready_to_settle(&self, id: ObjectId) -> bool {
+        matches!(self.pit_evaluation_waiting(id), None | Some(crate::model::pit_design::evaluation::Waiting::NotLoaded(_)))
+    }
+
+    /// Settle every pit design that is designed and measured, but the one
+    /// open in the tool, which settles as it is put down: see
+    /// [`PitObject::settled`]. Not an edit of its own, as working a design
+    /// out is not; undo takes back the change that made it.
+    fn settle_designed_pits(&mut self) {
+        let open = self.editor.pit_design.as_ref().and_then(PitDesignDraft::object_id);
+        let Some(document) = self.workspace.active_document() else {
+            return;
+        };
+        let settled: Vec<Object> = document
+            .objects()
+            .iter()
+            .filter(|object| Some(object.id()) != open)
+            .filter_map(|object| {
+                let (verts, pit) = pit_parts(object)?;
+                // Settled only once it is designed and measured: a design
+                // waiting for its ground keeps it until it has the count to
+                // keep. Checked before anything is copied: this runs every
+                // frame.
+                if !pit.has_links() {
+                    return None;
+                }
+                // With its ground loaded, it is designed against the ground
+                // as it is now, and measured, first. With it not, there is
+                // nothing to design or measure against: the design it was
+                // saved with stands (`settled` keeps only one current for its
+                // string and settings).
+                if self.pit_ground_loaded(&pit.settings) && (!pit.is_fresh(verts, self.pit_ground_version(&pit.settings)) || !self.pit_ready_to_settle(object.id())) {
+                    return None;
+                }
+                pit.settled(verts).map(|settled| with_pit(object, settled))
+            })
+            .collect();
+        if settled.is_empty() {
+            return;
+        }
+        let Some(document) = self.workspace.active_document_mut() else {
+            return;
+        };
+        for object in settled {
+            document.replace_object(object);
+        }
+        self.invalidate_geometry();
     }
 
     /// [`Self::refresh_pit_designs`]'s designs worked out again.
@@ -1487,11 +1566,11 @@ impl App<'_> {
         }
     }
 
-    /// Where an orbit begun at `at` (window pixels) turns about while a
-    /// bench design is open: the point of its strings nearest the pointer,
-    /// within reach; or begun over the pit, its middle, halfway down. The
-    /// open design is drawn through the ground, so the ground over it would
-    /// swing it off to one side.
+    /// The point of an open bench design's strings an orbit begun at `at`
+    /// (window pixels) turns about: the nearest along them, within the reach
+    /// an orbit takes any string at. The open design is not in the project
+    /// yet, so the orbit's own search for strings does not see it; past
+    /// reach, the orbit picks its centre as it always does.
     pub(crate) fn pit_orbit_pivot(&self, at: (f32, f32)) -> Option<DVec3> {
         let draft = self.editor.pit_design.as_ref().filter(|draft| draft.object_id().is_some())?;
         let design = draft.preview.as_ref()?.design.as_ref().ok()?;
@@ -1500,49 +1579,32 @@ impl App<'_> {
         let cursor = DVec2::new(f64::from(cursor.0), f64::from(cursor.1));
         let (view_proj, screen) = (graphics.view_proj(), graphics.screen_size_pub());
         let on_screen = |point: DVec3| crate::rendering::pick::world_to_screen(&view_proj, point, screen);
-        let reach = f64::from(crate::app::PICK_THRESHOLD_PX * 3.0);
+        let reach = f64::from(crate::rendering::graphics::camera::ROTATION_CENTRE_LINE_PX);
+        // Along the strings, not only at their corners: a bench runs a long
+        // way between its points.
+        let along = |a: DVec3, b: DVec3| {
+            let (screen_a, screen_b) = (on_screen(a)?, on_screen(b)?);
+            let t = crate::rendering::pick::closest_t_on_segment(cursor, screen_a, screen_b);
+            let distance = (screen_a + (screen_b - screen_a) * t).distance(cursor);
+            Some((distance, crate::rendering::pick::perspective_correct_segment_point(&view_proj, a, b, t)))
+        };
         let nearest = design
             .strings
             .iter()
-            .flat_map(|string| string.points.iter())
-            .filter_map(|point| Some((on_screen(*point)?.distance(cursor), *point)))
-            .filter(|(distance, _)| *distance <= reach)
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-            .map(|(_, point)| point);
-        if nearest.is_some() {
-            return nearest;
-        }
-        // The widest ring, which holds the rest in plan.
-        let area = |points: &[DVec3]| {
-            let count = points.len();
-            (0..count)
-                .map(|index| points[index].truncate().perp_dot(points[(index + 1) % count].truncate()))
-                .sum::<f64>()
-                .abs()
-        };
-        let outer = design
-            .strings
-            .iter()
-            .filter(|string| string.closed && string.points.len() >= 3)
-            .max_by(|a, b| area(&a.points).total_cmp(&area(&b.points)))?;
-        let ring: Vec<DVec2> = outer.points.iter().map(|point| on_screen(*point)).collect::<Option<_>>()?;
-        let inside = (0..ring.len()).fold(false, |inside, index| {
-            let (a, b) = (ring[index], ring[(index + 1) % ring.len()]);
-            if (a.y > cursor.y) != (b.y > cursor.y) && cursor.x < a.x + (cursor.y - a.y) / (b.y - a.y) * (b.x - a.x) {
-                !inside
-            } else {
-                inside
-            }
-        });
-        if !inside {
-            return None;
-        }
-        let middle = outer.points.iter().map(|point| point.truncate()).sum::<DVec2>() / outer.points.len() as f64;
-        let (low, high) = design
-            .levels
-            .iter()
-            .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), level| (low.min(*level), high.max(*level)));
-        Some(middle.extend(0.5 * (low + high)))
+            .flat_map(|string| {
+                let count = string.points.len();
+                let segments = match count {
+                    0 | 1 => 0,
+                    _ if string.closed => count,
+                    _ => count - 1,
+                };
+                // A lone point is a segment of no length.
+                let lone = (count == 1).then(|| (string.points[0], string.points[0]));
+                (0..segments).map(move |index| (string.points[index], string.points[(index + 1) % count])).chain(lone)
+            })
+            .filter_map(|(a, b)| along(a, b))
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        nearest.filter(|(distance, _)| *distance <= reach).map(|(_, point)| point)
     }
 
     /// Delete with the pointer on a ramp's start: the ramp is taken off the
@@ -1800,3 +1862,115 @@ const MAX_FACE_ANGLE: f64 = 89.0;
 /// The gentlest and steepest grades a ramp's ring turns to, in percent.
 const MIN_GRADE: f64 = 0.5;
 const MAX_GRADE: f64 = 50.0;
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use glam::DVec3;
+
+    use crate::{
+        app::App,
+        model::{
+            Command, Object, ObjectColor, PolyVertex, SectionKind,
+            formats::mesh_data,
+            pit_design::settings::{PitDesignSettings, StopMode},
+            triangulation::GeneratedTriangulation,
+        },
+    };
+
+    /// Flat ground at `level` over the square 400 m either side of the origin.
+    fn flat_ground(app: &mut App, level: f64) -> crate::model::triangulation::TriangulationId {
+        let mesh = mesh_data::Triangulation::from_vertices_and_faces(
+            [(-400.0, -400.0), (400.0, -400.0), (400.0, 400.0), (-400.0, 400.0)]
+                .map(|(x, y)| mesh_data::Vertex::new(x, y, level))
+                .to_vec(),
+            vec![[0, 1, 2], [0, 2, 3]],
+        )
+        .unwrap();
+        let built = GeneratedTriangulation {
+            name: "Ground".to_owned(),
+            spatial: Arc::new(crate::model::spatial::TriangleBvh::build(&mesh)),
+            surface_face_order: Arc::new((0..mesh.face_count() as u32).collect()),
+            mesh: Arc::new(mesh),
+            edges: Vec::new(),
+            surface_type: crate::ui::state::TriSurfaceType::Surface,
+        };
+        let (ids, commands) = app.add_triangulation_commands(vec![crate::app::commands::triangulation::session::new_triangulation(built, SectionKind::Triangulations)]);
+        app.execute_edit(Command::Batch(commands));
+        ids[0]
+    }
+
+    fn pit(app: &App, id: crate::model::ObjectId) -> crate::model::pit_design::object::PitObject {
+        let object = app.workspace.active_document().unwrap().get_object(id).unwrap();
+        super::pit_parts(object).unwrap().1.clone()
+    }
+
+    /// Run the background refresh until `done`.
+    fn settle(app: &mut App, done: impl Fn(&App) -> bool) {
+        let started = std::time::Instant::now();
+        while !done(app) {
+            assert!(started.elapsed() < std::time::Duration::from_secs(120), "the pit never got there");
+            app.refresh_pit_designs();
+            app.refresh_pit_evaluations();
+            app.poll_jobs();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// Designed against a topography, a pit keeps the bench count it daylit
+    /// at and lets go of the topography: the topography gone, it is designed
+    /// again to that count.
+    #[test]
+    fn a_designed_pit_no_longer_needs_its_topography() {
+        let mut app = App::default();
+        app.start_untitled_project().unwrap();
+        let ground = flat_ground(&mut app, 60.0);
+        let document = app.workspace.active_document_mut().unwrap();
+        let layer = document.add_layer("Pits".to_owned(), None, [1.0; 4], true, 0.0);
+        let floor = document.add_object(|id| Object::Polyline {
+            id,
+            layer,
+            verts: [(-60.0, -40.0), (60.0, -40.0), (60.0, 40.0), (-60.0, 40.0)]
+                .map(|(x, y)| PolyVertex::straight(DVec3::new(x, y, 0.0)))
+                .to_vec(),
+            closed: true,
+            color: ObjectColor::ByLayer,
+            fill: Default::default(),
+            line_weight: 1.0,
+        });
+        let settings = PitDesignSettings {
+            stop: StopMode::Daylight,
+            topography: Some(ground),
+            ramps: Vec::new(),
+            ..PitDesignSettings::default()
+        };
+        app.make_pit_design(floor, None, Some(settings)).unwrap();
+        settle(&mut app, |app| pit(app, floor).settings.topography.is_none());
+
+        let settled = pit(&app, floor);
+        let design = settled.design().expect("designed");
+        assert_eq!(settled.settings.stop, StopMode::Benches);
+        assert_eq!(settled.settings.benches, design.benches, "it keeps the count it daylit at");
+        assert!(design.benches >= 3, "60 m of 15 m benches: {}", design.benches);
+        assert!(
+            settled.evaluation.as_ref().is_some_and(|evaluation| evaluation.problem.is_none()),
+            "measured before it settled"
+        );
+        assert_eq!(app.pit_evaluation_waiting(floor), None, "its measure stands");
+
+        // The topography gone, an edit designs it again to the same count.
+        app.triangulations.retain(|surface| surface.id != ground);
+        let before = app.workspace.active_document().unwrap().get_object(floor).unwrap().clone();
+        let mut after = before.clone();
+        if let Object::PitDesign { pit, .. } = &mut after {
+            pit.settings.berm_width += 1.0;
+        }
+        app.execute_edit(Command::Replace { before, after });
+        settle(&mut app, |app| {
+            let object = app.workspace.active_document().unwrap().get_object(floor).unwrap();
+            super::pit_parts(object).is_some_and(|(verts, pit)| pit.is_fresh(verts, None))
+        });
+        assert_eq!(pit(&app, floor).design().map(|design| design.benches), Some(settled.settings.benches));
+    }
+}

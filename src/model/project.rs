@@ -42,13 +42,16 @@ pub(crate) enum ReadOnlyReason {
 pub(crate) enum ReferenceStatus {
     /// Its file is being read.
     Loading,
-    /// Its contents are shown: this many layers and items, less any a
-    /// project item of the same name shadows.
+    /// Its contents are shown: this many layers and items.
     #[cfg(not(target_arch = "wasm32"))]
-    Loaded { shown: usize, shadowed: usize },
+    Loaded { shown: usize },
     /// Its file is not where it was.
     #[cfg(not(target_arch = "wasm32"))]
     Missing,
+    /// Its file is the project open now: what it holds is the project's own,
+    /// so it is not shown a second time.
+    #[cfg(not(target_arch = "wasm32"))]
+    OpenAsProject,
     /// Its file could not be read, for this reason.
     Failed(String),
 }
@@ -352,6 +355,55 @@ pub(crate) struct ProjectFile {
     /// saved in the OMF project record so each project keeps its own.
     #[serde(default)]
     pub(crate) optimization: crate::model::optimization::ScenarioFile,
+    /// The project's links to items a data reference shows: see
+    /// [`ReferenceLink`].
+    #[serde(default)]
+    pub(crate) reference_links: Vec<ReferenceLink>,
+}
+
+/// A link from the project to an item a data reference shows, as it is
+/// saved: the reference's file by name and the item by its name, since the
+/// item's id is new each time the reference is read. Matched to the item
+/// again whenever the reference is read; links to the project's own items
+/// are its ids, as ever, and have none of these.
+///
+/// The file by name, not path: the same shared folder sits at a different
+/// path on each colleague's machine.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ReferenceLink {
+    pub(crate) site: LinkSite,
+    pub(crate) file: String,
+    pub(crate) name: String,
+    /// Matched to an item this session. One that is not, waits for its
+    /// reference; one that was and has since been cleared, was cleared.
+    #[serde(skip)]
+    pub(crate) resolved: bool,
+}
+
+/// Where in the project a link to an item is held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LinkSite {
+    /// The raster draped over the project's surface.
+    Drape(crate::model::triangulation::TriangulationId),
+    /// A solid's design surface.
+    SolidSurface(crate::model::SolidId),
+    /// A solid's topography.
+    SolidTopography(crate::model::SolidId),
+    /// The block model a solid reserves against.
+    SolidBlockModel(crate::model::SolidId),
+}
+
+impl LinkSite {
+    /// The kind of item it links to.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn kind(self) -> crate::model::MemberKind {
+        match self {
+            Self::Drape(_) => crate::model::MemberKind::Raster,
+            Self::SolidSurface(_) | Self::SolidTopography(_) => crate::model::MemberKind::Triangulation,
+            Self::SolidBlockModel(_) => crate::model::MemberKind::BlockModel,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -755,6 +807,7 @@ pub(crate) fn new_empty(path: Option<PathBuf>) -> ProjectFile {
         },
         folders: FolderRegistry::default(),
         optimization: Default::default(),
+        reference_links: Vec::new(),
     }
 }
 
@@ -873,9 +926,20 @@ pub(crate) fn merge_document(target: &mut Document, imported: &Document, folders
 /// collisions receive conventional numbered suffixes and every object gets a
 /// fresh target id, avoiding aliases with native OMF ids already in use.
 pub(crate) fn merge_document_unique_layers(target: &mut Document, imported: &Document, folders: &HashMap<FolderId, FolderId>) -> usize {
+    merge_document_layers(target, imported, folders, true)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Merge a data reference's design, its layers keeping their own names: a
+/// reference is another file, so a name the project has too is no clash.
+pub(crate) fn merge_reference_layers(target: &mut Document, imported: &Document) -> usize {
+    merge_document_layers(target, imported, &HashMap::new(), false)
+}
+
+fn merge_document_layers(target: &mut Document, imported: &Document, folders: &HashMap<FolderId, FolderId>, rename: bool) -> usize {
     let mut layer_map = HashMap::new();
     for layer in imported.layers() {
-        let name = unique_layer_name(target, &layer.name);
+        let name = if rename { unique_layer_name(target, &layer.name) } else { layer.name.clone() };
         let target_layer = target.add_layer(name, layer.color_index, layer.color, layer.loaded, layer.elevation);
         carry_layer_placement(target, target_layer, layer, folders);
         layer_map.insert(layer.id, target_layer);

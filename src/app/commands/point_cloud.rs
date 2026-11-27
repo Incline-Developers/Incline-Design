@@ -37,7 +37,7 @@ impl<'a> App<'a> {
     pub(super) fn add_loaded_point_cloud(&mut self, loaded: LoadedPointCloud, visible: bool, color: [f32; 4], point_size: f32) {
         let id = PointCloudId(self.next_point_cloud_id);
         self.next_point_cloud_id += 1;
-        let name = crate::model::project::unique_item_name(loaded.name, self.point_clouds.iter().map(|item| item.name.as_str()));
+        let name = crate::model::project::unique_item_name(loaded.name, self.point_clouds.iter().filter(|item| item.state.is_working()).map(|item| item.name.as_str()));
         userspace_log!(
             "{}",
             tr!(

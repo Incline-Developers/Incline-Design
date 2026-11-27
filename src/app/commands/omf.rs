@@ -224,7 +224,17 @@ impl<'a> App<'a> {
                 .cloned()
                 .collect(),
             optimization: None,
+            reference_links: Vec::new(),
         };
+        // Links to referenced items are saved by name, not by this session's
+        // ids: see `ReferenceLink`.
+        self.capture_reference_links();
+        self.detach_reference_links(&mut snapshot);
+        if scope == FolderScope::Whole
+            && let Some(project) = self.workspace.active_project()
+        {
+            snapshot.reference_links = project.project.reference_links.clone();
+        }
         if scope == FolderScope::Whole
             && let Some(project) = self.workspace.active_project()
             && !project.project.optimization.scenarios.is_empty()
@@ -278,11 +288,13 @@ impl<'a> App<'a> {
             warnings: _,
             folders,
             optimization,
+            reference_links,
             omf1_version,
         } = bundle;
 
         let mut design = project::new_empty(path.clone());
         design.optimization = optimization.unwrap_or_default();
+        design.reference_links = reference_links;
         if !project_name.trim().is_empty() {
             design.metadata.name = project_name.clone();
         }
@@ -460,6 +472,7 @@ impl<'a> App<'a> {
                 folders,
                 // A merge brings items, not the source project's scenarios.
                 optimization: _,
+                reference_links: _,
                 omf1_version: _,
             } = bundle;
 
@@ -585,7 +598,10 @@ impl<'a> App<'a> {
         for mut imported in rasters {
             let kept_id = (!fresh).then(|| allocate_item_id(imported.preferred_id, &mut self.next_raster_texture_id, self.raster_textures.iter().map(|item| item.id.0)));
             if fresh {
-                imported.loaded.name = project::unique_item_name(imported.loaded.name, self.raster_textures.iter().map(|item| item.name.as_str()));
+                imported.loaded.name = project::unique_item_name(
+                    imported.loaded.name,
+                    self.raster_textures.iter().filter(|item| item.state.is_working()).map(|item| item.name.as_str()),
+                );
             }
             let folder = project::merged_folder(folder_map, imported.folder);
             self.add_loaded_raster(imported.loaded);
@@ -619,7 +635,7 @@ impl<'a> App<'a> {
                 edges,
                 surface_face_order,
             } = imported.loaded;
-            name = project::unique_item_name(name, self.triangulations.iter().map(|item| item.name.as_str()));
+            name = project::unique_item_name(name, self.triangulations.iter().filter(|item| item.state.is_working()).map(|item| item.name.as_str()));
             let id = TriangulationId(allocate_item_id(
                 preferred(imported.preferred_id),
                 &mut self.next_triangulation_id,
@@ -662,7 +678,10 @@ impl<'a> App<'a> {
         for mut imported in block_models {
             let kept_id = (!fresh).then(|| allocate_item_id(imported.preferred_id, &mut self.next_block_model_id, self.block_models.iter().map(|item| item.id.0)));
             if fresh {
-                imported.loaded.name = project::unique_item_name(imported.loaded.name, self.block_models.iter().map(|item| item.name.as_str()));
+                imported.loaded.name = project::unique_item_name(
+                    imported.loaded.name,
+                    self.block_models.iter().filter(|item| item.state.is_working()).map(|item| item.name.as_str()),
+                );
             }
             let folder = project::merged_folder(folder_map, imported.folder);
             self.add_loaded_block_model(imported.loaded);
@@ -697,7 +716,10 @@ impl<'a> App<'a> {
         for mut imported in drill_holes {
             let kept_id = (!fresh).then(|| allocate_item_id(imported.preferred_id, &mut self.next_drill_hole_id, self.drill_holes.iter().map(|item| item.id.0)));
             if fresh {
-                imported.loaded.name = project::unique_item_name(imported.loaded.name, self.drill_holes.iter().map(|item| item.name.as_str()));
+                imported.loaded.name = project::unique_item_name(
+                    imported.loaded.name,
+                    self.drill_holes.iter().filter(|item| item.state.is_working()).map(|item| item.name.as_str()),
+                );
             }
             let folder = project::merged_folder(folder_map, imported.folder);
             self.add_loaded_drill_holes(imported.loaded);
@@ -722,7 +744,10 @@ impl<'a> App<'a> {
         for mut imported in point_clouds {
             let kept_id = (!fresh).then(|| allocate_item_id(imported.preferred_id, &mut self.next_point_cloud_id, self.point_clouds.iter().map(|item| item.id.0)));
             if fresh {
-                imported.loaded.name = project::unique_item_name(imported.loaded.name, self.point_clouds.iter().map(|item| item.name.as_str()));
+                imported.loaded.name = project::unique_item_name(
+                    imported.loaded.name,
+                    self.point_clouds.iter().filter(|item| item.state.is_working()).map(|item| item.name.as_str()),
+                );
             }
             let folder = project::merged_folder(folder_map, imported.folder);
             self.add_loaded_point_cloud(imported.loaded, imported.is_loaded, imported.color, imported.point_size);

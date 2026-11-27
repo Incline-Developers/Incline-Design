@@ -531,6 +531,7 @@ impl<'a> App<'a> {
                 &self.block_models,
                 &self.drill_holes,
                 &self.point_clouds,
+                &self.raster_textures,
                 &self.editor.hidden_handles,
             );
             self.redraw_requested = true;

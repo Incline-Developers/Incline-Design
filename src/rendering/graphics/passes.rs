@@ -689,6 +689,9 @@ impl<'a> Graphics<'a> {
         // (`render_cinematic_documents`): they are annotation, and lit and
         // tone mapped they sank into the surfaces they lie on.
         let draw_documents = self.active_scene.is_none();
+        // A picture of one item leaves the design strings out: they are drawn
+        // all together, and none of them are the item.
+        let draw_designs = draw_documents && !self.scene_pass_items_only;
 
         // Block model chunks carry their own AABB, so cheaply skip GPU draw
         // calls for chunks that are entirely outside the current view
@@ -706,15 +709,17 @@ impl<'a> Graphics<'a> {
         let mut surface_stats = crate::rendering::scene::gpu_cache::SurfaceRenderStats::default();
         let mut point_stats = crate::rendering::scene::point_cloud_cache::PointRenderStats::default();
 
-        // Undraped rasters show as flat plan-view images: drawn before all
-        // scene geometry, pinned to the far plane with depth writes off, and
-        // only when the view is exactly top-down orthographic - from any
-        // other angle a heightless image would be misleading.
+        // Rasters show as flat plan-view images: drawn before all scene
+        // geometry, pinned to the far plane with depth writes off, and only
+        // when the view is exactly top-down orthographic - from any other
+        // angle a heightless image would be misleading. A draped raster is
+        // drawn so too: the surfaces it is draped over cover their part of it,
+        // and the rest of it - or all of it, its surfaces unloaded - still
+        // shows.
         if self.plan_view_active() {
-            let draped: std::collections::HashSet<_> = triangulations.iter().filter_map(|triangulation| triangulation.raster_texture).collect();
             let mut pipeline_bound = false;
             for raster in rasters {
-                if draped.contains(&raster.id) || !raster.state.is_visible() {
+                if !raster.state.is_visible() {
                     continue;
                 }
                 let Some((bind_group, vertex_buffer)) = self.raster_gpu.plane(raster.id) else {
@@ -802,7 +807,13 @@ impl<'a> Graphics<'a> {
                     let requested_level = point_lod_with_hysteresis(chunk.level_counts, desired_points, chunk.requested_level.get());
                     let target_level = requested_level.max(chunk.uploaded_level);
                     let target_count = chunk.level_counts[target_level];
-                    let mut instance_count = chunk.displayed_count.get();
+                    // The hover card draws all that is uploaded: the main view's
+                    // count settles only on what the main view looks at.
+                    let mut instance_count = if self.scene_pass_items_only {
+                        chunk.level_counts[chunk.uploaded_level]
+                    } else {
+                        chunk.displayed_count.get()
+                    };
                     if include_editor_overlays {
                         chunk.requested_level.set(requested_level);
                         // Freshly streamed data should become visible at once:
@@ -849,7 +860,7 @@ impl<'a> Graphics<'a> {
         // Opaque document fills and strokes must establish colour and depth
         // before any translucent surface or block-model composite. X-ray
         // intentionally remains an editor overlay and is deferred.
-        if !editor.xray_enabled && draw_documents {
+        if !editor.xray_enabled && draw_designs {
             self.draw_document_batches(&mut render_pass, DocumentRenderStage::Opaque, false, Some(DocumentPrimitive::Fill));
             self.draw_static_document_strokes(&mut render_pass, false);
             self.draw_document_batches(&mut render_pass, DocumentRenderStage::Opaque, false, Some(DocumentPrimitive::Stroke));
@@ -1095,7 +1106,7 @@ impl<'a> Graphics<'a> {
         } else if draw_documents && editor.tying_holes() {
             self.draw_drill_holes(&mut render_pass, drill_holes, editor, &frustum, true, false, true, include_editor_overlays);
         }
-        if draw_documents {
+        if draw_designs {
             self.draw_late_documents(&mut render_pass, editor, include_editor_overlays);
         }
 
@@ -1119,7 +1130,7 @@ impl<'a> Graphics<'a> {
             }
         }
 
-        if draw_documents {
+        if draw_designs {
             self.draw_design_points_and_labels(&mut render_pass, editor, include_editor_overlays);
         }
     }

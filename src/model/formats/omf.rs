@@ -107,6 +107,8 @@ const META_TIE_INS: &str = "incline:tie_ins";
 const META_CHARGES: &str = "incline:charges";
 /// Project-level: the pit optimization scenarios, as their own versioned JSON.
 const META_OPTIMIZATION: &str = "incline:optimization";
+/// Project-level: links to items data references show, by name.
+const META_REFERENCE_LINKS: &str = "incline:reference_links";
 
 /// Every `incline:` key the writer puts on an element.
 ///
@@ -159,6 +161,10 @@ pub(crate) struct ProjectSnapshot {
     /// The project's optimization scenarios. Only a save of the whole
     /// project carries them; an export of a selection does not.
     pub(crate) optimization: Option<crate::model::optimization::ScenarioFile>,
+    /// The project's links to items data references show, saved by name:
+    /// see [`crate::model::project::ReferenceLink`]. A save of the whole
+    /// project carries them.
+    pub(crate) reference_links: Vec<crate::model::project::ReferenceLink>,
 }
 
 impl std::fmt::Debug for ProjectSnapshot {
@@ -306,6 +312,8 @@ pub(crate) struct ImportBundle {
     pub(crate) folders: FolderRegistry,
     /// The project record's optimization scenarios, when it carries any.
     pub(crate) optimization: Option<crate::model::optimization::ScenarioFile>,
+    /// The project's links to items data references show, by name.
+    pub(crate) reference_links: Vec<crate::model::project::ReferenceLink>,
     pub(crate) warnings: Vec<String>,
     /// The OMF 1 version the file was written in, when it was converted from
     /// OMF 1 to be read. Such a file opens read-only: Incline never writes
@@ -536,6 +544,9 @@ fn write_to<W: Write + Seek + Send>(snapshot: ProjectSnapshot, output: W, compre
             META_OPTIMIZATION.to_owned(),
             serde_json::to_value(optimization).with_context(|| tr!("err-omf-encode-optimisation"))?,
         );
+    }
+    if !snapshot.reference_links.is_empty() {
+        project.metadata.insert(META_REFERENCE_LINKS.to_owned(), serde_json::to_value(&snapshot.reference_links)?);
     }
     let (output, _warnings) = writer.finish(project).with_context(|| tr!("err-omf-finish-project"))?;
     progress.finish();
@@ -2125,10 +2136,16 @@ fn read_container<R: omf_crate::file::ReadAt>(
             Err(error) => bundle.warnings.push(tr!("omf-optimization-scenarios-unreadable", error = error.to_string())),
         }
     }
+    if let Some(value) = project.metadata.get(META_REFERENCE_LINKS) {
+        match serde_json::from_value(value.clone()) {
+            Ok(links) => bundle.reference_links = links,
+            Err(error) => bundle.warnings.push(tr!("omf-reference-links-unreadable", error = error.to_string())),
+        }
+    }
     let unsupported_project_metadata = project
         .metadata
         .keys()
-        .filter(|key| key.as_str() != META_FOLDERS && key.as_str() != META_OPTIMIZATION)
+        .filter(|key| key.as_str() != META_FOLDERS && key.as_str() != META_OPTIMIZATION && key.as_str() != META_REFERENCE_LINKS)
         .cloned()
         .collect::<Vec<_>>();
     if !unsupported_project_metadata.is_empty() {
@@ -2273,6 +2290,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                 // membership; a decoded `ProjectFile` never carries its own.
                 folders: FolderRegistry::default(),
                 optimization: Default::default(),
+                reference_links: Vec::new(),
             });
         }
         Ok(self.bundle)
@@ -2838,6 +2856,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             // membership; a decoded `ProjectFile` never carries its own.
             folders: FolderRegistry::default(),
             optimization: Default::default(),
+            reference_links: Vec::new(),
         })
     }
 

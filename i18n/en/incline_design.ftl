@@ -3314,6 +3314,7 @@ omf-project-author-not-retained = Project author is not retained
 omf-project-description-not-retained = Project description is not retained
 omf-unsupported-metadata-keys = Project has unsupported metadata keys: { $keys }
 omf-optimization-scenarios-unreadable = The project's optimisation scenarios could not be read and were left out: { $error }
+omf-reference-links-unreadable = The project's links to data reference items could not be read and were left out: { $error }
 omf-skipped-drillhole-data-saved-older = Skipped drillhole data saved in an older layout ({ $names }); import it again from its source files
 
 ## Plot strings
@@ -5954,11 +5955,16 @@ data-references-none = No data references.
 data-references-desktop-only = Data references are available in the desktop app.
 data-reference-loading = Loading…
 data-reference-missing = File not found
+data-reference-open-as-project = Open as the project
 data-reference-failed = Could not be read: { $error }
 data-reference-already = { $path } is already a data reference.
 data-reference-load-failed = Could not read the data reference { $name }: { $error }
 data-reference-loaded-log = Data reference { $name } shown. Items: { $count }
 explorer-bring-into-project = Bring into Project
-explorer-referenced-from = Read-only, from the data reference { $name }. Bring it into the project to edit it.
+explorer-referenced-from = Read-only: item is a data reference
+explorer-preview-loading = Loading preview…
+explorer-preview-not-loaded = Not loaded
+explorer-preview-empty = Nothing to show
+explorer-preview-failed = No preview
 cmd-brought-into-project = Brought { $name } into the project from { $reference }.
 cmd-referenced-read-only = { $name } is from a data reference, so it is read-only. Bring it into the project to edit it.

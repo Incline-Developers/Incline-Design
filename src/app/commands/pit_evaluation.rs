@@ -208,6 +208,17 @@ impl App<'_> {
         let object = self.operand_object(id)?;
         let (_, pit) = pit_parts(object)?;
         match self.pit_evaluation_plan(object) {
+            // A settled design keeps the measure taken while it was
+            // designed: with no topography it is not waiting to be measured.
+            Err(Waiting::NoTopography)
+                if pit
+                    .evaluation
+                    .as_ref()
+                    .zip(pit.derived.as_ref())
+                    .is_some_and(|(evaluation, derived)| evaluation.design == derived.inputs) =>
+            {
+                None
+            }
             Err(waiting) => Some(waiting),
             Ok(plan) if pit.evaluation.as_ref().is_some_and(|evaluation| evaluation.key == plan.key) => None,
             Ok(Plan { missing: Some(name), .. }) => Some(Waiting::NotLoaded(name)),

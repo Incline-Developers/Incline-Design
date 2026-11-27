@@ -221,6 +221,7 @@ impl Graphics<'_> {
             rasters,
             ..
         } = content;
+        self.set_raster_footprints(rasters, &editor.hidden_handles);
         self.place_camera(request.aim, document, triangulations, block_models, drill_holes, point_clouds, &editor.hidden_handles)?;
         self.camera_uniform
             .update_view_proj(&self.camera, &self.projection, self.scene_origin, self.vertical_exaggeration);

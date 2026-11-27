@@ -1269,7 +1269,8 @@ impl<'a> App<'a> {
                 self.reload_data_reference(id);
                 Ok(())
             }
-            UiCommand::BringIntoProject(target) => self.bring_into_project(target),
+            UiCommand::BringIntoProject(target) => self.bring_into_project(target, None),
+            UiCommand::BringIntoProjectAt { target, section, folder } => self.bring_into_project(target, Some((section, folder))),
             UiCommand::RemoveTriangulation(id) => {
                 self.remove_triangulation(id);
                 Ok(())

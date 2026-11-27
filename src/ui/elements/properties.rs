@@ -196,7 +196,7 @@ pub(crate) fn draw_selection_appearance(
                 .projects
                 .iter()
                 .find(|entry| entry.is_active)
-                .and_then(|entry| entry.layers.first())
+                .and_then(|entry| entry.layers.iter().find(|layer| layer.reference.is_none()))
                 .map(|layer| layer.id);
             editor.move_to_layer_dialog = Some(crate::ui::state::MoveToLayerDialog {
                 object_ids: objects,
@@ -531,11 +531,24 @@ fn draw_data_settings(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut
                 ReferenceStatus::Loading => Some((tr!("data-reference-loading"), false)),
                 ReferenceStatus::Loaded { .. } => None,
                 ReferenceStatus::Missing => Some((tr!("data-reference-missing"), true)),
+                ReferenceStatus::OpenAsProject => Some((tr!("data-reference-open-as-project"), false)),
                 ReferenceStatus::Failed(error) => Some((tr!("data-reference-failed", error = error.clone()), true)),
             };
+            const BUTTON: f32 = 24.0;
             ui.horizontal(|ui| {
+                // Room is kept for the two buttons, so a long path never
+                // pushes them out of the panel.
+                let room = (ui.available_width() - 2.0 * BUTTON - 2.0 - ui.spacing().item_spacing.x - 6.0).max(0.0);
                 ui.vertical(|ui| {
-                    ui.label(egui::RichText::new(&reference.name).strong()).hint(reference.path.display().to_string());
+                    ui.set_max_width(room);
+                    // Where the file is, which is what tells two references
+                    // apart. Too long for the panel, it loses its start: the
+                    // end names the file. Whole in the hint.
+                    let path = reference.path.display().to_string();
+                    let font = egui::TextStyle::Body.resolve(ui.style());
+                    let shown = elide_start(ui, &path, &font, room);
+                    ui.add(egui::Label::new(egui::RichText::new(shown).font(font).color(ui.visuals().strong_text_color())).wrap_mode(egui::TextWrapMode::Extend))
+                        .hint(path);
                     match status {
                         Some((text, failed)) => {
                             let text = egui::RichText::new(text).small();
@@ -558,7 +571,7 @@ fn draw_data_settings(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut
                         ui.add(
                             crate::ui::widgets::toolbar::ToolbarButton::new(image, tooltip)
                                 .id_salt(("data_reference", reference.id, salt))
-                                .button_side(24.0),
+                                .button_side(BUTTON),
                         )
                         .clicked()
                     };
@@ -583,6 +596,27 @@ fn draw_data_settings(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut
             }
         });
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// `text` as it fits in `width`: whole, or its end after an ellipsis.
+fn elide_start(ui: &egui::Ui, text: &str, font: &egui::FontId, width: f32) -> String {
+    let fits = |candidate: &str| ui.painter().layout_no_wrap(candidate.to_owned(), font.clone(), egui::Color32::PLACEHOLDER).size().x <= width;
+    if fits(text) {
+        return text.to_owned();
+    }
+    // The shortest cut from the start that fits: every cut longer fits too.
+    let cuts = text.char_indices().map(|(index, _)| index).collect::<Vec<_>>();
+    let (mut low, mut high) = (0, cuts.len());
+    while low < high {
+        let middle = (low + high) / 2;
+        if fits(&format!("…{}", &text[cuts[middle]..])) {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    cuts.get(low).map_or_else(|| "…".to_owned(), |&cut| format!("…{}", &text[cut..]))
 }
 
 fn draw_mcp_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {

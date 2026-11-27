@@ -201,7 +201,7 @@ impl<'a> App<'a> {
     }
 
     pub(super) fn add_loaded_block_model(&mut self, loaded: LoadedBlockModel) {
-        let name = crate::model::project::unique_item_name(loaded.name, self.block_models.iter().map(|item| item.name.as_str()));
+        let name = crate::model::project::unique_item_name(loaded.name, self.block_models.iter().filter(|item| item.state.is_working()).map(|item| item.name.as_str()));
         userspace_log!(
             "{}",
             tr!(

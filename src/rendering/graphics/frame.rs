@@ -111,6 +111,9 @@ pub(crate) struct RenderInput<'frame> {
     /// The Solids Setup page's inspection meshes: the solid as one, or one
     /// closed mesh per flitch once it has a benching plan.
     pub(crate) solid_preview: &'frame [OpenTriangulation],
+    /// An unloaded item read in for the explorer's hover card alone:
+    /// uploaded beside the project's, and drawn only on the card.
+    pub(crate) item_preview: Option<&'frame crate::model::OpenItem>,
     /// Surfaces to keep on the GPU though not drawn; see `TriangulationGpuCache::sync`.
     pub(crate) retained_surfaces: &'frame std::collections::HashSet<crate::model::triangulation::TriangulationId>,
     pub(crate) project: &'frame UiProjectView,
@@ -128,6 +131,7 @@ impl<'a> Graphics<'a> {
             point_clouds,
             rasters,
             solid_preview,
+            item_preview,
             retained_surfaces,
             project,
         } = input;
@@ -176,6 +180,7 @@ impl<'a> Graphics<'a> {
             // following the view as well could leave the two trading it.
             self.keep_scene_origin_near_view();
         }
+        self.set_raster_footprints(rasters, &editor.hidden_handles);
         self.fit_camera(editor, document, triangulations, block_models, drill_holes, point_clouds);
 
         // The UI is laid out before the scene is drawn, so the scene fills the
@@ -250,17 +255,31 @@ impl<'a> Graphics<'a> {
         });
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Render Encoder") });
 
+        // The card's item goes up to the GPU with the project's (a surface
+        // with the Setup page's meshes, which are not project items either),
+        // and is drawn only on the card: the scene's own pass below is given
+        // the project's lists without it.
+        let preview_lists = super::explorer_preview::PreviewLists::of(item_preview);
+        // The card's cloud has to be on the GPU though the main view may not
+        // be looking at it: its own copy, or the project's.
+        self.point_cloud_gpu
+            .set_preview_cloud(preview_lists.point_clouds.first().map(|cloud| cloud.id).or(match editor.explorer_preview.subject {
+                Some(crate::ui::state::PreviewSubject::Item(crate::model::ItemRef::PointCloud(id))) => Some(id),
+                _ => None,
+            }));
+        let mut with_preview = super::explorer_preview::WithPreview::default();
+        let synced = with_preview.lists(&preview_lists, solid_preview, block_models, drill_holes, point_clouds);
         let (synced_content, gpu_work_was_pending) = self.sync_scene_content(
             &mut encoder,
             SceneContent {
                 editor,
                 document,
                 triangulations,
-                block_models,
-                drill_holes,
-                point_clouds,
+                block_models: synced.block_models,
+                drill_holes: synced.drill_holes,
+                point_clouds: synced.point_clouds,
                 rasters,
-                solid_preview,
+                solid_preview: synced.surfaces,
                 retained_surfaces,
             },
             scale_factor,
@@ -471,6 +490,16 @@ impl<'a> Graphics<'a> {
                 rasters,
             },
             editor,
+        );
+        self.render_explorer_preview(
+            editor,
+            super::explorer_preview::PreviewItems {
+                triangulations,
+                block_models,
+                drill_holes,
+                point_clouds,
+                preview: preview_lists,
+            },
         );
 
         // The UI, over the scene: laid out before it, at the top of the frame.

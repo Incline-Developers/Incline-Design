@@ -32,7 +32,7 @@ impl<'a> App<'a> {
         }
     }
 
-    fn clone_project_item(&self, item: ItemRef) -> Option<OpenItem> {
+    pub(crate) fn clone_project_item(&self, item: ItemRef) -> Option<OpenItem> {
         match item {
             ItemRef::Triangulation(id) => self
                 .triangulations
@@ -46,7 +46,7 @@ impl<'a> App<'a> {
         }
     }
 
-    fn replace_residency(&mut self, item: OpenItem) {
+    pub(crate) fn replace_residency(&mut self, item: OpenItem) {
         match item {
             OpenItem::Triangulation(mut item) => {
                 if let Some(target) = self.triangulations.iter_mut().find(|target| target.id == item.id) {
@@ -166,13 +166,23 @@ impl<'a> App<'a> {
     /// unloaded entry and its backing intact; it never applies a partial edit.
     pub(crate) fn restore_items_for(&mut self, needed: Vec<ItemRef>, continuation: impl FnOnce(&mut App<'a>) + 'a) -> bool {
         let mut seen = std::collections::HashSet::new();
+        let needed: Vec<_> = needed.into_iter().filter(|item| seen.insert(*item)).collect();
+        // Read in already, for the explorer's hover card: loaded at once.
+        let deferred_before = needed.iter().any(|item| self.project_item_state(*item).is_some_and(|state| state.deferred.is_some()));
+        let needed: Vec<_> = needed.into_iter().filter(|item| !self.hand_over_explorer_preview(*item)).collect();
         let items: Vec<_> = needed
             .into_iter()
-            .filter(|item| seen.insert(*item))
             .filter(|item| self.project_item_state(*item).is_some_and(|state| state.deferred.is_some()))
             .filter_map(|item| self.clone_project_item(item))
             .collect();
         if items.is_empty() {
+            if deferred_before {
+                // The card's copy was all there was to read. The continuation
+                // still comes as a restore's does, on the next poll, so a
+                // caller waiting for it sees what it expects.
+                self.spawn_job_quietly(tr!("asset-loading"), Vec::new(), |_| Ok(()), move |app, _: anyhow::Result<()>| continuation(app));
+                return true;
+            }
             return false;
         }
         let Some(runtime_id) = self.workspace.active_project().map(|project| project.runtime_id) else {
@@ -290,16 +300,28 @@ impl<'a> App<'a> {
 
 impl<'a> App<'a> {
     pub(crate) fn restore_layers_for(&mut self, needed: Vec<crate::model::LayerId>, continuation: impl FnOnce(&mut App<'a>) + 'a) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        let needed: Vec<_> = needed.into_iter().filter(|id| seen.insert(*id)).collect();
+        // Read in already, for the explorer's hover card: loaded at once.
+        let deferred_before = self
+            .workspace
+            .active_document()
+            .is_some_and(|document| needed.iter().any(|id| document.deferred_layers.contains_key(id)));
+        let needed: Vec<_> = needed.into_iter().filter(|id| !self.hand_over_explorer_preview_layer(*id)).collect();
         let Some(project) = self.workspace.active_project() else {
             return false;
         };
-        let mut seen = std::collections::HashSet::new();
         let layers: Vec<_> = needed
             .into_iter()
-            .filter(|id| seen.insert(*id))
             .filter_map(|id| project.project.document.deferred_layers.get(&id).map(|stored| (id, stored.clone())))
             .collect();
         if layers.is_empty() {
+            if deferred_before {
+                // The card's copy was all there was to read; the continuation
+                // still comes as a restore's does, on the next poll.
+                self.spawn_job_quietly(tr!("asset-loading"), Vec::new(), |_| Ok(()), move |app, _: anyhow::Result<()>| continuation(app));
+                return true;
+            }
             return false;
         }
         let hashes = project.current_layer_hashes();

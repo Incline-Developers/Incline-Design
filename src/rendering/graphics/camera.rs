@@ -262,7 +262,7 @@ const MIDDLE_PAN_FROM_CURSOR: bool = cfg!(target_arch = "wasm32");
 /// still take the centre from it. Deliberately tighter than the snap glyph's
 /// reach: a line takes the pivot from a surface at the same depth, so a wide
 /// band would let every design line and drill trace on screen capture an orbit.
-const ROTATION_CENTRE_LINE_PX: f32 = 10.0;
+pub(crate) const ROTATION_CENTRE_LINE_PX: f32 = 10.0;
 
 /// How far, in physical pixels, a centre pick may miss a cloud splat or a
 /// document object and still land on it: twice the snap glyph's reach.
@@ -485,12 +485,32 @@ impl<'a> Graphics<'a> {
     /// When the splash goes, so does the tracking, for good: the camera keeps
     /// the framing it has, so nothing moves under the user at that moment.
     pub(super) fn track_startup_view_framing(&mut self, splash_visible: bool) {
-        let Some(applied) = self.startup_view_offset else {
+        let Some(mut applied) = self.startup_view_offset else {
             return;
         };
         if !splash_visible {
             self.startup_view_offset = None;
             return;
+        }
+        // An empty scene is framed before the first frame, when the scene
+        // region is still the whole window, so its zoom was worked out for the
+        // window's shape. Kept to the region's as the panels settle, it is
+        // what Reset View frames once the splash has gone.
+        if self.startup_frames_nothing {
+            let (width, height) = self.screen_size();
+            let zoom = default_zoom(f64::from(width) / f64::from(height.max(1.0))).max(1e-4);
+            if (zoom - self.projection.zoom).abs() > zoom * 1e-6 {
+                self.projection.zoom = zoom;
+                let distance = if self.fly_mode_enabled {
+                    zoom / (self.projection.perspective_fov_y() * 0.5).tan()
+                } else {
+                    zoom
+                };
+                self.camera.reset_to_plan_view(DVec3::ZERO, distance);
+                // Placed afresh: none of the offset is in it now.
+                applied = DVec2::ZERO;
+                self.startup_view_offset = Some(applied);
+            }
         }
         let wanted = self.window_centring_offset_px();
         // Sub-pixel corrections are not worth a camera move, but they are
@@ -1347,6 +1367,31 @@ impl<'a> Graphics<'a> {
                         }
                     }
                 }
+                // Its own string and every string it draws from it, benches
+                // and all, as the snap cursor reads it.
+                crate::model::Object::PitDesign { verts, .. } => {
+                    let count = verts.len();
+                    self.nearest_on_screen(
+                        &view_proj,
+                        cursor,
+                        slab,
+                        threshold_px,
+                        (0..count).map(|k| (verts[k].pos, verts[(k + 1) % count].pos)),
+                        &mut best,
+                    );
+                    for string in object.pit_strings() {
+                        let count = string.points.len();
+                        let segments = if string.closed { count } else { count.saturating_sub(1) };
+                        self.nearest_on_screen(
+                            &view_proj,
+                            cursor,
+                            slab,
+                            threshold_px,
+                            (0..segments).map(|k| (string.points[k], string.points[(k + 1) % count])),
+                            &mut best,
+                        );
+                    }
+                }
                 _ => {}
             }
         }
@@ -1444,8 +1489,21 @@ impl<'a> Graphics<'a> {
         }
     }
 
+    /// Take in the plan boxes of `rasters` that are shown, for the scene's
+    /// bounds: fitting the view, its depth range, a section's extent.
+    pub(crate) fn set_raster_footprints(&mut self, rasters: &[crate::model::raster::OpenRasterTexture], hidden: &HashSet<SceneEntityId>) {
+        self.raster_footprints.clear();
+        self.raster_footprints.extend(
+            rasters
+                .iter()
+                .filter(|raster| raster.state.is_visible() && !hidden.contains(&SceneEntityId::Raster(raster.id)))
+                .filter_map(crate::model::raster::OpenRasterTexture::world_footprint),
+        );
+    }
+
     /// Reset the camera to a top-down plan view that fits all visible content.
     /// Falls back to a default unit zoom centred on the origin when empty.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn fit_to_extents(
         &mut self,
         document: &Document,
@@ -1453,8 +1511,10 @@ impl<'a> Graphics<'a> {
         block_models: &[OpenBlockModel],
         drill_holes: &[OpenDrillHoleDataset],
         point_clouds: &[OpenPointCloud],
+        rasters: &[crate::model::raster::OpenRasterTexture],
         hidden: &HashSet<SceneEntityId>,
     ) {
+        self.set_raster_footprints(rasters, hidden);
         let screen = self.screen_size();
         let aspect = (screen.0 as f64 / screen.1.max(1.0) as f64).max(1e-9);
 
@@ -1489,6 +1549,7 @@ impl<'a> Graphics<'a> {
             zoom
         };
         self.camera.reset_to_plan_view(center, camera_distance);
+        self.startup_frames_nothing = bounds.is_none();
         // Nothing to frame means the origin is all there is to look at, so it
         // belongs where the startup view puts it, not at the centre of the
         // scene region - see `track_startup_view_framing`.
@@ -1727,9 +1788,22 @@ impl<'a> Graphics<'a> {
         hidden: &HashSet<SceneEntityId>,
     ) {
         let surface_key = bounds_surface_key(triangulations, hidden, self.haul_roads_in_bounds);
-        if self.geometry_dirty || self.cached_bounds_document_revision != document.revision() || self.cached_bounds_surface_key != Some(surface_key) {
+        if self.geometry_dirty
+            || self.cached_bounds_document_revision != document.revision()
+            || self.cached_bounds_surface_key != Some(surface_key)
+            || self.cached_bounds_raster_footprints.as_ref() != Some(&self.raster_footprints)
+        {
             self.cached_bounds_surface_key = Some(surface_key);
+            self.cached_bounds_raster_footprints = Some(self.raster_footprints.clone());
             self.cached_object_aabbs = visible_object_aabbs(document, triangulations, block_models, drill_holes, point_clouds, hidden, self.haul_roads_in_bounds);
+            // A raster is a flat picture with no height of its own: it spans
+            // the heights the rest of the scene does, or none.
+            let (low, high) = merge_aabbs(&self.cached_object_aabbs).map_or((0.0, 0.0), |(min, max)| (min.z, max.z));
+            self.cached_object_aabbs.extend(
+                self.raster_footprints
+                    .iter()
+                    .map(|(min, max)| (DVec3::new(min.x, min.y, low), DVec3::new(max.x, max.y, high))),
+            );
             self.cached_scene_bounds = merge_aabbs(&self.cached_object_aabbs);
             self.cached_bounds_document_revision = document.revision();
         }

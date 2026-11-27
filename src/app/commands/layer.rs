@@ -7,7 +7,7 @@ use crate::{
     userspace_log,
 };
 
-fn objects_on_layer(document: &Document, layer_id: LayerId) -> Vec<Object> {
+pub(crate) fn objects_on_layer(document: &Document, layer_id: LayerId) -> Vec<Object> {
     document.objects().iter().filter(|object| object.layer() == layer_id).cloned().collect()
 }
 
@@ -108,7 +108,13 @@ impl<'a> App<'a> {
         let source_objects = objects_on_layer(&project.project.document, layer_id);
         let duplicate_name = crate::model::project::unique_item_name(
             tr!("cmd-layer-name-copy", name = source_layer.name.to_string()),
-            project.project.document.layers().iter().map(|layer| layer.name.as_str()),
+            project
+                .project
+                .document
+                .layers()
+                .iter()
+                .filter(|layer| layer.reference.is_none())
+                .map(|layer| layer.name.as_str()),
         );
 
         let doc = &mut project.project.document;
@@ -208,7 +214,13 @@ impl<'a> App<'a> {
         let Some(project) = self.workspace.active_project() else {
             return;
         };
-        let Some(layer) = project.project.document.layer(layer_id).filter(|layer| layer.is_visible()) else {
+        // A locked layer's objects stay out of the selection: see `handles_for_rows`.
+        let Some(layer) = project
+            .project
+            .document
+            .layer(layer_id)
+            .filter(|layer| layer.is_visible() && !self.editor.locked_layers.contains(&layer_id))
+        else {
             return;
         };
         let name = layer.name.clone();

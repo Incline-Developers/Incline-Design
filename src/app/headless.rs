@@ -107,7 +107,6 @@ impl App<'_> {
     fn headless_turn(&mut self) {
         self.poll_saves();
         self.refresh_project_lock();
-        self.refill_freed_data_references();
         self.poll_file_dialogs();
         self.sync_geophysics();
         self.serve_mcp();

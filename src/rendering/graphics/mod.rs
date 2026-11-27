@@ -45,6 +45,7 @@ pub(crate) mod buffers;
 pub(crate) mod camera;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod cinematic;
+mod explorer_preview;
 pub(crate) mod frame;
 pub(crate) mod frustum;
 pub(crate) mod init;
@@ -446,6 +447,12 @@ pub(crate) struct Graphics<'a> {
     solid_preview_key: Option<u64>,
     /// The framing the preview is being held at, while a pane is holding it.
     solid_preview_framing: Option<solid_preview::HeldFraming>,
+    /// The explorer's hover card's picture; see
+    /// [`crate::ui::state::ExplorerPreview`].
+    explorer_preview: Option<solid_preview::SolidPreviewTarget>,
+    /// Set while the scene pass draws one item on its own, for
+    /// [`explorer_preview`]: the design strings are left out.
+    scene_pass_items_only: bool,
     /// What the window is drawn on; `None` with no window.
     pub(super) surface: Option<wgpu::Surface<'a>>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -468,6 +475,9 @@ pub(crate) struct Graphics<'a> {
     /// currently carries - see `track_startup_view_framing`. `None` once the
     /// startup splash has gone, which is what retires the tracking.
     pub(super) startup_view_offset: Option<DVec2>,
+    /// Whether the last fit found nothing to frame, so the startup view is
+    /// the empty framing - see `track_startup_view_framing`.
+    pub(super) startup_frames_nothing: bool,
     pub(super) lyon_buffer: VertexBuffers<Vertex, u32>,
     pub(super) polyline_fill_cache: PolylineFillCache,
     pub(super) lyon_vertex_capacity: usize,
@@ -546,6 +556,10 @@ pub(crate) struct Graphics<'a> {
     pub(super) document_object_ranges: Vec<DocumentObjectRanges>,
     pub(super) cached_bounds_document_revision: u64,
     pub(super) cached_bounds_surface_key: Option<u64>,
+    /// The plan boxes of the rasters shown, which the scene's bounds take in
+    /// beside its geometry: see [`Graphics::set_raster_footprints`].
+    pub(super) raster_footprints: Vec<(glam::DVec2, glam::DVec2)>,
+    pub(super) cached_bounds_raster_footprints: Option<Vec<(glam::DVec2, glam::DVec2)>>,
     /// Whether the haul network counts towards the scene's extents: only
     /// where it is drawn. Taken from the editor at the start of each frame.
     pub(super) haul_roads_in_bounds: bool,
@@ -1023,6 +1037,7 @@ impl<'a> Graphics<'a> {
     pub(crate) fn invalidate_scene_bounds(&mut self) {
         self.cached_bounds_document_revision = u64::MAX;
         self.cached_bounds_surface_key = None;
+        self.cached_bounds_raster_footprints = None;
         self.cached_scene_bounds = None;
         self.cached_object_aabbs.clear();
     }

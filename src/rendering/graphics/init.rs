@@ -868,6 +868,7 @@ impl<'a> Graphics<'a> {
             size,
             viewport_rect: ViewportRect::full(size.width, size.height),
             startup_view_offset: Some(DVec2::ZERO),
+            startup_frames_nothing: false,
             lyon_buffer,
             lyon_vertex_capacity: 1,
             lyon_index_capacity: 1,
@@ -917,6 +918,8 @@ impl<'a> Graphics<'a> {
             document_object_ranges: Vec::new(),
             cached_bounds_document_revision: u64::MAX,
             cached_bounds_surface_key: None,
+            raster_footprints: Vec::new(),
+            cached_bounds_raster_footprints: None,
             haul_roads_in_bounds: false,
             cached_scene_bounds: None,
             cached_object_aabbs: Vec::new(),
@@ -953,6 +956,8 @@ impl<'a> Graphics<'a> {
             solid_preview: None,
             solid_preview_key: None,
             solid_preview_framing: None,
+            explorer_preview: None,
+            scene_pass_items_only: false,
             #[cfg(not(target_arch = "wasm32"))]
             cinematic: None,
             #[cfg(not(target_arch = "wasm32"))]

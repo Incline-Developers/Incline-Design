@@ -144,6 +144,9 @@ pub(crate) struct PointCloudGpuCache {
     arenas: HashMap<PointCloudId, PointBufferArena>,
     pending_uploads: bool,
     rejected_chunks: HashSet<ChunkKey>,
+    /// A cloud the explorer's hover card is showing. Its chunks are put on
+    /// the GPU wherever the main camera looks, since the card shows all of it.
+    preview_cloud: Option<PointCloudId>,
 }
 
 /// Limit newly exposed point records uploaded in any one render call, bounding
@@ -227,6 +230,12 @@ pub(crate) struct PointRenderStats {
 }
 
 impl PointCloudGpuCache {
+    /// Keep `cloud` resident however the main camera looks: see
+    /// `preview_cloud`.
+    pub(crate) fn set_preview_cloud(&mut self, cloud: Option<PointCloudId>) {
+        self.preview_cloud = cloud;
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         !self.clouds.values().any(|cloud| cloud.chunks.iter().any(Option::is_some))
     }
@@ -551,7 +560,7 @@ impl PointCloudGpuCache {
             for (chunk_index, prepared) in cloud.prepared.chunks.iter().enumerate() {
                 let min = prepared.bounds_min + cloud.origin_scene;
                 let max = prepared.bounds_max + cloud.origin_scene;
-                if !frustum.intersects_obb(&prepared.bounds.translated(cloud.origin_scene)) {
+                if self.preview_cloud != Some(cloud_id) && !frustum.intersects_obb(&prepared.bounds.translated(cloud.origin_scene)) {
                     continue;
                 }
                 let key = ChunkKey {
@@ -563,7 +572,12 @@ impl PointCloudGpuCache {
                     continue;
                 }
                 let resident = cloud.chunks[chunk_index].as_ref();
-                let requested_level = resident.map(|chunk| chunk.requested_level.get()).unwrap_or_else(|| bootstrap_level(prepared.level_counts));
+                let mut requested_level = resident.map(|chunk| chunk.requested_level.get()).unwrap_or_else(|| bootstrap_level(prepared.level_counts));
+                if self.preview_cloud == Some(cloud_id) {
+                    // The card shows the whole cloud small: a fixed share of
+                    // each chunk, whatever the main view asked for.
+                    requested_level = requested_level.min(preview_level(prepared.level_counts));
+                }
                 let Some(mut upload_level) = next_upload_level(resident.map(|chunk| chunk.uploaded_level), requested_level, prepared.level_counts) else {
                     continue;
                 };
@@ -732,6 +746,13 @@ fn projected_world_splat_half_extent(view_proj: &DMat4, screen: (f32, f32), worl
     // summing their absolute deltas remains conservative under numerical
     // skew and vertical exaggeration.
     ((right - center).abs() + (up - center).abs()).max(DVec2::splat(1.0))
+}
+
+/// The most points a chunk shows on the explorer's hover card.
+const PREVIEW_POINTS_PER_CHUNK: u32 = 16_384;
+
+fn preview_level(level_counts: [u32; POINT_CLOUD_LOD_LEVELS]) -> usize {
+    level_counts.iter().position(|count| *count <= PREVIEW_POINTS_PER_CHUNK).unwrap_or(level_counts.len() - 1)
 }
 
 fn bootstrap_level(level_counts: [u32; POINT_CLOUD_LOD_LEVELS]) -> usize {

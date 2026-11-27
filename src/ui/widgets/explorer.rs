@@ -417,6 +417,9 @@ pub(crate) struct ExplorerHeader {
     title: String,
     /// Icon naming the kind of entry this section holds.
     icon: Option<egui::ImageSource<'static>>,
+    /// A small mark in the icon's bottom-right corner: see
+    /// [`ExplorerHeader::icon_badge`].
+    icon_badge: Option<egui::ImageSource<'static>>,
     dirty: bool,
     /// Heading tint, matching the section's entry icons. `None` uses the
     /// theme's normal text colour.
@@ -434,12 +437,22 @@ pub(crate) struct ExplorerHeader {
     visibility: Option<bool>,
 }
 
+/// `badge` in the bottom-right corner of `icon`, on a disc of the panel's
+/// colour so it reads over any icon.
+pub(crate) fn paint_icon_badge(ui: &egui::Ui, icon: egui::Rect, badge: egui::ImageSource<'static>) {
+    let size = (icon.width() * 0.7).max(8.0);
+    let corner = egui::Rect::from_min_size(icon.max - egui::vec2(size * 0.8, size * 0.8), egui::Vec2::splat(size));
+    ui.painter().circle_filled(corner.center(), size * 0.55, ui.visuals().panel_fill);
+    egui::Image::new(badge).tint(ui.visuals().strong_text_color()).paint_at(ui, corner.shrink(size * 0.08));
+}
+
 impl ExplorerHeader {
     pub(crate) fn new(id: egui::Id, title: impl Into<String>) -> Self {
         Self {
             id,
             title: title.into(),
             icon: None,
+            icon_badge: None,
             dirty: false,
             color: None,
             default_open: true,
@@ -473,6 +486,14 @@ impl ExplorerHeader {
     /// labels indented to line up beneath it.
     pub(crate) fn icon(mut self, icon: egui::ImageSource<'static>) -> Self {
         self.icon = Some(icon);
+        self
+    }
+
+    /// Mark the icon with `badge` in its bottom-right corner, on a disc of
+    /// the panel's colour so it reads over the icon: the chain a data
+    /// reference's rows carry, say.
+    pub(crate) fn icon_badge(mut self, badge: egui::ImageSource<'static>) -> Self {
+        self.icon_badge = Some(badge);
         self
     }
 
@@ -517,6 +538,7 @@ impl ExplorerHeader {
             id,
             mut title,
             icon,
+            icon_badge,
             dirty,
             color,
             default_open,
@@ -543,6 +565,11 @@ impl ExplorerHeader {
                     // full height rather than letting the icon set it.
                     ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         let icon_response = icon.map(|icon| ui.add(egui::Image::new(icon).fit_to_exact_size(egui::vec2(16.0, 16.0)).sense(egui::Sense::click())));
+                        if let (Some(badge), Some(icon)) = (icon_badge, icon_response.as_ref())
+                            && ui.is_rect_visible(icon.rect)
+                        {
+                            paint_icon_badge(ui, icon.rect, badge);
+                        }
                         // The label claims the rest of the row rather than
                         // just its text, so clicking - or right-clicking, for
                         // the section menu - anywhere along the heading hits

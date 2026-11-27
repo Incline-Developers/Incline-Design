@@ -2404,6 +2404,7 @@ impl Document {
         true
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Tag a layer as shown from a data reference, or, with `None`, as the
     /// project's own.
     pub(crate) fn set_layer_reference(&mut self, id: LayerId, reference: Option<project::ReferenceId>) -> bool {
@@ -2470,8 +2471,11 @@ impl Document {
         healed
     }
 
+    /// The project's own layer called `name`. A layer a data reference shows
+    /// is not one: it may share a name with the project's, being from another
+    /// file, and nothing is ever written into it.
     pub(crate) fn layer_id_by_name(&self, name: &str) -> Option<LayerId> {
-        self.layers.iter().find(|layer| layer.name == name).map(|layer| layer.id)
+        self.layers.iter().find(|layer| layer.reference.is_none() && layer.name == name).map(|layer| layer.id)
     }
 
     pub(crate) fn first_layer_id(&self) -> Option<LayerId> {

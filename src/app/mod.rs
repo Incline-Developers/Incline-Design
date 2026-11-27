@@ -3,6 +3,7 @@ pub(crate) mod canvas; // Handles anything to do with dragging and stuff
 pub(crate) mod commands; // Handles UI commands
 pub(crate) mod data_references; // OMF files whose contents every project shows, read-only
 pub(crate) mod events; // Handles window events
+pub(crate) mod explorer_preview; // The explorer's hover card: a turning picture of the row under the pointer
 pub(crate) mod geophysics; // Geophysics files linked to drill-hole datasets
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod geophysics_web;
@@ -495,6 +496,13 @@ pub(crate) struct App<'a> {
     project_lock_refreshed_at: Option<Instant>,
     active_triangulation: Option<TriangulationId>,
     next_triangulation_id: u64,
+    /// An unloaded item read in for the explorer's hover card alone.
+    pub(crate) explorer_preview_item: Option<explorer_preview::PreviewCopy>,
+    /// An unloaded design layer read in for the explorer's hover card alone.
+    pub(crate) explorer_preview_layer: Option<explorer_preview::HeldLayer>,
+    /// Counts what the hover card has shown, so a read for one it has
+    /// moved on from lands nowhere.
+    pub(crate) explorer_preview_generation: u64,
     block_models: Vec<OpenBlockModel>,
     next_block_model_id: u64,
     drill_holes: Vec<OpenDrillHoleDataset>,
@@ -845,6 +853,9 @@ impl<'a> Default for App<'a> {
             project_lock_refreshed_at: None,
             active_triangulation: None,
             next_triangulation_id: 0,
+            explorer_preview_item: None,
+            explorer_preview_layer: None,
+            explorer_preview_generation: 0,
             block_models: Vec::new(),
             next_block_model_id: 0,
             drill_holes: Vec::new(),
@@ -1221,9 +1232,8 @@ impl<'a> App<'a> {
         self.startup_dialog_dismissed = true;
         self.invalidate_geometry();
         self.persist_session();
-        // Read after the project's own items are in, which a whole-project
-        // open adds once this returns: the reads finish on a later frame, so
-        // a referenced item the project has its own copy of is shadowed.
+        // The project's own items come in once this returns; the references'
+        // land beside them on a later frame.
         self.reload_data_references();
     }
 
@@ -1542,6 +1552,10 @@ impl<'a> App<'a> {
     /// `may_continue` lets the edit extend the gesture the pointer is still
     /// driving, if there is one.
     fn execute_edit_continuing(&mut self, command: Command, may_continue: bool) {
+        if let Some(name) = self.referenced_changed_by(&command) {
+            crate::userspace_warn!("{}", crate::i18n::tr!("cmd-referenced-read-only", name = name));
+            return;
+        }
         let mut layers = Vec::new();
         if let Some(document) = self.workspace.active_document() {
             command.required_layers(false, document, &mut layers);
@@ -1558,15 +1572,37 @@ impl<'a> App<'a> {
             return;
         }
         let continuing = may_continue && self.ui_pointer_gesture_active;
+        // Loading, showing or styling what a data reference shows is no
+        // unsaved work: none of it is saved with the project.
+        let runtime = self.workspace.active_project().map(|project| project.runtime_id);
+        let leaves_saved = self.only_styles_referenced(&command) && runtime.is_some_and(|runtime| !self.project_content_is_dirty(runtime));
         let Some(((), effects)) = self.with_edit_target(|history, target| history.execute(target, command, continuing)) else {
             return;
         };
         self.apply_step_effects(effects);
+        if leaves_saved {
+            self.mark_all_project_content_saved();
+        }
+    }
+
+    /// Whether `command` only loads, shows, hides or restyles what data
+    /// references show.
+    fn only_styles_referenced(&self, command: &Command) -> bool {
+        match command {
+            Command::SetItemStyle { item, .. } => self.item_is_referenced(*item).is_some(),
+            Command::SetLayerLoaded { id, .. } | Command::SetLayerHidden { id, .. } => self.layer_is_referenced(*id).is_some(),
+            Command::Batch(commands) => !commands.is_empty() && commands.iter().all(|command| self.only_styles_referenced(command)),
+            _ => false,
+        }
     }
 
     /// Same, for a command produced by a project-scoped background job. The
     /// caller has already validated the open-project runtime token.
     pub(crate) fn execute_edit_for(&mut self, runtime_id: u32, command: Command) {
+        if let Some(name) = self.referenced_changed_by(&command) {
+            crate::userspace_warn!("{}", crate::i18n::tr!("cmd-referenced-read-only", name = name));
+            return;
+        }
         let Some(((), effects)) = self.with_edit_target(|history, target| history.execute_for(runtime_id, target, command)) else {
             return;
         };
@@ -1810,6 +1846,7 @@ impl<'a> App<'a> {
     fn clear_project_owned_data(&mut self) {
         // The outgoing project's file is free for others to edit again.
         self.release_project_lock();
+        self.clear_explorer_preview();
         // Drillhole loads are said by name, as a project switch says them;
         // the rest go silently.
         self.cancel_drill_hole_loads(|_| true);
@@ -2284,6 +2321,7 @@ impl<'a> App<'a> {
                 &self.block_models,
                 &self.drill_holes,
                 &self.point_clouds,
+                &self.raster_textures,
                 &self.editor.hidden_handles,
             );
             self.redraw_requested = true;

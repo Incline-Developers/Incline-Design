@@ -117,7 +117,10 @@ impl<'a> App<'a> {
 
         let id = DrillHoleId(self.next_drill_hole_id);
         self.next_drill_hole_id += 1;
-        let name = crate::model::project::unique_item_name(name.to_owned(), self.drill_holes.iter().map(|item| item.name.as_str()));
+        let name = crate::model::project::unique_item_name(
+            name.to_owned(),
+            self.drill_holes.iter().filter(|item| item.state.is_working()).map(|item| item.name.as_str()),
+        );
         let item = planned_dataset(id, name, collars, depth, diameter);
         self.execute_edit(Command::AddItem {
             item: ItemRef::DrillHole(id),
@@ -315,7 +318,7 @@ impl<'a> App<'a> {
     pub(super) fn add_loaded_drill_holes(&mut self, loaded: LoadedDrillHoleDataset) -> DrillHoleId {
         let id = DrillHoleId(self.next_drill_hole_id);
         self.next_drill_hole_id += 1;
-        let name = crate::model::project::unique_item_name(loaded.name, self.drill_holes.iter().map(|item| item.name.as_str()));
+        let name = crate::model::project::unique_item_name(loaded.name, self.drill_holes.iter().filter(|item| item.state.is_working()).map(|item| item.name.as_str()));
         userspace_log!(
             "{}",
             tr!(

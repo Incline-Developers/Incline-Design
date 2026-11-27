@@ -878,6 +878,101 @@ pub(crate) enum SolidPreviewSummary {
     Failed(String),
 }
 
+/// What the explorer's hover card pictures: a design layer or a project item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum PreviewSubject {
+    Layer(crate::model::LayerId),
+    Item(crate::model::ItemRef),
+}
+
+/// How far the explorer's hover card has got with its picture.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) enum PreviewStatus {
+    /// Nothing is being previewed.
+    #[default]
+    Idle,
+    /// An unloaded surface is being read for the picture.
+    Loading,
+    /// The picture is drawn: by the renderer into
+    /// [`ExplorerPreview::texture`], or, for a design layer, from
+    /// [`ExplorerPreview::lines`] by the card itself.
+    Ready,
+    /// Not loaded, and not a kind the card reads in for itself.
+    NotLoaded,
+    /// Loaded, with nothing in it to draw.
+    Empty,
+    Failed(String),
+}
+
+/// One string of a design layer as its hover card draws it.
+#[derive(Clone, Debug)]
+pub(crate) struct PreviewLine {
+    pub(crate) points: Vec<DVec3>,
+    pub(crate) color: egui::Color32,
+}
+
+/// The explorer's hover card: a small picture of the row under the pointer,
+/// turning slowly about it.
+///
+/// The explorer says what is hovered ([`Self::hovered`], each frame its
+/// card is open); the app settles what can be drawn of it and reads an
+/// unloaded surface in for it; the renderer draws an item into
+/// [`Self::texture`]. A design layer's strings the card draws itself.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ExplorerPreview {
+    /// Set by the explorer while a row's card is open, taken by the app.
+    pub(crate) hovered: Option<PreviewSubject>,
+    pub(crate) subject: Option<PreviewSubject>,
+    pub(crate) status: PreviewStatus,
+    /// When the card opened on `subject`: the orbit's clock.
+    pub(crate) started: Option<web_time::Instant>,
+    /// The box the picture frames.
+    pub(crate) bounds: Option<(DVec3, DVec3)>,
+    pub(crate) lines: std::sync::Arc<Vec<PreviewLine>>,
+    /// A raster's image, which the card shows flat as it is.
+    pub(crate) image: Option<std::sync::Arc<egui::ColorImage>>,
+    pub(crate) texture: Option<egui::TextureId>,
+    /// The scene's background, behind a layer's strings as behind an item.
+    pub(crate) background: egui::Color32,
+}
+
+impl ExplorerPreview {
+    /// The card's picture, in points.
+    pub(crate) const SIZE: egui::Vec2 = egui::vec2(240.0, 150.0);
+    /// Looking down on the subject at this angle, in radians.
+    pub(crate) const PITCH: f64 = 0.55;
+    /// One turn about the subject every this many seconds.
+    const TURN_SECONDS: f64 = 14.0;
+
+    /// The orbit's heading now: a quarter turn off north to start, turning
+    /// steadily from when the card opened.
+    pub(crate) fn yaw(&self) -> f64 {
+        let elapsed = self.started.map_or(0.0, |started| started.elapsed().as_secs_f64());
+        -std::f64::consts::FRAC_PI_4 + elapsed * std::f64::consts::TAU / Self::TURN_SECONDS
+    }
+
+    /// The picture's centre, and how far it reaches from there to its top
+    /// in world units, so that `bounds` fits at every heading: across, by
+    /// its plan diagonal; up and down, by that diagonal foreshortened and its
+    /// height.
+    pub(crate) fn framing((lower, upper): (DVec3, DVec3)) -> (DVec3, f64) {
+        const MARGIN: f64 = 1.08;
+        let size = upper - lower;
+        let across = size.truncate().length();
+        let aspect = f64::from(Self::SIZE.x / Self::SIZE.y);
+        let (sin_pitch, cos_pitch) = Self::PITCH.sin_cos();
+        let half_height = (across / (2.0 * aspect)).max((across * sin_pitch + size.z * cos_pitch) / 2.0) * MARGIN;
+        ((lower + upper) * 0.5, half_height.max(1e-6))
+    }
+
+    /// The direction the orbit looks in now.
+    pub(crate) fn forward(&self) -> DVec3 {
+        let (sin_pitch, cos_pitch) = Self::PITCH.sin_cos();
+        let (sin_yaw, cos_yaw) = self.yaw().sin_cos();
+        DVec3::new(cos_pitch * cos_yaw, cos_pitch * sin_yaw, -sin_pitch)
+    }
+}
+
 /// How the Solids Setup page's preview is looking at its solid: an orbit
 /// around the mesh's own centre, plus a zoom multiplier on the framing that
 /// fits it.
@@ -2504,6 +2599,8 @@ pub(crate) struct EditorState {
     /// Offscreen image of the solid being inspected on the Solids Setup page,
     /// the frame size it is asked to fill, and how it is being orbited.
     pub(crate) solid_preview_texture: Option<egui::TextureId>,
+    /// The explorer's hover card; see [`ExplorerPreview`].
+    pub(crate) explorer_preview: ExplorerPreview,
     pub(crate) solid_preview_size_px: [u32; 2],
     pub(crate) solid_preview_view: SolidPreviewView,
     pub(crate) solid_preview_summary: SolidPreviewSummary,
@@ -4330,6 +4427,7 @@ impl EditorState {
             slice_preview_texture: None,
             slice_preview_window_texture: None,
             solid_preview_texture: None,
+            explorer_preview: ExplorerPreview::default(),
             solid_preview_size_px: [420, 420],
             solid_preview_view: SolidPreviewView::default(),
             solid_preview_summary: SolidPreviewSummary::Empty,
@@ -5837,6 +5935,14 @@ pub(crate) enum UiCommand {
     ReloadDataReference(crate::model::project::ReferenceId),
     /// Make a layer or item shown from a data reference the project's own.
     BringIntoProject(crate::app::data_references::ReferencedRef),
+    /// Bring something a data reference shows into the project, into
+    /// `section`'s root (`folder` `None`) or one of its collections: what
+    /// dragging it out onto the project's rows does.
+    BringIntoProjectAt {
+        target: crate::app::data_references::ReferencedRef,
+        section: crate::model::SectionKind,
+        folder: Option<crate::model::FolderId>,
+    },
     SaveProject,
     #[cfg(not(target_arch = "wasm32"))]
     SaveProjectAs(u32),
@@ -6469,6 +6575,7 @@ impl UiCommand {
             | Self::RemoveDataReference(_)
             | Self::ReloadDataReference(_)
             | Self::BringIntoProject(_)
+            | Self::BringIntoProjectAt { .. }
             | Self::SetInitiation { .. }
             | Self::ChargeHoles { .. }
             | Self::BeginRenameItem(_)
