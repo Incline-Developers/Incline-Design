@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A data reference in the explorer: the OMF file whose contents are listed, read-only, inside it. -->
+<svg width="24" height="24" fill="none" version="1.1" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+ <path d="m1.75 5a1.5 1.5 0 0 1 1.5-1.5h5.6l2.2 2.4h9.7a1.5 1.5 0 0 1 1.5 1.5v1.1h-20.5z" style="fill:#d99a2b"/>
+ <path d="m1.75 8.2h20.5v10.8a1.5 1.5 0 0 1-1.5 1.5h-17.5a1.5 1.5 0 0 1-1.5-1.5z" style="fill:#f2bd4b"/>
+</svg>

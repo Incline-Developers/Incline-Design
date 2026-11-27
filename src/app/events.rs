@@ -254,6 +254,10 @@ impl<'a> App<'a> {
                     self.refresh_object_edit_dialog();
                     #[cfg(not(target_arch = "wasm32"))]
                     self.refresh_missing_projects();
+                    #[cfg(not(target_arch = "wasm32"))]
+                    self.refresh_project_lock();
+                    #[cfg(not(target_arch = "wasm32"))]
+                    self.refill_freed_data_references();
                     let project = self.project_view();
                     self.sync_window_frame(&project);
                     #[cfg(target_os = "macos")]
@@ -976,7 +980,7 @@ impl<'a> App<'a> {
             &self.snap_index,
             &self.triangulations,
             &self.editor.hidden_handles,
-            &self.editor.pick_frozen,
+            &self.editor.snap_frozen,
             &self.editor.cursor_mode,
             self.editor.xray_enabled,
         );

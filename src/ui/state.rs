@@ -2113,6 +2113,10 @@ pub(crate) struct EditorState {
     /// cursor may not snap to. Off the locking pages, [`Self::frozen_handles`]; on them, every item but those
     /// unlocked there.
     pub(crate) pick_frozen: HashSet<SceneEntityId>,
+    /// Derived with [`Self::pick_frozen`]: what the cursor may not snap to.
+    /// The same, less what is shown from a data reference, which is read-only
+    /// but as good a place to snap to as anything the project holds.
+    pub(crate) snap_frozen: HashSet<SceneEntityId>,
     /// Derived each frame: what the camera may not orbit about. A page's own
     /// lock leaves that alone, so the view still turns about the ground on
     /// the locking pages; an item locked by name stays out unless it is
@@ -2812,6 +2816,9 @@ pub(crate) struct EditorState {
     /// A New/Open action is waiting for a Save/Discard/Cancel choice.
     pub(crate) replace_project_confirm_open: bool,
     pub(crate) lossy_save_confirm_open: bool,
+    /// The project whose Save found it read-only, while the read-only save
+    /// dialog asks what to do instead.
+    pub(crate) read_only_save_prompt: Option<u32>,
     /// Dirty project awaiting confirmation before its changes are discarded
     /// (reverted to the last saved state on disk).
     pub(crate) pending_discard_project: Option<u32>,
@@ -3699,6 +3706,7 @@ impl EditorState {
             || self.exit_confirm_open
             || self.replace_project_confirm_open
             || self.lossy_save_confirm_open
+            || self.read_only_save_prompt.is_some()
             || self.delete_confirm_open
             || self.pending_delete_layer.is_some()
             || self.pending_delete_item.is_some()
@@ -3840,6 +3848,7 @@ impl EditorState {
         self.explicitly_frozen.clear();
         self.page_unlocked.clear();
         self.pick_frozen.clear();
+        self.snap_frozen.clear();
         self.orbit_frozen.clear();
         self.locked_layers.clear();
         self.locked_rasters.clear();
@@ -4145,6 +4154,7 @@ impl EditorState {
             explicitly_frozen: HashSet::new(),
             page_unlocked: HashSet::new(),
             pick_frozen: HashSet::new(),
+            snap_frozen: HashSet::new(),
             orbit_frozen: HashSet::new(),
             locked_layers: HashSet::new(),
             locked_rasters: HashSet::new(),
@@ -4460,6 +4470,7 @@ impl EditorState {
             remove_project_after_close: false,
             replace_project_confirm_open: false,
             lossy_save_confirm_open: false,
+            read_only_save_prompt: None,
             pending_discard_project: None,
             pending_discard_layer: None,
             tri_create_open: false,
@@ -5812,6 +5823,20 @@ pub(crate) enum UiCommand {
     /// Move the MCP server to another port.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     SetMcpPort(u16),
+    /// The read-only save dialog's Save As (an OMF 2 file, for an OMF 1
+    /// project).
+    ReadOnlySaveAs,
+    /// The read-only save dialog's Take Over and Save.
+    #[cfg(not(target_arch = "wasm32"))]
+    TakeOverAndSave,
+    CancelReadOnlySave,
+    /// Preferences > Data: pick an OMF file to reference.
+    #[cfg(not(target_arch = "wasm32"))]
+    ChooseDataReference,
+    RemoveDataReference(crate::model::project::ReferenceId),
+    ReloadDataReference(crate::model::project::ReferenceId),
+    /// Make a layer or item shown from a data reference the project's own.
+    BringIntoProject(crate::app::data_references::ReferencedRef),
     SaveProject,
     #[cfg(not(target_arch = "wasm32"))]
     SaveProjectAs(u32),
@@ -6439,6 +6464,11 @@ impl UiCommand {
             | Self::SetPanelPoppedOut(..)
             | Self::SetMcpEnabled(_)
             | Self::SetMcpPort(_)
+            | Self::ReadOnlySaveAs
+            | Self::CancelReadOnlySave
+            | Self::RemoveDataReference(_)
+            | Self::ReloadDataReference(_)
+            | Self::BringIntoProject(_)
             | Self::SetInitiation { .. }
             | Self::ChargeHoles { .. }
             | Self::BeginRenameItem(_)
@@ -6568,6 +6598,8 @@ impl UiCommand {
             #[cfg(not(target_arch = "wasm32"))]
             Self::RequestDiscardLayerChanges(_) => None,
 
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::TakeOverAndSave | Self::ChooseDataReference => None,
             Self::SetLanguage(choice) => report(tr!("status-language"), choice.endonym().to_owned()),
             Self::SetFlyModeEnabled(enabled) => report(tr!("common-fly-mode"), if *enabled { tr!("state-enabled") } else { tr!("state-disabled") }),
             Self::SetSliceModeEnabled(enabled) => report(tr!("state-slice-mode"), if *enabled { tr!("state-enabled") } else { tr!("state-disabled") }),
@@ -7037,6 +7069,8 @@ pub(crate) struct UiLayerEntry {
     pub(crate) folder: Option<FolderId>,
     /// Explorer section this item is shown under.
     pub(crate) section: SectionKind,
+    /// The data reference it is shown from, or `None` for the project's own.
+    pub(crate) reference: Option<crate::model::project::ReferenceId>,
 }
 
 /// The one open project shown in the explorer tree.
@@ -7047,6 +7081,8 @@ pub(crate) struct UiProjectEntry {
     pub(crate) dirty: bool,
     pub(crate) designs_dirty: bool,
     pub(crate) lossy_save_warnings: Vec<String>,
+    /// Why it cannot be saved to its own file, if it cannot.
+    pub(crate) read_only: Option<crate::model::project::ReadOnlyReason>,
     pub(crate) is_active: bool,
     /// Persisted in browser IndexedDB despite having no host filesystem path.
     #[cfg(target_arch = "wasm32")]
@@ -7179,6 +7215,8 @@ pub(crate) struct UiPointCloudEntry {
     /// Whether the cloud carries ASPRS classification codes, which is what
     /// offers the bare-earth filter and the classification view.
     pub(crate) is_classified: bool,
+    /// The data reference it is shown from, or `None` for the project's own.
+    pub(crate) reference: Option<crate::model::project::ReferenceId>,
 }
 
 #[derive(Clone, Debug)]
@@ -7198,6 +7236,8 @@ pub(crate) struct UiRasterTextureEntry {
     /// Folder the raster sits in, or `None` for the section root.
     pub(crate) folder: Option<FolderId>,
     pub(crate) section: SectionKind,
+    /// The data reference it is shown from, or `None` for the project's own.
+    pub(crate) reference: Option<crate::model::project::ReferenceId>,
 }
 
 #[derive(Clone, Debug)]
@@ -7214,6 +7254,8 @@ pub(crate) struct UiTriangulationEntry {
     /// Folder the triangulation sits in, or `None` for the section root.
     pub(crate) folder: Option<FolderId>,
     pub(crate) section: SectionKind,
+    /// The data reference it is shown from, or `None` for the project's own.
+    pub(crate) reference: Option<crate::model::project::ReferenceId>,
 }
 
 #[derive(Clone, Debug)]
@@ -7232,6 +7274,8 @@ pub(crate) struct UiBlockModelEntry {
     /// Folder the block model sits in, or `None` for the section root.
     pub(crate) folder: Option<FolderId>,
     pub(crate) section: SectionKind,
+    /// The data reference it is shown from, or `None` for the project's own.
+    pub(crate) reference: Option<crate::model::project::ReferenceId>,
 }
 
 #[derive(Clone, Debug)]
@@ -7248,6 +7292,8 @@ pub(crate) struct UiDrillHoleEntry {
     /// Folder the drill hole dataset sits in, or `None` for the section root.
     pub(crate) folder: Option<FolderId>,
     pub(crate) section: SectionKind,
+    /// The data reference it is shown from, or `None` for the project's own.
+    pub(crate) reference: Option<crate::model::project::ReferenceId>,
 }
 
 /// Active triangulation id and face colour, as surfaced to the canvas context menu.
@@ -7290,6 +7336,24 @@ pub(crate) struct UiProjectView {
     pub(crate) active_session: u32,
     /// Every explorer folder, across every section.
     pub(crate) folders: FolderRegistry,
+    /// The data references named in Preferences > Data, in the order they
+    /// were added.
+    pub(crate) data_references: Vec<UiDataReference>,
+}
+
+/// One data reference, as the explorer and Preferences show it.
+#[derive(Clone, Debug)]
+pub(crate) struct UiDataReference {
+    pub(crate) id: crate::model::project::ReferenceId,
+    /// The file's name, without its extension.
+    pub(crate) name: String,
+    pub(crate) path: PathBuf,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) status: crate::model::project::ReferenceStatus,
+    /// The sections it has something in, in explorer order, each with its
+    /// heading's name.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) sections: Vec<(crate::model::MemberKind, String)>,
 }
 
 /// How many remembered projects a Recent list offers before the file chooser
@@ -7377,6 +7441,21 @@ impl UiProjectView {
 
     /// The project the window is titled after: the active one, or the first
     /// open if none is.
+    /// The project's name as the title bar and the window show it: marked
+    /// read-only when it cannot be saved to its own file, and dirty with a
+    /// star.
+    pub(crate) fn project_title(&self) -> Option<String> {
+        self.titled_project().map(|entry| {
+            let name = entry.name.trim_end_matches(".omf");
+            let name = if entry.read_only.is_some() {
+                crate::i18n::tr!("title-read-only", name = name.to_owned())
+            } else {
+                name.to_owned()
+            };
+            if entry.dirty { format!("{name} *") } else { name }
+        })
+    }
+
     pub(crate) fn titled_project(&self) -> Option<&UiProjectEntry> {
         self.projects.iter().find(|entry| entry.is_active).or_else(|| self.projects.first())
     }
@@ -10362,6 +10441,8 @@ pub(crate) enum PropertyTab {
     Interface,
     Camera,
     Performance,
+    /// The data references every project shows (`app::data_references`).
+    Data,
     /// The MCP server that lets AI tools work with Incline (`mcp`).
     Mcp,
     Developer,

@@ -218,6 +218,10 @@ pub(crate) struct Config {
     #[serde(alias = "recent_design_functions")]
     #[serde(deserialize_with = "lenient_list")]
     pub(crate) recent_functions: Vec<String>,
+    /// The OMF files named in Preferences > Data, whose contents every
+    /// project shows read-only. See `app::data_references`.
+    #[serde(default)]
+    pub(crate) data_references: Vec<std::path::PathBuf>,
 }
 
 /// Deserialize a list, dropping entries this build cannot read instead of
@@ -286,6 +290,7 @@ impl Default for Config {
             mine_coordinate_system: None,
             recent_functions_shown: default_recent_functions_shown(),
             recent_functions: Vec::new(),
+            data_references: Vec::new(),
         }
     }
 }

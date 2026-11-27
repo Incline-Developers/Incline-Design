@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The Windows Installer package, built by the release workflow with WiX
+  Toolset 5:
+
+    wix build packaging/windows/incline-design.wxs -arch x64
+      -d Version=0.5.0 -d ExePath=target/release/incline-design.exe
+      -o Incline-Design-0.5.0-windows-x86_64.msi
+
+  One package installs per machine or per user:
+
+  - Per machine (IT deployment through Intune, SCCM or Group Policy, or a
+    person with admin rights), into Program Files:
+      msiexec /i Incline-Design-0.5.0-windows-x86_64.msi /qn ALLUSERS=1
+  - Per user (no admin rights needed), into %LocalAppData%\Programs:
+      msiexec /i Incline-Design-0.5.0-windows-x86_64.msi /qn MSIINSTALLPERUSER=1
+
+  Double-clicked, it installs per user unless the person is an administrator.
+  Either way it associates .omf files with Incline Design.
+
+  The UpgradeCode below identifies the product across every version and must
+  never change: Windows Installer finds the installed version to replace by
+  it. MajorUpgrade removes the old version as the new one installs.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="Incline Design"
+    Manufacturer="Incline Developers"
+    Version="$(Version)"
+    UpgradeCode="99AF3FE7-58A5-403E-A5CB-BD86D38D76DF"
+    Scope="perUserOrMachine"
+    Language="1033"
+    Compressed="yes">
+    <SummaryInformation Description="Incline Design $(Version): free open source mine design" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Incline Design is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="InclineIcon" SourceFile="res\logo.ico" />
+    <Property Id="ARPPRODUCTICON" Value="InclineIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://inclinedesign.net" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/Incline-Developers/Incline-Design" />
+
+    <!-- Program Files for a per-machine install, %LocalAppData%\Programs for
+         a per-user one: Windows Installer redirects this folder by scope. -->
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="Incline Design" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="Application" Directory="INSTALLFOLDER">
+      <Component Id="Executable" Bitness="always64">
+        <File Id="InclineExe" Source="$(ExePath)" Name="incline-design.exe" KeyPath="yes">
+          <Shortcut
+            Id="StartMenuShortcut"
+            Directory="ProgramMenuFolder"
+            Name="Incline Design"
+            Description="Free open source mine design"
+            WorkingDirectory="INSTALLFOLDER"
+            Icon="InclineIcon"
+            Advertise="yes" />
+        </File>
+        <!-- Double-clicking a .omf file opens it in Incline Design, which
+             takes the project's path as its one argument. Registered under
+             HKLM or HKCU to match the install's scope. Windows lets the
+             person keep another application as the default for .omf; Incline
+             is then offered under Open With. -->
+        <ProgId Id="InclineDesign.Project" Description="Incline Design Project" Icon="InclineExe" IconIndex="0">
+          <Extension Id="omf" ContentType="application/x-omf">
+            <Verb Id="open" Command="Open" TargetFile="InclineExe" Argument="&quot;%1&quot;" />
+          </Extension>
+        </ProgId>
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main" Title="Incline Design">
+      <ComponentGroupRef Id="Application" />
+    </Feature>
+  </Package>
+</Wix>

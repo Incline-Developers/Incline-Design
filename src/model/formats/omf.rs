@@ -307,6 +307,10 @@ pub(crate) struct ImportBundle {
     /// The project record's optimization scenarios, when it carries any.
     pub(crate) optimization: Option<crate::model::optimization::ScenarioFile>,
     pub(crate) warnings: Vec<String>,
+    /// The OMF 1 version the file was written in, when it was converted from
+    /// OMF 1 to be read. Such a file opens read-only: Incline never writes
+    /// OMF 1, so saving means choosing an OMF 2 file to save to.
+    pub(crate) omf1_version: Option<String>,
 }
 
 impl ImportBundle {
@@ -1674,6 +1678,7 @@ impl DeferredAsset {
             backing: None,
             element_path: Vec::new(),
             indexed: Vec::new(),
+            all_unloaded: false,
         };
         decoder.walk(element)?;
         decoder.finish()
@@ -2028,26 +2033,62 @@ fn reader_limits() -> omf_crate::file::Limits {
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn from_bytes(source_name: &str, bytes: Vec<u8>, progress: &Phase) -> Result<ImportBundle> {
     progress.set_fraction(0.0);
-    reject_omf1(&bytes).with_context(|| tr!("err-omf-read-container", source = source_name.to_string()))?;
+    if let Some(version) = omf1_version(&bytes) {
+        let mut converted = std::io::Cursor::new(Vec::new());
+        convert_omf1(bytes, &mut converted).with_context(|| tr!("err-omf-read-container", source = source_name.to_string()))?;
+        let bytes = converted.into_inner();
+        let backing = crate::model::asset_storage::Backing::write(&bytes)?;
+        let mut bundle = read_container(source_name, bytes, backing, progress, false).context(tr!("omf-damaged"))?;
+        bundle.omf1_version = Some(version);
+        return Ok(bundle);
+    }
     let backing = crate::model::asset_storage::Backing::write(&bytes)?;
-    read_container(source_name, bytes, backing, progress).context(tr!("omf-damaged"))
+    read_container(source_name, bytes, backing, progress, false).context(tr!("omf-damaged"))
 }
 
 /// Open a project file. The archive is read from a private copy of the file as
 /// each element needs it, so it is never held in memory whole.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn from_path(source_name: &str, path: &Path, progress: &Phase) -> Result<ImportBundle> {
+    read_path(source_name, path, progress, false)
+}
+
+/// Read a data reference: as [`from_path`], but with every layer and item
+/// unloaded and shown, whatever the file recorded.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn reference_from_path(source_name: &str, path: &Path, progress: &Phase) -> Result<ImportBundle> {
+    read_path(source_name, path, progress, true)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_path(source_name: &str, path: &Path, progress: &Phase, all_unloaded: bool) -> Result<ImportBundle> {
     use std::io::Read;
     progress.set_fraction(0.0);
     let mut head = Vec::with_capacity(36);
     std::fs::File::open(path)?.take(36).read_to_end(&mut head)?;
-    reject_omf1(&head).with_context(|| tr!("err-omf-read-container", source = source_name.to_string()))?;
-    let backing = crate::model::asset_storage::Backing::copy_of(path)?;
+    let omf1 = omf1_version(&head);
+    let backing = match omf1 {
+        // Converted straight into the private copy every element is then
+        // read from, so the OMF 2 version is never held in memory whole.
+        Some(_) => {
+            let source = std::fs::File::open(path).with_context(|| tr!("err-store-read-path", path = path.display().to_string()))?;
+            crate::model::asset_storage::Backing::write_with(|file| convert_omf1(source, file)).with_context(|| tr!("err-omf-read-container", source = source_name.to_string()))?
+        }
+        None => crate::model::asset_storage::Backing::copy_of(path)?,
+    };
     let archive = backing.open()?;
-    read_container(source_name, archive, backing, progress).context(tr!("omf-damaged"))
+    let mut bundle = read_container(source_name, archive, backing, progress, all_unloaded).context(tr!("omf-damaged"))?;
+    bundle.omf1_version = omf1;
+    Ok(bundle)
 }
 
-fn read_container<R: omf_crate::file::ReadAt>(source_name: &str, archive: R, backing: crate::model::asset_storage::Backing, progress: &Phase) -> Result<ImportBundle> {
+fn read_container<R: omf_crate::file::ReadAt>(
+    source_name: &str,
+    archive: R,
+    backing: crate::model::asset_storage::Backing,
+    progress: &Phase,
+    all_unloaded: bool,
+) -> Result<ImportBundle> {
     let mut reader = omf_crate::file::Reader::new(archive).with_context(|| tr!("err-omf-open-archive"))?;
     reader.set_limits(reader_limits());
     let (project, problems) = reader.project().with_context(|| tr!("err-omf-read-project-index"))?;
@@ -2118,6 +2159,7 @@ fn read_container<R: omf_crate::file::ReadAt>(source_name: &str, archive: R, bac
         backing: None,
         element_path: Vec::new(),
         indexed: Vec::new(),
+        all_unloaded,
     };
     decoder.backing = Some(backing);
     let total = project.elements.len().max(1) as u64;
@@ -2141,18 +2183,27 @@ fn read_container<R: omf_crate::file::ReadAt>(source_name: &str, archive: R, bac
     decoder.finish()
 }
 
-/// OMF 1 containers open with this magic and an `OMF-v...` version string.
-/// Incline Design reads OMF 2 only, so they are named in the error rather than left
-/// to fail later as an unrecognised archive.
-fn reject_omf1(bytes: &[u8]) -> Result<()> {
+/// The version an OMF 1 file names in its header, when `head` (at least its
+/// first 36 bytes) is the start of one.
+fn omf1_version(head: &[u8]) -> Option<String> {
     const OMF1_MAGIC: [u8; 4] = [0x84, 0x83, 0x82, 0x81];
-    if !bytes.starts_with(&OMF1_MAGIC) {
-        return Ok(());
+    if !head.starts_with(&OMF1_MAGIC) {
+        return None;
     }
-    let version = String::from_utf8_lossy(bytes.get(4..36).unwrap_or_default());
-    let version = version.trim_end_matches('\0');
-    let detail = if version.starts_with("OMF-") { format!(" ({version})") } else { String::new() };
-    bail!(tr!("err-omf-version-1", detail = detail));
+    let version = String::from_utf8_lossy(head.get(4..36).unwrap_or_default());
+    Some(version.trim_end_matches('\0').to_owned())
+}
+
+/// Translate an OMF 1 file into an OMF 2 archive written to `output`.
+fn convert_omf1(input: impl omf_crate::file::ReadAt + 'static, output: impl Write + Seek + Send) -> Result<()> {
+    let mut converter = omf_crate::omf1::Converter::new();
+    converter.set_limits(reader_limits());
+    converter.set_compression(omf_crate::file::Compression::new(1));
+    let problems = converter.convert(input, output).context(tr!("err-omf-convert-omf1"))?;
+    for problem in problems.iter() {
+        log::warn!("{problem}");
+    }
+    Ok(())
 }
 
 struct Decoder<'a, R: omf_crate::file::ReadAt> {
@@ -2168,6 +2219,10 @@ struct Decoder<'a, R: omf_crate::file::ReadAt> {
     /// Slots of the locators handed out, by element path, to be filled with
     /// their elements once the walk no longer borrows the project.
     indexed: Vec<(Vec<usize>, Arc<OnceLock<IndexedElement>>)>,
+    /// Open every layer and item unloaded, whatever the file recorded: for a
+    /// data reference, whose visibility choices are its author's, not the
+    /// reader's. Nothing is decoded until it is loaded.
+    all_unloaded: bool,
 }
 
 impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
@@ -2228,7 +2283,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             return Ok(());
         }
         self.record_unsupported_content(element);
-        if self.backing.is_some() && !style_loaded(element.metadata.get(META_STYLE)) && self.defer_element(element)? {
+        if self.backing.is_some() && (self.all_unloaded || !style_loaded(element.metadata.get(META_STYLE))) && self.defer_element(element)? {
             return Ok(());
         }
         match kind(element) {
@@ -2651,6 +2706,9 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
             let mut layer_template = layer_element.metadata.get(META_LAYER).and_then(|value| Layer::deserialize(value).ok());
             if let Some(layer) = layer_template.as_mut() {
                 layer.elevation += self.project_origin.z as f32;
+                if self.all_unloaded {
+                    layer.loaded = false;
+                }
             }
             let color = layer_template
                 .as_ref()
@@ -2670,7 +2728,7 @@ impl<R: omf_crate::file::ReadAt> Decoder<'_, R> {
                         .unwrap_or_else(|| element_name(layer_element).to_owned()),
                     layer_template.as_ref().and_then(|layer| layer.color_index),
                     color,
-                    layer_template.as_ref().is_none_or(|layer| layer.loaded),
+                    !self.all_unloaded && layer_template.as_ref().is_none_or(|layer| layer.loaded),
                     layer_template.as_ref().map_or(0.0, |layer| layer.elevation),
                 )
             };

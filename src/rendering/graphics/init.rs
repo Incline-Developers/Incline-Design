@@ -155,15 +155,6 @@ impl<'a> Graphics<'a> {
                 max_bind_groups = adapter_limits.max_bind_groups.to_string()
             )
         );
-        if required_limits.max_buffer_size < COMFORTABLE_MAX_BUFFER_SIZE {
-            crate::userspace_warn!(
-                "{}",
-                tr!(
-                    "init-gpu-supports-maximum-buffer-size",
-                    size = (required_limits.max_buffer_size / (1024 * 1024)).to_string()
-                )
-            );
-        }
 
         // Fragment barycentrics let a surface draw its own wireframe instead of
         // six instanced vertices per edge. Optional: the surface shader falls

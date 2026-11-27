@@ -889,7 +889,7 @@ fn draw_ui(
             elements::planning_setup::draw_details(root_ui, editor, project, document, block_models, commands, setup_group)
         };
         dialogs::about::draw_about_dialog(root_ui, editor);
-        elements::properties::draw_preferences(root_ui, editor, commands);
+        elements::properties::draw_preferences(root_ui, editor, project, commands);
         if editor.renaming_item.is_some() {
             dialogs::editing::draw_rename_dialog(root_ui, commands, editor);
         }
@@ -1362,7 +1362,7 @@ fn draw_ui(
     dialogs::editing::draw_insert_point_at_elevation_dialog(root_ui, editor, commands);
     dialogs::object_edit::draw_object_edit_dialog(root_ui, editor, commands);
     dialogs::about::draw_about_dialog(root_ui, editor);
-    elements::properties::draw_preferences(root_ui, editor, commands);
+    elements::properties::draw_preferences(root_ui, editor, project, commands);
     // Laid out before the block-model card, which decides whether it keeps
     // its place along the bottom edge; drawn below, with the other overlays.
     let world_per_point = frame_context.world_per_physical_pixel.map(|scale| scale * f64::from(root_ui.ctx().pixels_per_point()));
@@ -1762,6 +1762,9 @@ fn draw_global_dialogs(
 
     if editor.lossy_save_confirm_open {
         dialogs::confirmations::draw_lossy_save_dialog(root_ui, commands, editor, project);
+    }
+    if editor.read_only_save_prompt.is_some() {
+        dialogs::confirmations::draw_read_only_save_dialog(root_ui, commands, editor, project);
     }
 
     elements::haulage::draw_promote_dialog(root_ui, editor, project, commands);

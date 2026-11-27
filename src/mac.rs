@@ -28,6 +28,8 @@ use crate::{
 };
 
 static PENDING_ACTIONS: Mutex<Vec<MacMenuAction>> = Mutex::new(Vec::new());
+/// Files Finder asked the application to open, waiting for the event loop.
+static OPENED_FILES: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 static LAST_MENU_STATE: Mutex<Option<MenuState>> = Mutex::new(None);
 
 /// Not `Copy`: the Open Recent rows are part of what the menu is showing, so
@@ -188,6 +190,113 @@ impl MenuTarget {
         // SAFETY: NSObject's `init` has the declared signature.
         unsafe { msg_send![super(this), init] }
     }
+}
+
+/// Apple Event codes (four-character codes) for Finder's Open Documents
+/// event and the list of files it carries.
+const CORE_EVENT_CLASS: u32 = u32::from_be_bytes(*b"aevt");
+const OPEN_DOCUMENTS: u32 = u32::from_be_bytes(*b"odoc");
+const DIRECT_OBJECT: u32 = u32::from_be_bytes(*b"----");
+
+define_class!(
+    // SAFETY:
+    // - NSObject has no subclassing requirements.
+    // - OpenDocumentsHandler has no Drop implementation.
+    #[unsafe(super = NSObject)]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = ()]
+    struct OpenDocumentsHandler;
+
+    impl OpenDocumentsHandler {
+        /// Posted at the start of `finishLaunching`, before AppKit delivers
+        /// the Open Documents event the application was launched with: the
+        /// moment to take that event over from AppKit's own handler, which
+        /// would hand it to winit's delegate, which ignores it.
+        // SAFETY: The signature matches a notification observer's selector.
+        #[unsafe(method(applicationWillFinishLaunching:))]
+        fn will_finish_launching(&self, _notification: &AnyObject) {
+            let manager: Option<Retained<AnyObject>> = unsafe { msg_send![objc2::class!(NSAppleEventManager), sharedAppleEventManager] };
+            let Some(manager) = manager else { return };
+            // SAFETY: `self` lives for the rest of the process (see
+            // `listen_for_opened_files`), and the selector's signature is the
+            // one an Apple Event handler must have.
+            let () = unsafe {
+                msg_send![
+                    &*manager,
+                    setEventHandler: self,
+                    andSelector: sel!(handleOpenDocuments:withReplyEvent:),
+                    forEventClass: CORE_EVENT_CLASS,
+                    andEventID: OPEN_DOCUMENTS
+                ]
+            };
+        }
+
+        /// Finder's Open Documents event: queue every file it names.
+        // SAFETY: The signature matches an Apple Event handler's selector.
+        #[unsafe(method(handleOpenDocuments:withReplyEvent:))]
+        fn handle_open_documents(&self, event: &AnyObject, _reply: &AnyObject) {
+            let files: Option<Retained<AnyObject>> = unsafe { msg_send![event, paramDescriptorForKeyword: DIRECT_OBJECT] };
+            let Some(files) = files else { return };
+            let count: isize = unsafe { msg_send![&*files, numberOfItems] };
+            let mut opened = opened_files();
+            // A one-file event may carry the file itself rather than a list of
+            // one; a list's items are numbered from 1.
+            let items: Vec<Retained<AnyObject>> = if count == 0 {
+                vec![files]
+            } else {
+                (1..=count)
+                    .filter_map(|index| unsafe { msg_send![&*files, descriptorAtIndex: index] })
+                    .collect()
+            };
+            for item in items {
+                let url: Option<Retained<AnyObject>> = unsafe { msg_send![&*item, fileURLValue] };
+                let path: Option<Retained<NSString>> = url.and_then(|url| unsafe { msg_send![&*url, path] });
+                if let Some(path) = path {
+                    opened.push(PathBuf::from(path.to_string()));
+                }
+            }
+        }
+    }
+
+    // SAFETY: NSObjectProtocol has no additional safety requirements.
+    unsafe impl NSObjectProtocol for OpenDocumentsHandler {}
+);
+
+/// Start listening for files Finder asks the application to open: one
+/// double-clicked while it runs, and the one it was launched to open. Call
+/// once, on the main thread, before the event loop starts.
+pub(crate) fn listen_for_opened_files() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let handler: Retained<OpenDocumentsHandler> = {
+        let this = OpenDocumentsHandler::alloc(mtm).set_ivars(());
+        // SAFETY: NSObject's `init` has the declared signature.
+        unsafe { msg_send![super(this), init] }
+    };
+    let center = objc2_foundation::NSNotificationCenter::defaultCenter();
+    // SAFETY: the handler responds to the selector with a notification
+    // argument, and is kept alive below for as long as the center may call it.
+    unsafe {
+        center.addObserver_selector_name_object(
+            &handler,
+            sel!(applicationWillFinishLaunching:),
+            Some(objc2_app_kit::NSApplicationWillFinishLaunchingNotification),
+            None,
+        );
+    }
+    // Neither the notification center nor the Apple Event manager keeps its
+    // observer or handler alive; it is needed until the process ends.
+    std::mem::forget(handler);
+}
+
+fn opened_files() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
+    OPENED_FILES.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The files Finder asked to open since the last call.
+pub(crate) fn drain_opened_files() -> Vec<PathBuf> {
+    std::mem::take(&mut *opened_files())
 }
 
 fn action_queue() -> std::sync::MutexGuard<'static, Vec<MacMenuAction>> {

@@ -77,13 +77,9 @@ pub(super) fn frameless(attributes: WindowAttributes, event_loop: &winit::event_
 /// What the system shows for the window - the taskbar, the window switcher -
 /// now that the bar shows it the project's name itself.
 fn window_title(project: &UiProjectView) -> String {
-    project.titled_project().map_or_else(
-        || crate::APP_NAME.to_owned(),
-        |entry| {
-            let name = entry.name.trim_end_matches(".omf");
-            format!("{}: {}{}", crate::APP_NAME, name, if entry.dirty { " *" } else { "" })
-        },
-    )
+    project
+        .project_title()
+        .map_or_else(|| crate::APP_NAME.to_owned(), |title| format!("{}: {title}", crate::APP_NAME))
 }
 
 impl App<'_> {

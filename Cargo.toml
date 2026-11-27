@@ -44,7 +44,7 @@ lyon = "1.0.19"
 mineflow = { path = "crates/mineflow" }
 minlp = { path = "crates/minlp" }
 solver = { path = "crates/solver" }
-omf = { path = "crates/omf", default-features = false, features = ["image", "parquet", "zlib-rs"] }
+omf = { path = "crates/omf", default-features = false, features = ["image", "omf1", "parquet", "zlib-rs"] }
 png = "0.18.1"
 # `crs-definitions` feature omitted: only `from_proj_string` is used, and enabling it
 # would pull in a second copy of the EPSG tables pinned to crs-definitions 0.5.
@@ -171,6 +171,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSData",
     "NSDictionary",
     "NSGeometry",
+    "NSNotification",
     "NSObject",
     "NSString",
     "NSUserDefaults",
@@ -231,6 +232,14 @@ icons = ["res/Incline.iconset/*.png"]
 category = "Productivity"
 out-dir = "dist"
 before-packaging-command = "cargo build --release"
+
+# Finder offers Incline Design for .omf files, and opens one double-clicked in
+# it (`mac::listen_for_opened_files`).
+[[package.metadata.packager.file-associations]]
+extensions = ["omf"]
+name = "Open Mining Format project"
+description = "Incline Design project"
+role = "Editor"
 
 [package.metadata.packager.dmg]
 background = "res/dmg-background.png"

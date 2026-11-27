@@ -239,6 +239,9 @@ impl<'a> App<'a> {
         if requires_project && !self.workspace.has_active_project() {
             anyhow::bail!(crate::i18n::tr!("err-surf-project-required"));
         }
+        if let Some(name) = self.referenced_target_of(&command) {
+            anyhow::bail!(crate::i18n::tr!("cmd-referenced-read-only", name = name));
+        }
         match command {
             UiCommand::Window(action) => {
                 self.apply_window_action(action);
@@ -1246,6 +1249,27 @@ impl<'a> App<'a> {
             UiCommand::SetPanelPoppedOut(kind, popped_out) => self.set_panel_popped_out(kind, popped_out),
             UiCommand::SetMcpEnabled(enabled) => self.set_mcp_enabled(enabled),
             UiCommand::SetMcpPort(port) => self.set_mcp_port(port),
+            UiCommand::ReadOnlySaveAs => {
+                self.read_only_save_as();
+                Ok(())
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            UiCommand::TakeOverAndSave => self.take_over_and_save(),
+            UiCommand::CancelReadOnlySave => {
+                self.cancel_read_only_save();
+                Ok(())
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            UiCommand::ChooseDataReference => {
+                self.choose_data_reference();
+                Ok(())
+            }
+            UiCommand::RemoveDataReference(id) => self.remove_data_reference(id),
+            UiCommand::ReloadDataReference(id) => {
+                self.reload_data_reference(id);
+                Ok(())
+            }
+            UiCommand::BringIntoProject(target) => self.bring_into_project(target),
             UiCommand::RemoveTriangulation(id) => {
                 self.remove_triangulation(id);
                 Ok(())

@@ -20,6 +20,7 @@ thiserror = "2.0.21"
 zip = { version = "9.7.0", default-features = false }
 
 [dev-dependencies]
+base64 = "0.23.1"
 bytes = "1.12.2"
 glam = "0.34.3"
 regex = "1.13.2"
@@ -32,3 +33,5 @@ image = ["dep:image"]
 # miniz_oxide.
 zlib-rs = ["flate2/zlib-rs", "parquet?/flate2-zlib-rs"]
 parquet = ["dep:parquet", "dep:bytes"]
+# Read-only conversion of OMF 1 (v0.9) files to OMF 2.
+omf1 = ["parquet"]

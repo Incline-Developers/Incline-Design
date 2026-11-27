@@ -12,6 +12,47 @@ use crate::{
     model::{Document, FolderId, FolderRegistry, Layer, LayerId, MemberKind, SectionKind},
 };
 
+/// One data reference: an OMF file named in Preferences > Data whose contents
+/// are shown, read-only, beside every project's own.
+///
+/// An organisation keeps its shared data - the latest survey, the
+/// infrastructure, the resource models - in files everyone references, so
+/// each project shows the current copy without holding one of its own. A
+/// referenced layer or item sits in the ordinary collections tagged with its
+/// reference: it draws, selects and feeds tools like any other, but it is
+/// locked against editing, never written by a save, and never unsaved work.
+/// Bringing it into the project clears the tag, after which it is the
+/// project's own. A project item of the same kind and name shadows the
+/// referenced one, so a brought-in copy is not shown twice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) struct ReferenceId(pub(crate) u32);
+
+/// Why an open project cannot be saved back to the file it came from.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ReadOnlyReason {
+    /// The file is OMF 1, which Incline reads but never writes.
+    Omf1,
+    /// Someone else holds the file's lock: they are editing it.
+    #[cfg(not(target_arch = "wasm32"))]
+    LockedBy(crate::model::file_lock::LockHolder),
+}
+
+/// How far a data reference has got with showing its file.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ReferenceStatus {
+    /// Its file is being read.
+    Loading,
+    /// Its contents are shown: this many layers and items, less any a
+    /// project item of the same name shadows.
+    #[cfg(not(target_arch = "wasm32"))]
+    Loaded { shown: usize, shadowed: usize },
+    /// Its file is not where it was.
+    #[cfg(not(target_arch = "wasm32"))]
+    Missing,
+    /// Its file could not be read, for this reason.
+    Failed(String),
+}
+
 /// Persistence state shared by every project-owned dataset. The source name
 /// is informational provenance only; it is never used to reload content.
 ///
@@ -54,6 +95,9 @@ pub(crate) struct ProjectItemState {
     /// so a section may show items of more than one kind. Unlike `folder`,
     /// the value means the same thing in every project, so a file records it.
     pub(crate) section: SectionKind,
+    /// The data reference this item was read from, if it is not the
+    /// project's own. See [`ReferenceId`].
+    pub(crate) reference: Option<ReferenceId>,
     revision: u64,
     epoch: u64,
     saved_epoch: u64,
@@ -84,6 +128,7 @@ impl ProjectItemState {
             summary: None,
             folder: None,
             section: SectionKind::natural_for(kind),
+            reference: None,
             revision: 1,
             epoch: 1,
             saved_epoch: 0,
@@ -127,6 +172,7 @@ impl ProjectItemState {
         self.revision.hash(hasher);
         self.folder.hash(hasher);
         self.section.hash(hasher);
+        self.reference.hash(hasher);
     }
 
     /// Record that the item's content changed, giving it an epoch no earlier
@@ -170,8 +216,16 @@ impl ProjectItemState {
         self.source_name = source_name;
     }
 
+    /// Whether the item has changes a save would write. A referenced item
+    /// is never written, so it never has.
     pub(crate) fn is_dirty(&self) -> bool {
-        self.epoch != self.saved_epoch
+        self.reference.is_none() && self.epoch != self.saved_epoch
+    }
+
+    /// Whether the item belongs to the project, rather than being shown from
+    /// a data reference.
+    pub(crate) fn is_working(&self) -> bool {
+        self.reference.is_none()
     }
 
     /// Monotonic mutation counter. Cache keys only - never compare it against
@@ -318,6 +372,9 @@ pub(crate) struct OpenProject {
     /// succeeds; Merge reports them without attaching them to the target.
     pub(crate) lossy_save_warnings: Vec<String>,
     pub(crate) lossy_save_confirmed: bool,
+    /// Why the project cannot be saved to its own file, if it cannot. It
+    /// can still be edited; saving asks for another file to save to.
+    pub(crate) read_only: Option<ReadOnlyReason>,
     /// Identity of project-owned content outside the design document. Every
     /// aggregate membership change advances it; each item's own state tracks
     /// its payload, style and loaded flag. Public so an [`crate::model::EditTarget`] can borrow it
@@ -423,6 +480,19 @@ impl OpenProject {
         self.project.document.layer_content_hashes(&mut self.content_hash_cache.borrow_mut(), &self.project.folders)
     }
 
+    /// [`Self::current_layer_hashes`] for the project's own layers only: what
+    /// a save baseline records and unsaved changes are measured against. A
+    /// layer shown from a data reference is never saved, so it is never
+    /// unsaved work, and its coming and going is no change to the project.
+    /// (Residency still keys on every layer's hash, so that map keeps them.)
+    pub(crate) fn working_layer_hashes(&self) -> HashMap<u64, u64> {
+        let mut hashes = self.current_layer_hashes();
+        for layer in self.project.document.layers().iter().filter(|layer| layer.reference.is_some()) {
+            hashes.remove(&(layer.id.0 & u64::from(u32::MAX)));
+        }
+        hashes
+    }
+
     /// Record the exact snapshot written by an asynchronous saver. If edits
     /// happened while it was writing, `has_unsaved_changes` compares the live
     /// content with this hash and correctly remains dirty.
@@ -443,7 +513,7 @@ impl OpenProject {
 
     pub(crate) fn mark_saved(&mut self) {
         self.saved_content_hash = Some(self.content_hash());
-        self.saved_layer_hashes = Some(self.current_layer_hashes());
+        self.saved_layer_hashes = Some(self.working_layer_hashes());
         self.savepoint_revision = self.savepoint_revision.wrapping_add(1);
         self.dirty_cache = RefCell::new(None);
         self.layer_dirty_cache = RefCell::new(None);
@@ -463,13 +533,21 @@ impl OpenProject {
             return dirty.clone();
         }
         let dirty: HashSet<LayerId> = match &self.saved_layer_hashes {
-            None => self.project.document.layers().iter().map(|layer| layer.id).collect(),
+            None => self
+                .project
+                .document
+                .layers()
+                .iter()
+                .filter(|layer| layer.reference.is_none())
+                .map(|layer| layer.id)
+                .collect(),
             Some(saved) => {
-                let current = self.current_layer_hashes();
+                let current = self.working_layer_hashes();
                 self.project
                     .document
                     .layers()
                     .iter()
+                    .filter(|layer| layer.reference.is_none())
                     .filter(|layer| {
                         let key = layer.id.0 & LOCAL_MASK;
                         saved.get(&key) != current.get(&key)
@@ -499,12 +577,12 @@ impl OpenProject {
             return true;
         }
         let Some(saved) = &self.saved_layer_hashes else {
-            return self.project.document.layers().iter().any(|layer| layer.section == section);
+            return self.project.document.layers().iter().any(|layer| layer.reference.is_none() && layer.section == section);
         };
-        let current = self.current_layer_hashes();
+        let current = self.working_layer_hashes();
         let tagged_changed = self.project.document.layers().iter().any(|layer| {
             let key = layer.id.0 & LOCAL_MASK;
-            layer.section == section && saved.get(&key) != current.get(&key)
+            layer.reference.is_none() && layer.section == section && saved.get(&key) != current.get(&key)
         });
         tagged_changed || saved.keys().any(|key| !current.contains_key(key))
     }
@@ -942,6 +1020,7 @@ pub(crate) fn open_project(path: Option<PathBuf>, mut project: ProjectFile) -> R
         project,
         lossy_save_warnings: Vec::new(),
         lossy_save_confirmed: false,
+        read_only: None,
         content: ProjectContentState::default(),
         saved_content_hash: None,
         saved_layer_hashes: None,
@@ -970,6 +1049,7 @@ pub(crate) fn open_imported_project(source_name: String, mut project: ProjectFil
         project,
         lossy_save_warnings: Vec::new(),
         lossy_save_confirmed: false,
+        read_only: None,
         content: ProjectContentState::default(),
         saved_content_hash: None,
         saved_layer_hashes: None,

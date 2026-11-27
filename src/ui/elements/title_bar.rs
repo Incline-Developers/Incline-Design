@@ -190,10 +190,7 @@ fn paint_glyph(painter: &egui::Painter, control: Control, maximized: bool, centr
 /// Always in the weak text colour, focused or not: it names the window, and
 /// is not something to read past the menus and tabs for.
 pub(crate) fn draw_title(ui: &egui::Ui, bar: egui::Rect, span: egui::Rangef, centre_y: f32, project: &UiProjectView) {
-    let text = project.titled_project().map_or_else(
-        || crate::APP_NAME.to_owned(),
-        |entry| if entry.dirty { format!("{} *", entry.name) } else { entry.name.clone() },
-    );
+    let text = project.project_title().unwrap_or_else(|| crate::APP_NAME.to_owned());
     draw_title_text(ui, bar, span, centre_y, text);
 }
 

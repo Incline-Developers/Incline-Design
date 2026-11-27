@@ -74,8 +74,6 @@ pub(crate) type Shared<T> = std::rc::Rc<T>;
 pub(super) const TEXT_CACHE_TRIM_INTERVAL_FRAMES: u64 = 300;
 pub(super) const MSAA_SAMPLE_COUNT: u32 = 4;
 pub(super) const CAMERA_ROTATE_SENSITIVITY: f64 = 0.003;
-/// Below this per-buffer limit, large tessellated scenes may be truncated.
-pub(super) const COMFORTABLE_MAX_BUFFER_SIZE: u64 = 2 * 1024 * 1024 * 1024;
 pub(crate) const YELLOW_HIGHLIGHT_COLOR: [f32; 4] = [1.0, 0.85, 0.0, 1.0];
 /// Sizing for editable document geometry.
 pub(super) const DOC_LINE_WIDTH: f32 = 1.0;

@@ -203,6 +203,9 @@ pub(crate) enum FileDialogAction {
     /// Save one open project under a new path.
     #[cfg(not(target_arch = "wasm32"))]
     SaveProjectAs { project_runtime_id: u32, path: PathBuf },
+    /// Reference the OMF file at this path, from Preferences > Data.
+    #[cfg(not(target_arch = "wasm32"))]
+    AddDataReference(PathBuf),
     /// Export the main viewport to a PNG image.
     #[cfg(not(target_arch = "wasm32"))]
     ExportViewportImage(PathBuf),
@@ -474,6 +477,33 @@ impl<'a> App<'a> {
             }
         }
         self.try_finish_deferred_exit();
+    }
+
+    /// Open a project the operating system handed over: a file double-clicked
+    /// in the file manager, given on the command line, or (on macOS) sent to
+    /// the running application. Unsaved work in the open project is asked
+    /// about first, as any switch asks. The welcome splash is skipped, since
+    /// the project is what the person asked for.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn open_project_from_system(&mut self, path: PathBuf) {
+        self.startup_dialog_dismissed = true;
+        self.redraw_requested = true;
+        if !path.is_file() {
+            userspace_warn!(
+                "{}",
+                tr!(
+                    "cmd-file-could-not-open-path-error",
+                    path = path.display().to_string(),
+                    error = std::io::Error::from(std::io::ErrorKind::NotFound).to_string()
+                )
+            );
+            return;
+        }
+        // Relative to where it was launched from, as a shell gives it.
+        let path = std::path::absolute(&path).unwrap_or(path);
+        if let Err(error) = self.activate_tracked_project(path) {
+            userspace_warn!("{error:#}");
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -850,6 +880,7 @@ impl<'a> App<'a> {
                 }
                 self.ensure_project_has_no_pending_text_edit(project_index)?;
                 self.ensure_project_save_path_available(project_index, &path)?;
+                self.ensure_save_as_target_free(&path)?;
                 let new_name = path
                     .file_stem()
                     .and_then(|stem| stem.to_str())
@@ -859,7 +890,7 @@ impl<'a> App<'a> {
                     let project = &mut self.workspace.projects[project_index];
                     let previous_name = std::mem::replace(&mut project.project.metadata.name, new_name.clone());
                     let snapshot_hash = project.current_content_hash();
-                    let snapshot_layer_hashes = project.current_layer_hashes();
+                    let snapshot_layer_hashes = project.working_layer_hashes();
                     project.project.metadata.name = previous_name.clone();
                     (previous_name, snapshot_hash, snapshot_layer_hashes)
                 };
@@ -877,6 +908,8 @@ impl<'a> App<'a> {
                 self.spawn_project_write(kind, snapshot, path);
                 Ok(())
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::AddDataReference(path) => self.add_data_reference(path),
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::ExportOptimizationScenarios(path) => self.write_optimization_scenarios_export(path),
             #[cfg(not(target_arch = "wasm32"))]
@@ -1203,6 +1236,10 @@ impl<'a> App<'a> {
                                     self.workspace.projects[index].mark_snapshot_saved(snapshot_hash, snapshot_layer_hashes);
                                     if save_as_previous_name.is_some() {
                                         self.track_project_path(save.path.clone());
+                                        // Its own file now: an OMF 2 one, locked by
+                                        // this session.
+                                        self.workspace.projects[index].read_only = None;
+                                        self.lock_saved_project(&save.path);
                                     }
                                     self.persist_session();
                                     if self.project_replacement_after_save && self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id) {
@@ -2143,7 +2180,17 @@ impl<'a> App<'a> {
                     .project_index_for_runtime_id(runtime_id)
                     .and_then(|index| self.workspace.projects.get(index))
                     .is_some_and(|project| project.path.is_none());
+            let read_only = self
+                .workspace
+                .project_index_for_runtime_id(runtime_id)
+                .and_then(|index| self.workspace.projects.get(index))
+                .is_some_and(|project| project.read_only.is_some());
             self.save_project(runtime_id)?;
+            if read_only {
+                // The read-only save dialog is open; Save As from it
+                // re-enters the deferred-save flow, and Cancel cancels it.
+                return Ok(false);
+            }
             if save_as_required {
                 // A pathless project has opened a native Save As dialog. Its
                 // completion re-enters the deferred-save flow.
@@ -2334,6 +2381,11 @@ impl<'a> App<'a> {
             anyhow::bail!(tr!("err-file-wait-revert-save"));
         }
         let index = self.workspace.project_index_for_runtime_id(runtime_id).with_context(|| tr!("err-file-project-closed"))?;
+        // An OMF 1 file, or one someone else has: the read-only save dialog
+        // asks where to save instead.
+        if !self.may_save_in_place(runtime_id) {
+            return Ok(());
+        }
         if !self.workspace.projects[index].lossy_save_warnings.is_empty() && !self.workspace.projects[index].lossy_save_confirmed {
             self.pending_lossy_save_as = None;
             self.editor.lossy_save_confirm_open = true;
@@ -2371,7 +2423,7 @@ impl<'a> App<'a> {
             }
             let (snapshot_hash, snapshot_layer_hashes) = {
                 let project = &self.workspace.projects[index];
-                (project.current_content_hash(), project.current_layer_hashes())
+                (project.current_content_hash(), project.working_layer_hashes())
             };
             let snapshot = self.omf_save_snapshot()?;
             let asset_token = self.project_asset_save_token();
@@ -2413,7 +2465,7 @@ impl<'a> App<'a> {
         };
         let (snapshot_hash, snapshot_layer_hashes) = {
             let project = &self.workspace.projects[index];
-            (project.current_content_hash(), project.current_layer_hashes())
+            (project.current_content_hash(), project.working_layer_hashes())
         };
         let asset_token = self.project_asset_save_token();
         let snapshot = self.omf_save_snapshot()?;
