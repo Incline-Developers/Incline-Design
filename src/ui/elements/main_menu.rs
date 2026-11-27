@@ -284,8 +284,9 @@ pub(crate) fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCo
         // own, so one armed there is still armed when the user comes back to
         // it - the same rule, read against the page rather than the tab.
         tool if tool.designs_pit() => workspace.has_production_tools() || editor.is_planning_cut_step(),
+        // Geology's own aids: the cut steps carry none of them.
         ActiveTool::InsertPoint | ActiveTool::FillSegment | ActiveTool::SplitAtCrossings | ActiveTool::RemoveBetweenCrossings | ActiveTool::ExplodePolylineToPoints => {
-            workspace.has_drawing_aids() || editor.is_planning_cut_step()
+            workspace.has_drawing_aids()
         }
         _ => workspace.has_drawing_tools() || editor.is_planning_cut_step(),
     };

@@ -260,7 +260,9 @@ pub(crate) fn draw_boundary_move_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
             let at = if roof { tr!("drill-hole-move-roof-at") } else { tr!("drill-hole-move-floor-at") };
             read_only_row(ui, &at, &format!("{:.2} m", draft.edit.at));
             ui.add_space(4.0);
-            MenuFieldF64::new(tr!("drill-hole-move-boundary-depth"), &mut draft.edit.to, 0.0..=draft.end)
+            // Unclamped: the note below refuses a depth outside the hole.
+            MenuFieldF64::new(tr!("drill-hole-move-boundary-depth"), &mut draft.edit.to, f64::MIN..=f64::MAX)
+                .help_text(tr!("drill-hole-insert-interval-depth-hint", end = shown_depth(draft.end)))
                 .speed(0.01)
                 .max_decimals(3)
                 .suffix(" m")

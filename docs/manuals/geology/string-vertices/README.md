@@ -204,7 +204,7 @@ To give whole strings evenly spaced vertices in one step, so a later edit or a s
 ### Where it is
 - Geology workspace: **Geology Design > Vertices > Insert Points at Spacing...**
 ### Before you start
-The entry is always enabled. Selecting one or more polylines, open or closed, on layers that are visible and not locked prefills the **Polylines** row; **Pick** can also set it. With none selected the dialog opens with a count of 0 and **Apply** is greyed.
+The entry is always enabled. Selecting one or more polylines, open or closed, that are shown and not locked prefills the **Polylines** row; **Pick** can also set it. Otherwise the dialog opens with a count of 0 and **Apply** is greyed.
 ### Steps
 1. Select the strings, or leave the selection empty and use **Pick** in the window.
 2. Choose **Geology Design > Vertices > Insert Points at Spacing...** The **Insert Point at Spacing** window opens and its **Polylines** row gives the count, for example "1 polyline(s) selected".
