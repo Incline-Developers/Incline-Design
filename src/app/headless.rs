@@ -106,6 +106,7 @@ impl App<'_> {
     /// the project taken a step on.
     fn headless_turn(&mut self) {
         self.poll_saves();
+        self.refresh_project_lock();
         self.poll_file_dialogs();
         self.sync_geophysics();
         self.serve_mcp();

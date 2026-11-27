@@ -91,6 +91,29 @@ pub(crate) fn is_supported_raster_path(path: &Path) -> bool {
         .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "tif" | "tiff"))
 }
 
+impl OpenRasterTexture {
+    /// The box in plan the image covers, in world X and Y: its four corners
+    /// through the inverse of `world_to_uv`. `None` for a transform that
+    /// cannot be inverted.
+    pub(crate) fn world_footprint(&self) -> Option<(glam::DVec2, glam::DVec2)> {
+        footprint(self.world_to_uv)
+    }
+}
+
+/// See [`OpenRasterTexture::world_footprint`].
+fn footprint(world_to_uv: [f64; 6]) -> Option<(glam::DVec2, glam::DVec2)> {
+    let [a, b, c, d, e, f] = world_to_uv;
+    let det = a * e - b * d;
+    if !det.is_finite() || det.abs() < 1.0e-30 {
+        return None;
+    }
+    let corner = |u: f64, v: f64| glam::DVec2::new((e * (u - c) - b * (v - f)) / det, (a * (v - f) - d * (u - c)) / det);
+    let corners = [corner(0.0, 0.0), corner(1.0, 0.0), corner(0.0, 1.0), corner(1.0, 1.0)];
+    let lower = corners.iter().copied().reduce(glam::DVec2::min)?;
+    let upper = corners.iter().copied().reduce(glam::DVec2::max)?;
+    (lower.is_finite() && upper.is_finite()).then_some((lower, upper))
+}
+
 fn world_to_uv_transform(transform: [f64; 6], size: [u32; 2]) -> Result<[f64; 6]> {
     let determinant = transform[1] * transform[5] - transform[2] * transform[4];
     if !determinant.is_finite() || determinant.abs() <= f64::EPSILON {
@@ -555,4 +578,17 @@ fn finish_premultiplied_average(sums: [u64; 4], count: u64) -> [u8; 4] {
     let alpha_sum = sums[3];
     let rgb = |sum: u64| sum.checked_div(alpha_sum).unwrap_or(0).min(255) as u8;
     [rgb(sums[0]), rgb(sums[1]), rgb(sums[2]), (alpha_sum / count.max(1)).min(255) as u8]
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_rasters_footprint_is_the_box_its_georeference_puts_it_in() {
+        // 400 by 250 pixels, half a metre wide and 0.48 m tall, north up.
+        let world_to_uv = super::world_to_uv_transform([499_900.0, 0.5, 0.0, 7_000_060.0, 0.0, -0.48], [400, 250]).unwrap();
+        let (lower, upper) = super::footprint(world_to_uv).unwrap();
+        for (got, want) in [(lower.x, 499_900.0), (lower.y, 6_999_940.0), (upper.x, 500_100.0), (upper.y, 7_000_060.0)] {
+            assert!((got - want).abs() < 1.0e-6, "{got} != {want}");
+        }
+    }
 }

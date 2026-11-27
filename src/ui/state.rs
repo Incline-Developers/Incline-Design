@@ -878,6 +878,101 @@ pub(crate) enum SolidPreviewSummary {
     Failed(String),
 }
 
+/// What the explorer's hover card pictures: a design layer or a project item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum PreviewSubject {
+    Layer(crate::model::LayerId),
+    Item(crate::model::ItemRef),
+}
+
+/// How far the explorer's hover card has got with its picture.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) enum PreviewStatus {
+    /// Nothing is being previewed.
+    #[default]
+    Idle,
+    /// An unloaded surface is being read for the picture.
+    Loading,
+    /// The picture is drawn: by the renderer into
+    /// [`ExplorerPreview::texture`], or, for a design layer, from
+    /// [`ExplorerPreview::lines`] by the card itself.
+    Ready,
+    /// Not loaded, and not a kind the card reads in for itself.
+    NotLoaded,
+    /// Loaded, with nothing in it to draw.
+    Empty,
+    Failed(String),
+}
+
+/// One string of a design layer as its hover card draws it.
+#[derive(Clone, Debug)]
+pub(crate) struct PreviewLine {
+    pub(crate) points: Vec<DVec3>,
+    pub(crate) color: egui::Color32,
+}
+
+/// The explorer's hover card: a small picture of the row under the pointer,
+/// turning slowly about it.
+///
+/// The explorer says what is hovered ([`Self::hovered`], each frame its
+/// card is open); the app settles what can be drawn of it and reads an
+/// unloaded surface in for it; the renderer draws an item into
+/// [`Self::texture`]. A design layer's strings the card draws itself.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ExplorerPreview {
+    /// Set by the explorer while a row's card is open, taken by the app.
+    pub(crate) hovered: Option<PreviewSubject>,
+    pub(crate) subject: Option<PreviewSubject>,
+    pub(crate) status: PreviewStatus,
+    /// When the card opened on `subject`: the orbit's clock.
+    pub(crate) started: Option<web_time::Instant>,
+    /// The box the picture frames.
+    pub(crate) bounds: Option<(DVec3, DVec3)>,
+    pub(crate) lines: std::sync::Arc<Vec<PreviewLine>>,
+    /// A raster's image, which the card shows flat as it is.
+    pub(crate) image: Option<std::sync::Arc<egui::ColorImage>>,
+    pub(crate) texture: Option<egui::TextureId>,
+    /// The scene's background, behind a layer's strings as behind an item.
+    pub(crate) background: egui::Color32,
+}
+
+impl ExplorerPreview {
+    /// The card's picture, in points.
+    pub(crate) const SIZE: egui::Vec2 = egui::vec2(240.0, 150.0);
+    /// Looking down on the subject at this angle, in radians.
+    pub(crate) const PITCH: f64 = 0.55;
+    /// One turn about the subject every this many seconds.
+    const TURN_SECONDS: f64 = 14.0;
+
+    /// The orbit's heading now: a quarter turn off north to start, turning
+    /// steadily from when the card opened.
+    pub(crate) fn yaw(&self) -> f64 {
+        let elapsed = self.started.map_or(0.0, |started| started.elapsed().as_secs_f64());
+        -std::f64::consts::FRAC_PI_4 + elapsed * std::f64::consts::TAU / Self::TURN_SECONDS
+    }
+
+    /// The picture's centre, and how far it reaches from there to its top
+    /// in world units, so that `bounds` fits at every heading: across, by
+    /// its plan diagonal; up and down, by that diagonal foreshortened and its
+    /// height.
+    pub(crate) fn framing((lower, upper): (DVec3, DVec3)) -> (DVec3, f64) {
+        const MARGIN: f64 = 1.08;
+        let size = upper - lower;
+        let across = size.truncate().length();
+        let aspect = f64::from(Self::SIZE.x / Self::SIZE.y);
+        let (sin_pitch, cos_pitch) = Self::PITCH.sin_cos();
+        let half_height = (across / (2.0 * aspect)).max((across * sin_pitch + size.z * cos_pitch) / 2.0) * MARGIN;
+        ((lower + upper) * 0.5, half_height.max(1e-6))
+    }
+
+    /// The direction the orbit looks in now.
+    pub(crate) fn forward(&self) -> DVec3 {
+        let (sin_pitch, cos_pitch) = Self::PITCH.sin_cos();
+        let (sin_yaw, cos_yaw) = self.yaw().sin_cos();
+        DVec3::new(cos_pitch * cos_yaw, cos_pitch * sin_yaw, -sin_pitch)
+    }
+}
+
 /// How the Solids Setup page's preview is looking at its solid: an orbit
 /// around the mesh's own centre, plus a zoom multiplier on the framing that
 /// fits it.
@@ -2113,6 +2208,10 @@ pub(crate) struct EditorState {
     /// cursor may not snap to. Off the locking pages, [`Self::frozen_handles`]; on them, every item but those
     /// unlocked there.
     pub(crate) pick_frozen: HashSet<SceneEntityId>,
+    /// Derived with [`Self::pick_frozen`]: what the cursor may not snap to.
+    /// The same, less what is shown from a data reference, which is read-only
+    /// but as good a place to snap to as anything the project holds.
+    pub(crate) snap_frozen: HashSet<SceneEntityId>,
     /// Derived each frame: what the camera may not orbit about. A page's own
     /// lock leaves that alone, so the view still turns about the ground on
     /// the locking pages; an item locked by name stays out unless it is
@@ -2500,6 +2599,8 @@ pub(crate) struct EditorState {
     /// Offscreen image of the solid being inspected on the Solids Setup page,
     /// the frame size it is asked to fill, and how it is being orbited.
     pub(crate) solid_preview_texture: Option<egui::TextureId>,
+    /// The explorer's hover card; see [`ExplorerPreview`].
+    pub(crate) explorer_preview: ExplorerPreview,
     pub(crate) solid_preview_size_px: [u32; 2],
     pub(crate) solid_preview_view: SolidPreviewView,
     pub(crate) solid_preview_summary: SolidPreviewSummary,
@@ -2812,6 +2913,9 @@ pub(crate) struct EditorState {
     /// A New/Open action is waiting for a Save/Discard/Cancel choice.
     pub(crate) replace_project_confirm_open: bool,
     pub(crate) lossy_save_confirm_open: bool,
+    /// The project whose Save found it read-only, while the read-only save
+    /// dialog asks what to do instead.
+    pub(crate) read_only_save_prompt: Option<u32>,
     /// Dirty project awaiting confirmation before its changes are discarded
     /// (reverted to the last saved state on disk).
     pub(crate) pending_discard_project: Option<u32>,
@@ -3699,6 +3803,7 @@ impl EditorState {
             || self.exit_confirm_open
             || self.replace_project_confirm_open
             || self.lossy_save_confirm_open
+            || self.read_only_save_prompt.is_some()
             || self.delete_confirm_open
             || self.pending_delete_layer.is_some()
             || self.pending_delete_item.is_some()
@@ -3840,6 +3945,7 @@ impl EditorState {
         self.explicitly_frozen.clear();
         self.page_unlocked.clear();
         self.pick_frozen.clear();
+        self.snap_frozen.clear();
         self.orbit_frozen.clear();
         self.locked_layers.clear();
         self.locked_rasters.clear();
@@ -4145,6 +4251,7 @@ impl EditorState {
             explicitly_frozen: HashSet::new(),
             page_unlocked: HashSet::new(),
             pick_frozen: HashSet::new(),
+            snap_frozen: HashSet::new(),
             orbit_frozen: HashSet::new(),
             locked_layers: HashSet::new(),
             locked_rasters: HashSet::new(),
@@ -4320,6 +4427,7 @@ impl EditorState {
             slice_preview_texture: None,
             slice_preview_window_texture: None,
             solid_preview_texture: None,
+            explorer_preview: ExplorerPreview::default(),
             solid_preview_size_px: [420, 420],
             solid_preview_view: SolidPreviewView::default(),
             solid_preview_summary: SolidPreviewSummary::Empty,
@@ -4460,6 +4568,7 @@ impl EditorState {
             remove_project_after_close: false,
             replace_project_confirm_open: false,
             lossy_save_confirm_open: false,
+            read_only_save_prompt: None,
             pending_discard_project: None,
             pending_discard_layer: None,
             tri_create_open: false,
@@ -5812,6 +5921,28 @@ pub(crate) enum UiCommand {
     /// Move the MCP server to another port.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     SetMcpPort(u16),
+    /// The read-only save dialog's Save As (an OMF 2 file, for an OMF 1
+    /// project).
+    ReadOnlySaveAs,
+    /// The read-only save dialog's Take Over and Save.
+    #[cfg(not(target_arch = "wasm32"))]
+    TakeOverAndSave,
+    CancelReadOnlySave,
+    /// Preferences > Data: pick an OMF file to reference.
+    #[cfg(not(target_arch = "wasm32"))]
+    ChooseDataReference,
+    RemoveDataReference(crate::model::project::ReferenceId),
+    ReloadDataReference(crate::model::project::ReferenceId),
+    /// Make a layer or item shown from a data reference the project's own.
+    BringIntoProject(crate::app::data_references::ReferencedRef),
+    /// Bring something a data reference shows into the project, into
+    /// `section`'s root (`folder` `None`) or one of its collections: what
+    /// dragging it out onto the project's rows does.
+    BringIntoProjectAt {
+        target: crate::app::data_references::ReferencedRef,
+        section: crate::model::SectionKind,
+        folder: Option<crate::model::FolderId>,
+    },
     SaveProject,
     #[cfg(not(target_arch = "wasm32"))]
     SaveProjectAs(u32),
@@ -6439,6 +6570,12 @@ impl UiCommand {
             | Self::SetPanelPoppedOut(..)
             | Self::SetMcpEnabled(_)
             | Self::SetMcpPort(_)
+            | Self::ReadOnlySaveAs
+            | Self::CancelReadOnlySave
+            | Self::RemoveDataReference(_)
+            | Self::ReloadDataReference(_)
+            | Self::BringIntoProject(_)
+            | Self::BringIntoProjectAt { .. }
             | Self::SetInitiation { .. }
             | Self::ChargeHoles { .. }
             | Self::BeginRenameItem(_)
@@ -6568,6 +6705,8 @@ impl UiCommand {
             #[cfg(not(target_arch = "wasm32"))]
             Self::RequestDiscardLayerChanges(_) => None,
 
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::TakeOverAndSave | Self::ChooseDataReference => None,
             Self::SetLanguage(choice) => report(tr!("status-language"), choice.endonym().to_owned()),
             Self::SetFlyModeEnabled(enabled) => report(tr!("common-fly-mode"), if *enabled { tr!("state-enabled") } else { tr!("state-disabled") }),
             Self::SetSliceModeEnabled(enabled) => report(tr!("state-slice-mode"), if *enabled { tr!("state-enabled") } else { tr!("state-disabled") }),
@@ -7037,6 +7176,8 @@ pub(crate) struct UiLayerEntry {
     pub(crate) folder: Option<FolderId>,
     /// Explorer section this item is shown under.
     pub(crate) section: SectionKind,
+    /// The data reference it is shown from, or `None` for the project's own.
+    pub(crate) reference: Option<crate::model::project::ReferenceId>,
 }
 
 /// The one open project shown in the explorer tree.
@@ -7047,6 +7188,8 @@ pub(crate) struct UiProjectEntry {
     pub(crate) dirty: bool,
     pub(crate) designs_dirty: bool,
     pub(crate) lossy_save_warnings: Vec<String>,
+    /// Why it cannot be saved to its own file, if it cannot.
+    pub(crate) read_only: Option<crate::model::project::ReadOnlyReason>,
     pub(crate) is_active: bool,
     /// Persisted in browser IndexedDB despite having no host filesystem path.
     #[cfg(target_arch = "wasm32")]
@@ -7179,6 +7322,8 @@ pub(crate) struct UiPointCloudEntry {
     /// Whether the cloud carries ASPRS classification codes, which is what
     /// offers the bare-earth filter and the classification view.
     pub(crate) is_classified: bool,
+    /// The data reference it is shown from, or `None` for the project's own.
+    pub(crate) reference: Option<crate::model::project::ReferenceId>,
 }
 
 #[derive(Clone, Debug)]
@@ -7198,6 +7343,8 @@ pub(crate) struct UiRasterTextureEntry {
     /// Folder the raster sits in, or `None` for the section root.
     pub(crate) folder: Option<FolderId>,
     pub(crate) section: SectionKind,
+    /// The data reference it is shown from, or `None` for the project's own.
+    pub(crate) reference: Option<crate::model::project::ReferenceId>,
 }
 
 #[derive(Clone, Debug)]
@@ -7214,6 +7361,8 @@ pub(crate) struct UiTriangulationEntry {
     /// Folder the triangulation sits in, or `None` for the section root.
     pub(crate) folder: Option<FolderId>,
     pub(crate) section: SectionKind,
+    /// The data reference it is shown from, or `None` for the project's own.
+    pub(crate) reference: Option<crate::model::project::ReferenceId>,
 }
 
 #[derive(Clone, Debug)]
@@ -7232,6 +7381,8 @@ pub(crate) struct UiBlockModelEntry {
     /// Folder the block model sits in, or `None` for the section root.
     pub(crate) folder: Option<FolderId>,
     pub(crate) section: SectionKind,
+    /// The data reference it is shown from, or `None` for the project's own.
+    pub(crate) reference: Option<crate::model::project::ReferenceId>,
 }
 
 #[derive(Clone, Debug)]
@@ -7248,6 +7399,8 @@ pub(crate) struct UiDrillHoleEntry {
     /// Folder the drill hole dataset sits in, or `None` for the section root.
     pub(crate) folder: Option<FolderId>,
     pub(crate) section: SectionKind,
+    /// The data reference it is shown from, or `None` for the project's own.
+    pub(crate) reference: Option<crate::model::project::ReferenceId>,
 }
 
 /// Active triangulation id and face colour, as surfaced to the canvas context menu.
@@ -7290,6 +7443,24 @@ pub(crate) struct UiProjectView {
     pub(crate) active_session: u32,
     /// Every explorer folder, across every section.
     pub(crate) folders: FolderRegistry,
+    /// The data references named in Preferences > Data, in the order they
+    /// were added.
+    pub(crate) data_references: Vec<UiDataReference>,
+}
+
+/// One data reference, as the explorer and Preferences show it.
+#[derive(Clone, Debug)]
+pub(crate) struct UiDataReference {
+    pub(crate) id: crate::model::project::ReferenceId,
+    /// The file's name, without its extension.
+    pub(crate) name: String,
+    pub(crate) path: PathBuf,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) status: crate::model::project::ReferenceStatus,
+    /// The sections it has something in, in explorer order, each with its
+    /// heading's name.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) sections: Vec<(crate::model::MemberKind, String)>,
 }
 
 /// How many remembered projects a Recent list offers before the file chooser
@@ -7377,6 +7548,21 @@ impl UiProjectView {
 
     /// The project the window is titled after: the active one, or the first
     /// open if none is.
+    /// The project's name as the title bar and the window show it: marked
+    /// read-only when it cannot be saved to its own file, and dirty with a
+    /// star.
+    pub(crate) fn project_title(&self) -> Option<String> {
+        self.titled_project().map(|entry| {
+            let name = entry.name.trim_end_matches(".omf");
+            let name = if entry.read_only.is_some() {
+                crate::i18n::tr!("title-read-only", name = name.to_owned())
+            } else {
+                name.to_owned()
+            };
+            if entry.dirty { format!("{name} *") } else { name }
+        })
+    }
+
     pub(crate) fn titled_project(&self) -> Option<&UiProjectEntry> {
         self.projects.iter().find(|entry| entry.is_active).or_else(|| self.projects.first())
     }
@@ -10362,6 +10548,8 @@ pub(crate) enum PropertyTab {
     Interface,
     Camera,
     Performance,
+    /// The data references every project shows (`app::data_references`).
+    Data,
     /// The MCP server that lets AI tools work with Incline (`mcp`).
     Mcp,
     Developer,

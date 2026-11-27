@@ -95,7 +95,7 @@ fn show(mut tooltip: egui::Tooltip<'_>, content: impl FnOnce(&mut Ui)) {
 
 /// Plain text goes in at the hint's size and pitch, a paragraph at a time;
 /// text that brings its own styling is shown as it is.
-fn hint_text(ui: &mut Ui, text: WidgetText) {
+pub(crate) fn hint_text(ui: &mut Ui, text: WidgetText) {
     let WidgetText::Text(text) = text else {
         ui.label(text);
         return;

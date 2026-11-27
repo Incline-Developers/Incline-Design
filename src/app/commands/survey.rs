@@ -52,6 +52,7 @@ impl App<'_> {
             definitions,
             local,
             self.editor.recent_functions.clone(),
+            self.data_reference_paths(),
         );
         Ok(crate::app::io::save_config(&config)?)
     }

@@ -97,6 +97,81 @@ pub(crate) fn draw_lossy_save_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCom
     }
 }
 
+/// Draw what Save offers instead for a project that cannot be saved to its
+/// own file: an OMF 1 file is saved as an OMF 2 one, and a file someone else
+/// is editing is saved elsewhere or taken over.
+pub(crate) fn draw_read_only_save_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState, project: &UiProjectView) {
+    let Some(runtime_id) = editor.read_only_save_prompt else {
+        return;
+    };
+    let Some(entry) = project.projects.iter().find(|entry| entry.runtime_id == runtime_id) else {
+        commands.push(UiCommand::CancelReadOnlySave);
+        return;
+    };
+    let file = entry
+        .path
+        .as_deref()
+        .and_then(|path| path.file_name())
+        .and_then(|name| name.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("{}.omf", entry.name));
+    let Some(reason) = entry.read_only.clone() else {
+        commands.push(UiCommand::CancelReadOnlySave);
+        return;
+    };
+    let mut open = true;
+    match reason {
+        crate::model::project::ReadOnlyReason::Omf1 => {
+            DragableMenu::new("read_only_save_dialog", tr!("read-only-omf1-title"))
+                .open(&mut open)
+                .min_width(360.0)
+                .max_width(420.0)
+                .show(ui.ctx(), |ui| {
+                    ui.label(tr!("read-only-omf1-message", name = file.clone()));
+                    menu::menu_actions(ui, |ui| {
+                        if ui.add(MenuButton::new(tr!("read-only-save-as-omf2")).primary()).clicked() || menu::dialog_confirmed(ui.ctx()) {
+                            commands.push(UiCommand::ReadOnlySaveAs);
+                        }
+                        if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                            commands.push(UiCommand::CancelReadOnlySave);
+                        }
+                    });
+                });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::model::project::ReadOnlyReason::LockedBy(holder) => {
+            DragableMenu::new("read_only_save_dialog", tr!("read-only-locked-title"))
+                .open(&mut open)
+                .min_width(380.0)
+                .max_width(440.0)
+                .show(ui.ctx(), |ui| {
+                    ui.label(tr!(
+                        "read-only-locked-message",
+                        name = file.clone(),
+                        holder = crate::app::project_lock::holder_label(&holder),
+                        since = holder.since_label()
+                    ));
+                    menu::menu_actions(ui, |ui| {
+                        if ui.add(MenuButton::new(tr!("read-only-save-as")).primary()).clicked() || menu::dialog_confirmed(ui.ctx()) {
+                            commands.push(UiCommand::ReadOnlySaveAs);
+                        }
+                        // Red, and mouse-only: Enter must never be what
+                        // overwrites someone else's work.
+                        if ui.add(MenuButton::new(tr!("read-only-take-over")).danger()).clicked() {
+                            commands.push(UiCommand::TakeOverAndSave);
+                        }
+                        if ui.add(MenuButton::new(tr!("common-cancel"))).clicked() || menu::dialog_cancelled(ui.ctx()) {
+                            commands.push(UiCommand::CancelReadOnlySave);
+                        }
+                    });
+                });
+        }
+    }
+    if !open {
+        commands.push(UiCommand::CancelReadOnlySave);
+    }
+}
+
 /// Draw the delete-selection confirmation dialog shown when Delete/Backspace is pressed.
 pub(crate) fn draw_delete_confirm_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, editor: &mut EditorState) {
     if !editor.delete_confirm_open {

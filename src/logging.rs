@@ -83,6 +83,10 @@ pub(crate) struct ConsoleEntry {
     pub(crate) title: String,
     pub(crate) summary: String,
     pub(crate) details: Vec<String>,
+    /// The warnings and errors among `details`, which are what an alert
+    /// says: the routine lines of the same activity (each item an open
+    /// loaded, say) are the console's to show, not the alert's.
+    pub(crate) alerts: Vec<String>,
     pub(crate) state: ConsoleEntryState,
     /// The open project it was logged under, by runtime id; zero before any.
     scope: u32,
@@ -97,7 +101,7 @@ pub(crate) struct ConsoleEntry {
 
 impl ConsoleEntry {
     fn byte_len(&self) -> usize {
-        self.timestamp.len() + self.title.len() + self.summary.len() + self.details.iter().map(|detail| detail.len()).sum::<usize>() + self.details.len() + 32
+        self.timestamp.len() + self.title.len() + self.summary.len() + self.details.iter().chain(&self.alerts).map(|detail| detail.len() + 1).sum::<usize>() + 32
     }
 }
 
@@ -281,6 +285,9 @@ fn append_record(message: String, severity: ConsoleSeverity, target: Option<&str
                     entry.summary = concise(message.lines().next().unwrap_or_default());
                 }
                 entry.severity = entry.severity.escalate(severity);
+                if severity.rank() >= ConsoleSeverity::Warn.rank() {
+                    entry.alerts.push(message.clone());
+                }
                 entry.details.push(message);
             });
         } else {
@@ -297,6 +304,8 @@ fn append_record(message: String, severity: ConsoleSeverity, target: Option<&str
                 title: standalone_title(target, severity),
                 summary,
                 details,
+                // Its one message is the alert: see the alert's fallback.
+                alerts: Vec::new(),
                 state: ConsoleEntryState::Complete,
                 scope: log.scope,
                 written: 0,
@@ -443,6 +452,7 @@ pub(crate) fn begin_command_report(spec: CommandReportSpec) -> ConsoleEntryId {
             title: spec.title,
             summary: spec.summary,
             details: Vec::new(),
+            alerts: Vec::new(),
             state: ConsoleEntryState::Pending,
             scope: log.scope,
             written: 0,
@@ -623,6 +633,7 @@ pub(crate) fn finish_command_report(id: ConsoleEntryId, error: Option<&anyhow::E
                 let detail = format!("{error:#}");
                 entry.severity = ConsoleSeverity::Error;
                 entry.summary = concise(&detail);
+                entry.alerts.push(detail.clone());
                 entry.details.push(detail);
             }
             settled = complete_if_settled(entry);
@@ -888,4 +899,25 @@ pub(crate) fn startup_log() {
         }
     });
     finish_command_report(id, None);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_alert_says_an_activitys_warnings_not_its_routine_lines() {
+        let id = begin_command_report(CommandReportSpec::new("Open Project", ""));
+        with_report_scope(id, || {
+            log_to_distributor(format_args!("Loaded triangulation 'pit'"), ConsoleSeverity::Info, module_path!());
+            log_to_distributor(format_args!("Opened read-only: someone else is editing it"), ConsoleSeverity::Warn, module_path!());
+            log_to_distributor(format_args!("Loaded triangulation 'topo'"), ConsoleSeverity::Info, module_path!());
+        });
+        finish_command_report(id, None);
+        let (_, entries) = console_snapshot();
+        let entry = entries.iter().find(|entry| entry.id == id).unwrap();
+        assert_eq!(entry.severity, ConsoleSeverity::Warn);
+        assert_eq!(entry.details.len(), 3, "the console keeps every line");
+        assert_eq!(entry.alerts, ["Opened read-only: someone else is editing it"]);
+    }
 }

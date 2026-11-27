@@ -107,11 +107,14 @@ pub(crate) fn draw_alert_dialog(ui: &mut egui::Ui, editor: &mut EditorState, sna
                     };
                     let size = egui::TextStyle::Body.resolve(ui.style()).size;
                     let color = ui.visuals().text_color();
-                    // Every message whole: the summary is the console's one
-                    // line, shortened to fit a row, and the details are what
-                    // was actually said. One that warned twenty times says all
-                    // twenty, one under the other.
-                    let messages: Vec<&str> = if entry.details.is_empty() {
+                    // Every warning and error whole, and only those: the
+                    // summary is the console's one line, shortened to fit a
+                    // row. One that warned twenty times says all twenty, one
+                    // under the other; the routine lines between them stay in
+                    // the console.
+                    let messages: Vec<&str> = if !entry.alerts.is_empty() {
+                        entry.alerts.iter().map(String::as_str).collect()
+                    } else if entry.details.is_empty() {
                         vec![entry.summary.as_str()]
                     } else {
                         entry.details.iter().map(String::as_str).collect()

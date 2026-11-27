@@ -55,7 +55,7 @@ impl<'a> App<'a> {
                 overlay,
                 &self.drill_holes,
                 &self.editor.hidden_handles,
-                &self.editor.frozen_handles,
+                &self.editor.orbit_frozen,
                 &self.scene_document,
                 &self.snap_index,
                 self.editor.z_level,
@@ -284,6 +284,7 @@ impl<'a> App<'a> {
             self.editor.survey.definitions.clone(),
             self.editor.survey.local_system.clone(),
             self.editor.recent_functions.clone(),
+            self.data_reference_paths(),
         ))?;
 
         Ok(())
@@ -302,6 +303,7 @@ impl<'a> App<'a> {
             self.editor.survey.definitions.clone(),
             self.editor.survey.local_system.clone(),
             self.editor.recent_functions.clone(),
+            self.data_reference_paths(),
         ))?;
         Ok(())
     }
@@ -400,6 +402,7 @@ impl<'a> App<'a> {
         if !page {
             self.editor.pick_frozen = self.editor.frozen_handles.clone();
             self.editor.orbit_frozen = self.editor.frozen_handles.clone();
+            self.sync_snap_frozen();
             return;
         }
         let unlocked = &self.editor.page_unlocked;
@@ -430,6 +433,51 @@ impl<'a> App<'a> {
             .chain(self.editor.frozen_handles.iter().copied());
         self.editor.pick_frozen = every.filter(|entity| !unlocked.contains(entity)).collect();
         self.editor.orbit_frozen = self.editor.frozen_handles.iter().copied().filter(|entity| !unlocked.contains(entity)).collect();
+        self.sync_snap_frozen();
+    }
+
+    /// [`crate::ui::state::EditorState::snap_frozen`]: the pick set, with
+    /// everything shown from a data reference let back in. The orbit set
+    /// lets them back in too: they are locked against edits, not against
+    /// being looked at, snapped to or turned about.
+    fn sync_snap_frozen(&mut self) {
+        use crate::model::SceneEntityId;
+        let referenced_layers = self
+            .workspace
+            .active_project()
+            .map(|project| {
+                project
+                    .project
+                    .document
+                    .layers()
+                    .iter()
+                    .filter(|layer| layer.reference.is_some())
+                    .map(|layer| layer.id)
+                    .collect::<std::collections::HashSet<_>>()
+            })
+            .unwrap_or_default();
+        let referenced_items = self
+            .triangulations
+            .iter()
+            .filter(|item| !item.state.is_working())
+            .map(|item| item.entity_id())
+            .chain(self.block_models.iter().filter(|item| !item.state.is_working()).map(|item| item.entity_id()))
+            .chain(self.drill_holes.iter().filter(|item| !item.state.is_working()).map(|item| item.entity_id()))
+            .chain(self.point_clouds.iter().filter(|item| !item.state.is_working()).map(|item| item.entity_id()))
+            .collect::<std::collections::HashSet<_>>();
+        if referenced_layers.is_empty() && referenced_items.is_empty() {
+            self.editor.snap_frozen = self.editor.pick_frozen.clone();
+            return;
+        }
+        let document = self.workspace.active_document();
+        let unreferenced = |entity: &SceneEntityId| match entity {
+            SceneEntityId::Object(id) => !document
+                .and_then(|document| document.get_object(*id))
+                .is_some_and(|object| referenced_layers.contains(&object.layer())),
+            other => !referenced_items.contains(other),
+        };
+        self.editor.snap_frozen = self.editor.pick_frozen.iter().copied().filter(unreferenced).collect();
+        self.editor.orbit_frozen.retain(unreferenced);
     }
 
     /// Open Animate on the whole site: once per project, and again whenever
@@ -483,6 +531,7 @@ impl<'a> App<'a> {
                 &self.block_models,
                 &self.drill_holes,
                 &self.point_clouds,
+                &self.raster_textures,
                 &self.editor.hidden_handles,
             );
             self.redraw_requested = true;
@@ -532,6 +581,7 @@ pub(crate) fn config_from(
     coordinate_systems: Vec<crate::model::survey::SystemDefinition>,
     mine_coordinate_system: Option<String>,
     recent_functions: Vec<String>,
+    data_references: Vec<std::path::PathBuf>,
 ) -> crate::app::io::Config {
     crate::app::io::Config {
         language: preferences.language,
@@ -566,5 +616,6 @@ pub(crate) fn config_from(
         mine_coordinate_system,
         recent_functions_shown: preferences.recent_functions_shown,
         recent_functions,
+        data_references,
     }
 }

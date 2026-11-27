@@ -85,6 +85,9 @@ pub(crate) struct DraftFacts {
     pub(crate) fields: Vec<ReserveField>,
     /// Every pit design in the project, as last measured, to compare.
     pub(crate) designs: Vec<ComparedDesign>,
+    /// The topography it would daylight against were it told to: a settled
+    /// design has none of its own (see `PitObject::settled`).
+    pub(crate) ground_guess: Option<TriangulationId>,
 }
 
 /// One pit design's measure, beside the others'.
@@ -624,6 +627,7 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                         })
                         .map(|gizmo| gizmo.ramp)
                         .collect();
+                    let ground_guess = draft.facts.ground_guess;
                     let Some(working) = draft.working.as_mut() else {
                         return;
                     };
@@ -631,7 +635,7 @@ pub(crate) fn draw_pit_design_panel(ui: &mut egui::Ui, editor: &mut EditorState,
                     // the view, the rest here.
                     let base_rl = draft.built_for.as_ref().and_then(|key| key.verts.first()).map_or(0.0, |vertex| vertex.pos.z);
                     let built = draft.preview.as_ref().and_then(|preview| preview.design.as_ref().ok()).map(|design| design.benches);
-                    draw_bench_settings(ui, &mut working.settings, project, (base_rl, picking_region, on_gizmo, built), commands);
+                    draw_bench_settings(ui, &mut working.settings, project, (base_rl, picking_region, on_gizmo, built, ground_guess), commands);
                     draw_ramps(ui, &mut working.settings, &in_view, base_rl);
                     // While a design is worked out, a spinner at the heading's
                     // end: a line coming and going would jog the panel about.
@@ -1050,7 +1054,7 @@ fn draw_wall_gizmo(ui: &mut egui::Ui, draft: &PitDesignDraft, viewport_rect: egu
 /// at), and where cut short with ground to meet, a button back to meeting
 /// it. One stopped at an RL, the RL. `labelled` names the count, beside the
 /// toe; in the panel the row does.
-fn extent_controls(ui: &mut egui::Ui, settings: &mut PitDesignSettings, built: Option<u32>, labelled: bool) {
+fn extent_controls(ui: &mut egui::Ui, settings: &mut PitDesignSettings, built: Option<u32>, ground_guess: Option<TriangulationId>, labelled: bool) {
     if settings.stop == StopMode::Elevation {
         if labelled {
             ui.label(tr!("pit-design-stop-rl"));
@@ -1071,7 +1075,12 @@ fn extent_controls(ui: &mut egui::Ui, settings: &mut PitDesignSettings, built: O
     let meets = stop_label(settings.kind, StopMode::Daylight);
     if daylighting {
         ui.label(egui::RichText::new(meets).color(ui.visuals().weak_text_color()));
-    } else if settings.can_daylight() && settings.topography.is_some() && ui.add(MenuButton::new(meets)).clicked() {
+    } else if let Some(ground) = settings.topography.or(ground_guess).filter(|_| settings.can_daylight())
+        && ui.add(MenuButton::new(meets)).clicked()
+    {
+        // A settled design daylights again against the ground it is likely
+        // on, as a new one does.
+        settings.topography = Some(ground);
         settings.stop = StopMode::Daylight;
     }
 }
@@ -1156,6 +1165,7 @@ const CARD_SPACING: f32 = 6.0;
 /// handle under the pointer, its field.
 fn gizmo_cards(ui: &mut egui::Ui, draft: &mut PitDesignDraft, cards: &[GizmoCard], viewport_rect: egui::Rect) {
     let built = draft.preview.as_ref().and_then(|preview| preview.design.as_ref().ok()).map(|design| design.benches);
+    let ground_guess = draft.facts.ground_guess;
     let ctx = ui.ctx().clone();
     let id = |kind: CardKind| egui::Id::unique(("pit_design_gizmo_card", kind));
     let per_point = ctx.pixels_per_point();
@@ -1242,7 +1252,7 @@ fn gizmo_cards(ui: &mut egui::Ui, draft: &mut PitDesignDraft, cards: &[GizmoCard
                     if card.kind == CardKind::Walls {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
-                            extent_controls(ui, settings, built, true);
+                            extent_controls(ui, settings, built, ground_guess, true);
                         });
                     }
                 });
@@ -1349,7 +1359,7 @@ fn draw_bench_settings(
     ui: &mut egui::Ui,
     settings: &mut PitDesignSettings,
     project: &UiProjectView,
-    (base_rl, picking_region, on_gizmo, built): (f64, bool, bool, Option<u32>),
+    (base_rl, picking_region, on_gizmo, built, ground_guess): (f64, bool, bool, Option<u32>, Option<TriangulationId>),
     commands: &mut Vec<UiCommand>,
 ) {
     // What it is and the way it is built are pulled on the walls' gizmo: its
@@ -1375,7 +1385,7 @@ fn draw_bench_settings(
     if !on_gizmo {
         MenuField::new(tr!("pit-design-benches")).show(ui, |ui, row_height, _| {
             ui.allocate_ui_with_layout(egui::vec2(FIELD_WIDTH, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                extent_controls(ui, settings, built, false);
+                extent_controls(ui, settings, built, ground_guess, false);
             })
             .response
         });

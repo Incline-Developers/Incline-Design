@@ -269,16 +269,18 @@ pub(crate) fn draw_move_to_layer_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
         return;
     };
 
-    if dialog.target_layer.is_none_or(|id| !active_project.layers.iter().any(|layer| layer.id == id)) {
-        dialog.target_layer = active_project.layers.first().map(|layer| layer.id);
+    // Only the project's own layers take objects: never one a data reference shows.
+    let own_layers = || active_project.layers.iter().filter(|layer| layer.reference.is_none());
+    if dialog.target_layer.is_none_or(|id| !own_layers().any(|layer| layer.id == id)) {
+        dialog.target_layer = own_layers().next().map(|layer| layer.id);
     }
 
     let selected_label = dialog
         .target_layer
-        .and_then(|id| active_project.layers.iter().find(|layer| layer.id == id))
+        .and_then(|id| own_layers().find(|layer| layer.id == id))
         .map(|layer| layer.name.clone())
         .unwrap_or_else(|| tr!("edit-choose-layer"));
-    let layer_options = active_project.layers.iter().map(|layer| (Some(layer.id), layer.name.clone().into()));
+    let layer_options = own_layers().map(|layer| (Some(layer.id), layer.name.clone().into()));
     let can_apply = dialog.target_layer.is_some() && !dialog.object_ids.is_empty();
     let object_count = dialog.object_ids.len();
     let mut close = false;

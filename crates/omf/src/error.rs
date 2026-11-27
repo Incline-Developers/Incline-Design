@@ -119,6 +119,10 @@ pub enum Error {
     #[cfg(feature = "image")]
     #[error("Image processing error: {0}")]
     ImageError(Box<image::ImageError>),
+    /// Errors from OMF1 conversion.
+    #[cfg(feature = "omf1")]
+    #[error("OMF1 conversion failed: {0}")]
+    Omf1Error(#[from] crate::omf1::Omf1Error),
 }
 
 impl From<InvalidData> for Error {

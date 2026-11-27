@@ -118,6 +118,9 @@ pub(crate) enum JobKey {
     /// selecting another one - or changing this one's surfaces - cancels the
     /// build already in flight for it.
     SolidPreview(crate::model::SolidId),
+    /// An unloaded surface read in for the explorer's hover card, by the
+    /// card's generation: hovering something else drops it.
+    ExplorerPreview(u64),
     /// One attempt at building one of a solid's artifacts.
     ///
     /// The token identifies the *attempt*, not the inputs. Keying on an input
@@ -343,6 +346,7 @@ impl<'a> App<'a> {
             JobKey::ReserveStats(id, key) => self.block_models.iter().any(|model| model.id == id && model.reserve_totals_key == Some(key)),
             JobKey::SolidArtifact { solid, kind, token } => self.solid_view_cache.get(&solid).is_some_and(|cache| cache.accepts(kind, token)),
             JobKey::SolidPreview(solid) => self.solid_preview.as_ref().is_some_and(|preview| preview.solid() == solid),
+            JobKey::ExplorerPreview(generation) => self.explorer_preview_generation == generation,
             JobKey::ScheduleAnimation { runtime, run, request } => self.schedule_animation.accepts(runtime, run, request),
             JobKey::ScheduleRun { runtime, serial } => self
                 .pending_schedule_run

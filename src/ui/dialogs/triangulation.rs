@@ -1295,7 +1295,10 @@ pub(crate) fn draw_contour_dialog(ui: &mut egui::Ui, editor: &mut EditorState, p
             ui.add_space(4.0);
 
             let active_project = project.projects.iter().find(|entry| entry.is_active);
-            let active_layers = active_project.map(|entry| entry.layers.as_slice()).unwrap_or(&[]);
+            // Contours are written into the layer: never one a data reference shows.
+            let active_layers: Vec<_> = active_project
+                .map(|entry| entry.layers.iter().filter(|layer| layer.reference.is_none()).cloned().collect())
+                .unwrap_or_default();
             if editor.tri_contour_target_layer.is_some_and(|id| !active_layers.iter().any(|layer| layer.id == id)) {
                 editor.tri_contour_target_layer = None;
             }

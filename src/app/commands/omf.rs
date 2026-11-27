@@ -134,6 +134,18 @@ fn retain_folders(folders: &FolderRegistry, keep: &std::collections::HashSet<Fol
 /// at all when that leaves no layers to write.
 fn selected_designs(project: &project::ProjectFile, selection: &OmfExportSection<LayerId>) -> Option<project::ProjectFile> {
     let mut design = project.clone();
+    // Referenced layers are shown beside the project's own but are never
+    // written with it: their file is the one that holds them.
+    let referenced = design
+        .document
+        .layers()
+        .iter()
+        .filter(|layer| layer.reference.is_some())
+        .map(|layer| layer.id)
+        .collect::<Vec<_>>();
+    for layer in referenced {
+        design.document.delete_layer(layer);
+    }
     if selection.all {
         return Some(design);
     }
@@ -155,7 +167,7 @@ fn selected_designs(project: &project::ProjectFile, selection: &OmfExportSection
 
 impl<'a> App<'a> {
     /// Everything open, for the saves that write the project file itself.
-    pub(super) fn omf_save_snapshot(&mut self) -> Result<ProjectSnapshot> {
+    pub(crate) fn omf_save_snapshot(&mut self) -> Result<ProjectSnapshot> {
         self.project_snapshot(&OmfExportSelection::default(), FolderScope::Whole)
     }
 
@@ -181,13 +193,48 @@ impl<'a> App<'a> {
             name,
             folders: self.workspace.active_project().map(|project| project.project.folders.clone()).unwrap_or_default(),
             designs,
-            triangulations: self.triangulations.iter().filter(|item| selection.triangulations.includes(item.id)).cloned().collect(),
-            block_models: self.block_models.iter().filter(|item| selection.block_models.includes(item.id)).cloned().collect(),
-            drill_holes: self.drill_holes.iter().filter(|item| selection.drill_holes.includes(item.id)).cloned().collect(),
-            point_clouds: self.point_clouds.iter().filter(|item| selection.point_clouds.includes(item.id)).cloned().collect(),
-            rasters: self.raster_textures.iter().filter(|item| selection.rasters.includes(item.id)).cloned().collect(),
+            triangulations: self
+                .triangulations
+                .iter()
+                .filter(|item| item.state.is_working() && selection.triangulations.includes(item.id))
+                .cloned()
+                .collect(),
+            block_models: self
+                .block_models
+                .iter()
+                .filter(|item| item.state.is_working() && selection.block_models.includes(item.id))
+                .cloned()
+                .collect(),
+            drill_holes: self
+                .drill_holes
+                .iter()
+                .filter(|item| item.state.is_working() && selection.drill_holes.includes(item.id))
+                .cloned()
+                .collect(),
+            point_clouds: self
+                .point_clouds
+                .iter()
+                .filter(|item| item.state.is_working() && selection.point_clouds.includes(item.id))
+                .cloned()
+                .collect(),
+            rasters: self
+                .raster_textures
+                .iter()
+                .filter(|item| item.state.is_working() && selection.rasters.includes(item.id))
+                .cloned()
+                .collect(),
             optimization: None,
+            reference_links: Vec::new(),
         };
+        // Links to referenced items are saved by name, not by this session's
+        // ids: see `ReferenceLink`.
+        self.capture_reference_links();
+        self.detach_reference_links(&mut snapshot);
+        if scope == FolderScope::Whole
+            && let Some(project) = self.workspace.active_project()
+        {
+            snapshot.reference_links = project.project.reference_links.clone();
+        }
         if scope == FolderScope::Whole
             && let Some(project) = self.workspace.active_project()
             && !project.project.optimization.scenarios.is_empty()
@@ -241,10 +288,13 @@ impl<'a> App<'a> {
             warnings: _,
             folders,
             optimization,
+            reference_links,
+            omf1_version,
         } = bundle;
 
         let mut design = project::new_empty(path.clone());
         design.optimization = optimization.unwrap_or_default();
+        design.reference_links = reference_links;
         if !project_name.trim().is_empty() {
             design.metadata.name = project_name.clone();
         }
@@ -287,6 +337,19 @@ impl<'a> App<'a> {
         if let Some(project) = self.workspace.active_project_mut() {
             project.lossy_save_warnings = lossy_save_warnings;
             project.lossy_save_confirmed = false;
+        }
+        if let Some(version) = &omf1_version {
+            // Incline never writes OMF 1: the project is the file's contents,
+            // to be saved to an OMF 2 file of the user's choosing.
+            if let Some(project) = self.workspace.active_project_mut() {
+                project.read_only = Some(project::ReadOnlyReason::Omf1);
+            }
+            userspace_log!("{}", tr!("cmd-omf-opened-omf1", source_name = source_name.clone(), version = version.clone()));
+        } else {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(path) = &path {
+                self.lock_opened_project(path);
+            }
         }
 
         self.install_bundle_items(BundleIds::Preserve, &folder_map, rasters, triangulations, block_models, drill_holes, point_clouds);
@@ -409,6 +472,8 @@ impl<'a> App<'a> {
                 folders,
                 // A merge brings items, not the source project's scenarios.
                 optimization: _,
+                reference_links: _,
+                omf1_version: _,
             } = bundle;
 
             // A merge brings content, never the project's settings: the file's
@@ -514,7 +579,7 @@ impl<'a> App<'a> {
     /// Install a bundle's items into the active project, their folders
     /// resolved through `folder_map`.
     #[allow(clippy::too_many_arguments)]
-    fn install_bundle_items(
+    pub(crate) fn install_bundle_items(
         &mut self,
         ids: BundleIds,
         folder_map: &std::collections::HashMap<FolderId, FolderId>,
@@ -533,7 +598,10 @@ impl<'a> App<'a> {
         for mut imported in rasters {
             let kept_id = (!fresh).then(|| allocate_item_id(imported.preferred_id, &mut self.next_raster_texture_id, self.raster_textures.iter().map(|item| item.id.0)));
             if fresh {
-                imported.loaded.name = project::unique_item_name(imported.loaded.name, self.raster_textures.iter().map(|item| item.name.as_str()));
+                imported.loaded.name = project::unique_item_name(
+                    imported.loaded.name,
+                    self.raster_textures.iter().filter(|item| item.state.is_working()).map(|item| item.name.as_str()),
+                );
             }
             let folder = project::merged_folder(folder_map, imported.folder);
             self.add_loaded_raster(imported.loaded);
@@ -567,7 +635,7 @@ impl<'a> App<'a> {
                 edges,
                 surface_face_order,
             } = imported.loaded;
-            name = project::unique_item_name(name, self.triangulations.iter().map(|item| item.name.as_str()));
+            name = project::unique_item_name(name, self.triangulations.iter().filter(|item| item.state.is_working()).map(|item| item.name.as_str()));
             let id = TriangulationId(allocate_item_id(
                 preferred(imported.preferred_id),
                 &mut self.next_triangulation_id,
@@ -610,7 +678,10 @@ impl<'a> App<'a> {
         for mut imported in block_models {
             let kept_id = (!fresh).then(|| allocate_item_id(imported.preferred_id, &mut self.next_block_model_id, self.block_models.iter().map(|item| item.id.0)));
             if fresh {
-                imported.loaded.name = project::unique_item_name(imported.loaded.name, self.block_models.iter().map(|item| item.name.as_str()));
+                imported.loaded.name = project::unique_item_name(
+                    imported.loaded.name,
+                    self.block_models.iter().filter(|item| item.state.is_working()).map(|item| item.name.as_str()),
+                );
             }
             let folder = project::merged_folder(folder_map, imported.folder);
             self.add_loaded_block_model(imported.loaded);
@@ -645,7 +716,10 @@ impl<'a> App<'a> {
         for mut imported in drill_holes {
             let kept_id = (!fresh).then(|| allocate_item_id(imported.preferred_id, &mut self.next_drill_hole_id, self.drill_holes.iter().map(|item| item.id.0)));
             if fresh {
-                imported.loaded.name = project::unique_item_name(imported.loaded.name, self.drill_holes.iter().map(|item| item.name.as_str()));
+                imported.loaded.name = project::unique_item_name(
+                    imported.loaded.name,
+                    self.drill_holes.iter().filter(|item| item.state.is_working()).map(|item| item.name.as_str()),
+                );
             }
             let folder = project::merged_folder(folder_map, imported.folder);
             self.add_loaded_drill_holes(imported.loaded);
@@ -670,7 +744,10 @@ impl<'a> App<'a> {
         for mut imported in point_clouds {
             let kept_id = (!fresh).then(|| allocate_item_id(imported.preferred_id, &mut self.next_point_cloud_id, self.point_clouds.iter().map(|item| item.id.0)));
             if fresh {
-                imported.loaded.name = project::unique_item_name(imported.loaded.name, self.point_clouds.iter().map(|item| item.name.as_str()));
+                imported.loaded.name = project::unique_item_name(
+                    imported.loaded.name,
+                    self.point_clouds.iter().filter(|item| item.state.is_working()).map(|item| item.name.as_str()),
+                );
             }
             let folder = project::merged_folder(folder_map, imported.folder);
             self.add_loaded_point_cloud(imported.loaded, imported.is_loaded, imported.color, imported.point_size);
@@ -755,7 +832,7 @@ impl<'a> App<'a> {
 
 /// How items installed from an OMF bundle are identified.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum BundleIds {
+pub(crate) enum BundleIds {
     /// Opening a project: items keep the ids the file gave them wherever
     /// those are free, so saved references between them still resolve.
     Preserve,

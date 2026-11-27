@@ -61,7 +61,18 @@ fn main() -> Result<()> {
     }
     (|| {
         let event_loop = EventLoop::new()?;
+        // Finder hands a double-clicked project to the application by event,
+        // not on the command line: listen before the event loop starts, or
+        // the one the application was launched with is missed.
+        #[cfg(target_os = "macos")]
+        mac::listen_for_opened_files();
         let mut app = App::new()?;
+        // `incline-design path/to/project.omf`: what a file manager runs when
+        // a project is double-clicked, once the installer has associated
+        // `.omf` files with Incline.
+        if let Some(path) = first.as_deref().filter(|argument| !argument.starts_with('-')) {
+            app.open_project_from_system(std::path::PathBuf::from(path));
+        }
         // The MCP server wakes the loop with it when a request comes in.
         app.set_event_loop_proxy(event_loop.create_proxy());
         // App construction loads the saved language. Log startup afterwards so

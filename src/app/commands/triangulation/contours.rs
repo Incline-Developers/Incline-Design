@@ -179,6 +179,7 @@ impl<'a> App<'a> {
                     elevation: 0.0,
                     folder: None,
                     section: SectionKind::natural_layer(),
+                    reference: None,
                 };
                 crate::model::Command::AddLayerSnapshot { layer, objects }
             } else {

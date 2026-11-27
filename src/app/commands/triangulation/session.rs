@@ -72,7 +72,10 @@ impl<'a> App<'a> {
     fn add_loaded_triangulation(&mut self, loaded: LoadedTriangulation) {
         let id = TriangulationId(self.next_triangulation_id);
         self.next_triangulation_id += 1;
-        let name = crate::model::project::unique_item_name(loaded.name, self.triangulations.iter().map(|item| item.name.as_str()));
+        let name = crate::model::project::unique_item_name(
+            loaded.name,
+            self.triangulations.iter().filter(|item| item.state.is_working()).map(|item| item.name.as_str()),
+        );
         self.triangulations.push(OpenTriangulation {
             id,
             state: crate::model::project::ProjectItemState::dirty(MemberKind::Triangulation, loaded.path.file_name().map(|name| name.to_string_lossy().into_owned())),
@@ -401,7 +404,14 @@ impl<'a> App<'a> {
             } = built;
             let id = TriangulationId(self.next_triangulation_id);
             self.next_triangulation_id += 1;
-            let name = crate::model::project::unique_item_name(name, self.triangulations.iter().map(|item| item.name.as_str()).chain(names.iter().map(String::as_str)));
+            let name = crate::model::project::unique_item_name(
+                name,
+                self.triangulations
+                    .iter()
+                    .filter(|item| item.state.is_working())
+                    .map(|item| item.name.as_str())
+                    .chain(names.iter().map(String::as_str)),
+            );
             userspace_log!(
                 "{}",
                 tr!(

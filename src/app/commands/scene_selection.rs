@@ -329,7 +329,10 @@ impl App<'_> {
                     let Some(project) = self.workspace.project_index_for_layer(*layer_id).map(|index| &self.workspace.projects[index]) else {
                         continue;
                     };
-                    if !project.project.document.layer(*layer_id).is_some_and(crate::model::Layer::is_visible) {
+                    // A locked layer - a data reference's always is - keeps its
+                    // objects out of the selection, as the viewport does: a
+                    // selection is what edits act on.
+                    if !project.project.document.layer(*layer_id).is_some_and(crate::model::Layer::is_visible) || self.editor.locked_layers.contains(layer_id) {
                         continue;
                     }
                     handles.extend(

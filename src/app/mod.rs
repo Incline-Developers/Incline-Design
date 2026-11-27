@@ -1,7 +1,9 @@
 pub(crate) mod blast; // Drill & Blast's charging and pattern reviews
 pub(crate) mod canvas; // Handles anything to do with dragging and stuff
 pub(crate) mod commands; // Handles UI commands
+pub(crate) mod data_references; // OMF files whose contents every project shows, read-only
 pub(crate) mod events; // Handles window events
+pub(crate) mod explorer_preview; // The explorer's hover card: a turning picture of the row under the pointer
 pub(crate) mod geophysics; // Geophysics files linked to drill-hole datasets
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod geophysics_web;
@@ -17,6 +19,7 @@ pub(crate) mod memory; // Allocator settings, and browser address-space budgetin
 pub(crate) mod memory_usage; // The status bar's memory and per-core CPU readouts
 pub(crate) mod panel_windows; // Panels popped out of the main window into windows of their own
 pub(crate) mod planning_pipeline; // The Solids workspace's six-stage run/invalidation model
+pub(crate) mod project_lock; // Read-only projects, and the lock a project file is edited under
 pub(crate) mod schedule_animation; // Schedule Animate's derived, scrubbed geometry
 pub(crate) mod schedule_pipeline; // The Schedule workspace's Setup run/invalidation model
 pub(crate) mod schedule_publish; // A validated solution, translated into the shared calculated schedule
@@ -482,8 +485,24 @@ pub(crate) struct App<'a> {
     ui_project_view_cache: RefCell<Option<(u64, Arc<UiProjectView>)>>,
     startup_dialog_dismissed: bool,
     triangulations: Vec<OpenTriangulation>,
+    /// The data references from Preferences > Data. See `data_references`.
+    data_references: Vec<data_references::DataReference>,
+    next_reference_id: u32,
+    /// This session's lock on the project file it has open for editing. See
+    /// `crate::model::file_lock`.
+    #[cfg(not(target_arch = "wasm32"))]
+    project_lock: Option<crate::model::file_lock::ProjectLock>,
+    #[cfg(not(target_arch = "wasm32"))]
+    project_lock_refreshed_at: Option<Instant>,
     active_triangulation: Option<TriangulationId>,
     next_triangulation_id: u64,
+    /// An unloaded item read in for the explorer's hover card alone.
+    pub(crate) explorer_preview_item: Option<explorer_preview::PreviewCopy>,
+    /// An unloaded design layer read in for the explorer's hover card alone.
+    pub(crate) explorer_preview_layer: Option<explorer_preview::HeldLayer>,
+    /// Counts what the hover card has shown, so a read for one it has
+    /// moved on from lands nowhere.
+    pub(crate) explorer_preview_generation: u64,
     block_models: Vec<OpenBlockModel>,
     next_block_model_id: u64,
     drill_holes: Vec<OpenDrillHoleDataset>,
@@ -826,8 +845,17 @@ impl<'a> Default for App<'a> {
             ui_project_view_cache: RefCell::new(None),
             startup_dialog_dismissed: false,
             triangulations: Vec::new(),
+            data_references: Vec::new(),
+            next_reference_id: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            project_lock: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            project_lock_refreshed_at: None,
             active_triangulation: None,
             next_triangulation_id: 0,
+            explorer_preview_item: None,
+            explorer_preview_layer: None,
+            explorer_preview_generation: 0,
             block_models: Vec::new(),
             next_block_model_id: 0,
             drill_holes: Vec::new(),
@@ -1024,6 +1052,7 @@ impl<'a> App<'a> {
     }
 
     fn apply_config(&mut self, config: io::Config) {
+        self.set_data_reference_paths(config.data_references.clone());
         // A definition naming a parent that is not in the list, or itself,
         // cannot be resolved and would fail on every use; it is dropped on the
         // way in so the rest of the list still works.
@@ -1176,7 +1205,13 @@ impl<'a> App<'a> {
     fn active_layer(&self) -> Option<LayerId> {
         self.editor.active_layer.and_then(|layer| {
             self.workspace.active_project().and_then(|project| {
-                (project.project.document.layer(layer).is_some_and(crate::model::Layer::is_visible) && project.project.document.layer(layer).is_some()).then_some(layer)
+                // A referenced layer is read-only: nothing is drawn onto it.
+                project
+                    .project
+                    .document
+                    .layer(layer)
+                    .is_some_and(|layer| layer.is_visible() && layer.reference.is_none())
+                    .then_some(layer)
             })
         })
     }
@@ -1197,6 +1232,9 @@ impl<'a> App<'a> {
         self.startup_dialog_dismissed = true;
         self.invalidate_geometry();
         self.persist_session();
+        // The project's own items come in once this returns; the references'
+        // land beside them on a later frame.
+        self.reload_data_references();
     }
 
     /// Remember `path` as the most recently opened project.
@@ -1514,6 +1552,10 @@ impl<'a> App<'a> {
     /// `may_continue` lets the edit extend the gesture the pointer is still
     /// driving, if there is one.
     fn execute_edit_continuing(&mut self, command: Command, may_continue: bool) {
+        if let Some(name) = self.referenced_changed_by(&command) {
+            crate::userspace_warn!("{}", crate::i18n::tr!("cmd-referenced-read-only", name = name));
+            return;
+        }
         let mut layers = Vec::new();
         if let Some(document) = self.workspace.active_document() {
             command.required_layers(false, document, &mut layers);
@@ -1530,15 +1572,37 @@ impl<'a> App<'a> {
             return;
         }
         let continuing = may_continue && self.ui_pointer_gesture_active;
+        // Loading, showing or styling what a data reference shows is no
+        // unsaved work: none of it is saved with the project.
+        let runtime = self.workspace.active_project().map(|project| project.runtime_id);
+        let leaves_saved = self.only_styles_referenced(&command) && runtime.is_some_and(|runtime| !self.project_content_is_dirty(runtime));
         let Some(((), effects)) = self.with_edit_target(|history, target| history.execute(target, command, continuing)) else {
             return;
         };
         self.apply_step_effects(effects);
+        if leaves_saved {
+            self.mark_all_project_content_saved();
+        }
+    }
+
+    /// Whether `command` only loads, shows, hides or restyles what data
+    /// references show.
+    fn only_styles_referenced(&self, command: &Command) -> bool {
+        match command {
+            Command::SetItemStyle { item, .. } => self.item_is_referenced(*item).is_some(),
+            Command::SetLayerLoaded { id, .. } | Command::SetLayerHidden { id, .. } => self.layer_is_referenced(*id).is_some(),
+            Command::Batch(commands) => !commands.is_empty() && commands.iter().all(|command| self.only_styles_referenced(command)),
+            _ => false,
+        }
     }
 
     /// Same, for a command produced by a project-scoped background job. The
     /// caller has already validated the open-project runtime token.
     pub(crate) fn execute_edit_for(&mut self, runtime_id: u32, command: Command) {
+        if let Some(name) = self.referenced_changed_by(&command) {
+            crate::userspace_warn!("{}", crate::i18n::tr!("cmd-referenced-read-only", name = name));
+            return;
+        }
         let Some(((), effects)) = self.with_edit_target(|history, target| history.execute_for(runtime_id, target, command)) else {
             return;
         };
@@ -1668,29 +1732,60 @@ impl<'a> App<'a> {
             || self.point_clouds.iter().any(|item| item.state.is_dirty())
             || self.raster_textures.iter().any(|item| item.state.is_dirty())
             || membership_changed(
-                &self.triangulations.iter().map(|item| item.id.0).collect::<Vec<_>>(),
+                &self.triangulations.iter().filter(|item| item.state.is_working()).map(|item| item.id.0).collect::<Vec<_>>(),
                 &self.project_asset_baseline.triangulations,
             )
             || membership_changed(
-                &self.block_models.iter().map(|item| item.id.0).collect::<Vec<_>>(),
+                &self.block_models.iter().filter(|item| item.state.is_working()).map(|item| item.id.0).collect::<Vec<_>>(),
                 &self.project_asset_baseline.block_models,
             )
-            || membership_changed(&self.drill_holes.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.drill_holes)
             || membership_changed(
-                &self.point_clouds.iter().map(|item| item.id.0).collect::<Vec<_>>(),
+                &self.drill_holes.iter().filter(|item| item.state.is_working()).map(|item| item.id.0).collect::<Vec<_>>(),
+                &self.project_asset_baseline.drill_holes,
+            )
+            || membership_changed(
+                &self.point_clouds.iter().filter(|item| item.state.is_working()).map(|item| item.id.0).collect::<Vec<_>>(),
                 &self.project_asset_baseline.point_clouds,
             )
-            || membership_changed(&self.raster_textures.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.rasters)
+            || membership_changed(
+                &self.raster_textures.iter().filter(|item| item.state.is_working()).map(|item| item.id.0).collect::<Vec<_>>(),
+                &self.project_asset_baseline.rasters,
+            )
     }
 
     pub(super) fn project_asset_save_token(&self) -> SaveToken {
         SaveToken {
             folders: Box::new(self.workspace.active_project().map(|project| project.project.folders.clone()).unwrap_or_default()),
-            triangulations: self.triangulations.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
-            block_models: self.block_models.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
-            drill_holes: self.drill_holes.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
-            point_clouds: self.point_clouds.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
-            rasters: self.raster_textures.iter().map(|item| (item.id.0, item.state.epoch())).collect(),
+            triangulations: self
+                .triangulations
+                .iter()
+                .filter(|item| item.state.is_working())
+                .map(|item| (item.id.0, item.state.epoch()))
+                .collect(),
+            block_models: self
+                .block_models
+                .iter()
+                .filter(|item| item.state.is_working())
+                .map(|item| (item.id.0, item.state.epoch()))
+                .collect(),
+            drill_holes: self
+                .drill_holes
+                .iter()
+                .filter(|item| item.state.is_working())
+                .map(|item| (item.id.0, item.state.epoch()))
+                .collect(),
+            point_clouds: self
+                .point_clouds
+                .iter()
+                .filter(|item| item.state.is_working())
+                .map(|item| (item.id.0, item.state.epoch()))
+                .collect(),
+            rasters: self
+                .raster_textures
+                .iter()
+                .filter(|item| item.state.is_working())
+                .map(|item| (item.id.0, item.state.epoch()))
+                .collect(),
         }
     }
 
@@ -1749,6 +1844,9 @@ impl<'a> App<'a> {
     /// cache before New/Open installs a replacement project. File-dialog
     /// lifecycle code resolves unsaved-work confirmation before calling this.
     fn clear_project_owned_data(&mut self) {
+        // The outgoing project's file is free for others to edit again.
+        self.release_project_lock();
+        self.clear_explorer_preview();
         // Drillhole loads are said by name, as a project switch says them;
         // the rest go silently.
         self.cancel_drill_hole_loads(|_| true);
@@ -2223,6 +2321,7 @@ impl<'a> App<'a> {
                 &self.block_models,
                 &self.drill_holes,
                 &self.point_clouds,
+                &self.raster_textures,
                 &self.editor.hidden_handles,
             );
             self.redraw_requested = true;
@@ -2300,6 +2399,7 @@ impl<'a> App<'a> {
             matches!(project.persistence, crate::model::project::ProjectPersistence::BrowserRecord(_)).hash(&mut hasher);
             project.project.metadata.name.hash(&mut hasher);
             project.lossy_save_warnings.hash(&mut hasher);
+            project.read_only.hash(&mut hasher);
             project.has_unsaved_changes().hash(&mut hasher);
             // Edits and successful async save completions can each change the
             // per-layer dirty set independently.
@@ -2313,6 +2413,7 @@ impl<'a> App<'a> {
             project.project.folders.hash_into(&mut hasher);
         }
 
+        self.hash_data_references(&mut hasher);
         self.active_triangulation.hash(&mut hasher);
         for triangulation in &self.triangulations {
             triangulation.id.hash(&mut hasher);
@@ -2379,6 +2480,7 @@ impl<'a> App<'a> {
                     dirty: project_dirty,
                     designs_dirty: project.designs_dirty(&self.project_asset_baseline.folders),
                     lossy_save_warnings: project.lossy_save_warnings.clone(),
+                    read_only: project.read_only.clone(),
                     is_active: self.workspace.active_index == Some(index),
                     #[cfg(target_arch = "wasm32")]
                     stored_in_browser: matches!(project.persistence, crate::model::project::ProjectPersistence::BrowserRecord(_)),
@@ -2396,6 +2498,7 @@ impl<'a> App<'a> {
                             dirty: dirty_layers.contains(&layer.id),
                             folder: layer.folder,
                             section: layer.section,
+                            reference: layer.reference,
                         })
                         .collect(),
                 }
@@ -2464,6 +2567,7 @@ impl<'a> App<'a> {
                 color: tri.color,
                 folder: tri.state.folder,
                 section: tri.state.section,
+                reference: tri.state.reference,
             })
             .collect::<Vec<_>>();
         let mut block_models = self
@@ -2486,6 +2590,7 @@ impl<'a> App<'a> {
                 upper: model.world_bounds.map_or(model.model.metadata.upper, |(_, upper)| upper),
                 folder: model.state.folder,
                 section: model.state.section,
+                reference: model.state.reference,
             })
             .collect::<Vec<_>>();
         let mut drill_holes = self
@@ -2506,6 +2611,7 @@ impl<'a> App<'a> {
                     .map_or_else(|| dataset.dataset.fields.len(), |summary| summary.secondary_count),
                 folder: dataset.state.folder,
                 section: dataset.state.section,
+                reference: dataset.state.reference,
             })
             .collect::<Vec<_>>();
         let mut point_clouds = self
@@ -2521,6 +2627,7 @@ impl<'a> App<'a> {
                 point_count: cloud.state.summary.as_ref().map_or_else(|| cloud.points.len(), |summary| summary.primary_count),
                 folder: cloud.state.folder,
                 section: cloud.state.section,
+                reference: cloud.state.reference,
                 is_classified: cloud.is_classified(),
             })
             .collect::<Vec<_>>();
@@ -2541,6 +2648,7 @@ impl<'a> App<'a> {
                 projection: raster.projection.clone(),
                 folder: raster.state.folder,
                 section: raster.state.section,
+                reference: raster.state.reference,
             })
             .collect::<Vec<_>>();
 
@@ -2587,21 +2695,30 @@ impl<'a> App<'a> {
             let deleted = saved.iter().any(|(saved_id, _)| !current.iter().any(|(id, _)| id == saved_id));
             added || deleted
         };
-        let triangulation_membership: Vec<(u64, SectionKind)> = self.triangulations.iter().map(|item| (item.id.0, item.state.section)).collect();
+        let triangulation_membership: Vec<(u64, SectionKind)> = self
+            .triangulations
+            .iter()
+            .filter(|item| item.state.is_working())
+            .map(|item| (item.id.0, item.state.section))
+            .collect();
         let triangulations_membership_dirty = section_membership_dirty(SectionKind::Triangulations, &triangulation_membership, &self.project_asset_baseline.triangulations)
             || section_folders_dirty(SectionKind::Triangulations);
         let block_models_membership_dirty = !same_membership(
-            &self.block_models.iter().map(|item| item.id.0).collect::<Vec<_>>(),
+            &self.block_models.iter().filter(|item| item.state.is_working()).map(|item| item.id.0).collect::<Vec<_>>(),
             &self.project_asset_baseline.block_models,
         ) || section_folders_dirty(SectionKind::BlockModels);
-        let drill_holes_membership_dirty = !same_membership(&self.drill_holes.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.drill_holes)
-            || section_folders_dirty(SectionKind::DrillHoles);
+        let drill_holes_membership_dirty = !same_membership(
+            &self.drill_holes.iter().filter(|item| item.state.is_working()).map(|item| item.id.0).collect::<Vec<_>>(),
+            &self.project_asset_baseline.drill_holes,
+        ) || section_folders_dirty(SectionKind::DrillHoles);
         let point_clouds_membership_dirty = !same_membership(
-            &self.point_clouds.iter().map(|item| item.id.0).collect::<Vec<_>>(),
+            &self.point_clouds.iter().filter(|item| item.state.is_working()).map(|item| item.id.0).collect::<Vec<_>>(),
             &self.project_asset_baseline.point_clouds,
         ) || section_folders_dirty(SectionKind::PointClouds);
-        let rasters_membership_dirty = !same_membership(&self.raster_textures.iter().map(|item| item.id.0).collect::<Vec<_>>(), &self.project_asset_baseline.rasters)
-            || section_folders_dirty(SectionKind::Rasters);
+        let rasters_membership_dirty = !same_membership(
+            &self.raster_textures.iter().filter(|item| item.state.is_working()).map(|item| item.id.0).collect::<Vec<_>>(),
+            &self.project_asset_baseline.rasters,
+        ) || section_folders_dirty(SectionKind::Rasters);
         let active_triangulation_for_menu = self
             .active_triangulation
             .and_then(|id| self.triangulations.iter().find(|tri| tri.id == id).map(|tri| (tri.id, tri.color)));
@@ -2633,6 +2750,7 @@ impl<'a> App<'a> {
                 .unwrap_or_default(),
             active_session: self.workspace.active_project().map_or(0, |project| project.runtime_id),
             folders: self.workspace.active_project().map(|project| project.project.folders.clone()).unwrap_or_default(),
+            data_references: self.ui_data_references(),
         });
         *self.ui_project_view_cache.borrow_mut() = Some((key, Arc::clone(&view)));
         view
@@ -2775,6 +2893,9 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
         {
             for action in crate::mac::drain_actions() {
                 self.handle_mac_menu_action(action);
+            }
+            for path in crate::mac::drain_opened_files() {
+                self.open_project_from_system(path);
             }
             self.watch_fullscreen();
         }

@@ -254,6 +254,9 @@ impl<'a> App<'a> {
                     self.refresh_object_edit_dialog();
                     #[cfg(not(target_arch = "wasm32"))]
                     self.refresh_missing_projects();
+                    #[cfg(not(target_arch = "wasm32"))]
+                    self.refresh_project_lock();
+                    self.refresh_explorer_preview();
                     let project = self.project_view();
                     self.sync_window_frame(&project);
                     #[cfg(target_os = "macos")]
@@ -305,6 +308,7 @@ impl<'a> App<'a> {
                             point_clouds: if project_shown { &self.point_clouds } else { &[] },
                             rasters: &self.raster_textures,
                             solid_preview: drawn.1,
+                            item_preview: self.explorer_preview_item.as_ref().map(|held| &held.item),
                             retained_surfaces: &self.solid_view_retained,
                             project: &project,
                         }) {
@@ -976,7 +980,7 @@ impl<'a> App<'a> {
             &self.snap_index,
             &self.triangulations,
             &self.editor.hidden_handles,
-            &self.editor.pick_frozen,
+            &self.editor.snap_frozen,
             &self.editor.cursor_mode,
             self.editor.xray_enabled,
         );
@@ -1305,8 +1309,8 @@ impl<'a> App<'a> {
         // The Layout's blocks are flat fills in the scene, not surfaces; their
         // pick surface stands in so an orbit pivots on the block it starts on.
         let overlay = if self.editor.is_haulage_page() { &self.haul_block_surface[..] } else { drawn.1 };
-        // A bench design open in its tool is seen through the ground: begun
-        // over it, the orbit turns about it, not the ground above it.
+        // A bench design open in its tool is not in the project yet: begun on
+        // one of its strings, the orbit turns about that string.
         let pit_pivot = self.editor.rotation_centre.is_none().then(|| self.pit_orbit_pivot(press)).flatten();
         let Some(graphics) = self.graphics.as_mut() else {
             return;

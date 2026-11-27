@@ -3,8 +3,8 @@
 //! [Global Mining Guidelines Group](https://gmggroup.org), and Incline's native project format.
 //!
 //! Forked from [gmggroup/omf-rust](https://github.com/gmggroup/omf-rust) and changed for Incline.
-//! Upstream's OMF 1 converter, JSON Schema generation and C and Python wrappers are not included;
-//! the app rejects OMF 1 files.
+//! Upstream's JSON Schema generation and C and Python wrappers are not included. The OMF 1
+//! converter is, behind the `omf1` feature: the app opens OMF 1 files read-only through it.
 //!
 //! # Getting Started
 //!
@@ -62,6 +62,8 @@ pub mod error;
 pub mod file;
 mod geometry;
 mod grid;
+#[cfg(feature = "omf1")]
+pub mod omf1;
 #[cfg(feature = "parquet")]
 mod pqarray;
 mod project;

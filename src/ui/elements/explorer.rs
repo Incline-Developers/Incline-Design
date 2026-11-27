@@ -1,12 +1,16 @@
 //! Left-side explorer panel for the active project's retained content.
 
 use crate::{
+    app::data_references::ReferencedRef,
     i18n::tr,
-    model::{Folder, FolderId, FolderMember, ItemRef, LayerId, MemberKind, SceneEntityId, SectionKind},
+    model::{Folder, FolderId, FolderMember, ItemRef, LayerId, MemberKind, SceneEntityId, SectionKind, project::ReferenceId},
     ui::{
         EditorState, UiCommand, UiProjectView,
         fonts::bold,
-        state::{ExplorerRow, ExplorerSection, RenameTarget, UiBlockModelEntry, UiDrillHoleEntry, UiLayerEntry, UiPointCloudEntry, UiProjectEntry, UiRasterTextureEntry},
+        state::{
+            ExplorerPreview, ExplorerRow, ExplorerSection, PreviewStatus, PreviewSubject, RenameTarget, UiBlockModelEntry, UiDataReference, UiDrillHoleEntry, UiLayerEntry,
+            UiPointCloudEntry, UiProjectEntry, UiRasterTextureEntry,
+        },
         unthemed_icon,
         widgets::{
             context_menu::{ContextMenuAction, context_menu_popup, context_menu_separator, context_submenu},
@@ -16,6 +20,104 @@ use crate::{
         },
     },
 };
+
+/// Where the tree hands its rows' hover cards the preview for one frame, and
+/// where a card says what it is open on.
+fn preview_ids() -> (egui::Id, egui::Id) {
+    (egui::Id::unique("explorer_preview"), egui::Id::unique("explorer_preview_hovered"))
+}
+
+/// `response`'s hint, with a picture of `subject` turning above `text`.
+fn preview_hint(response: egui::Response, subject: PreviewSubject, text: Option<egui::WidgetText>) -> egui::Response {
+    response.hint_ui(|ui| {
+        let (preview_id, hovered_id) = preview_ids();
+        ui.ctx().data_mut(|data| data.insert_temp(hovered_id, subject));
+        let preview = ui.ctx().data(|data| data.get_temp::<std::sync::Arc<ExplorerPreview>>(preview_id));
+        // The words wrap under the picture rather than widen the card past it.
+        ui.set_max_width(ExplorerPreview::SIZE.x);
+        draw_preview_picture(ui, subject, preview.as_deref().filter(|preview| preview.subject == Some(subject)));
+        if let Some(text) = text {
+            crate::ui::widgets::hint::hint_text(ui, text);
+        }
+    })
+}
+
+/// The card's picture, or a word on why there is none. `None` the frame the
+/// card opens, before the app has seen it.
+fn draw_preview_picture(ui: &mut egui::Ui, subject: PreviewSubject, preview: Option<&ExplorerPreview>) {
+    // It turns, so it redraws while it is open.
+    ui.ctx().request_repaint();
+    let (rect, _) = ui.allocate_exact_size(ExplorerPreview::SIZE, egui::Sense::hover());
+    let corner = egui::CornerRadius::same(3);
+    let background = preview.map_or(ui.visuals().extreme_bg_color, |preview| preview.background);
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, corner, background);
+    let Some(preview) = preview else {
+        return;
+    };
+    let note = |text: String| {
+        let dark = background.r() as u32 + background.g() as u32 + background.b() as u32 <= 3 * 128;
+        let color = if dark { egui::Color32::from_gray(170) } else { egui::Color32::from_gray(80) };
+        painter.text(rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(12.0), color);
+    };
+    match (&preview.status, subject) {
+        (PreviewStatus::Ready, PreviewSubject::Layer(_)) => paint_preview_lines(&painter, rect, preview),
+        (PreviewStatus::Ready, PreviewSubject::Item(_)) if preview.image.is_some() => {
+            if let Some(image) = &preview.image {
+                paint_preview_image(ui, rect, subject, image);
+            }
+        }
+        (PreviewStatus::Ready, PreviewSubject::Item(_)) => {
+            if let Some(texture) = preview.texture {
+                egui::Image::new((texture, rect.size())).corner_radius(corner).paint_at(ui, rect);
+            }
+        }
+        (PreviewStatus::Loading, _) => note(tr!("explorer-preview-loading")),
+        (PreviewStatus::NotLoaded, _) => note(tr!("explorer-preview-not-loaded")),
+        (PreviewStatus::Empty, _) => note(tr!("explorer-preview-empty")),
+        (PreviewStatus::Failed(_), _) => note(tr!("explorer-preview-failed")),
+        (PreviewStatus::Idle, _) => {}
+    }
+}
+
+/// A raster's image, as large as fits in the picture with its shape kept.
+/// Uploaded once for as long as the card shows the same image.
+fn paint_preview_image(ui: &egui::Ui, rect: egui::Rect, subject: PreviewSubject, image: &std::sync::Arc<egui::ColorImage>) {
+    let id = egui::Id::unique(("explorer_preview_image", subject, std::sync::Arc::as_ptr(image) as usize));
+    let texture = ui.ctx().data(|data| data.get_temp::<egui::TextureHandle>(id)).unwrap_or_else(|| {
+        let texture = ui.ctx().load_texture("explorer-preview-image", (**image).clone(), egui::TextureOptions::LINEAR);
+        ui.ctx().data_mut(|data| data.insert_temp(id, texture.clone()));
+        texture
+    });
+    let [width, height] = image.size.map(|side| side.max(1) as f32);
+    let scale = (rect.width() / width).min(rect.height() / height);
+    let shown = egui::Rect::from_center_size(rect.center(), egui::vec2(width * scale, height * scale));
+    egui::Image::new((texture.id(), shown.size())).paint_at(ui, shown);
+}
+
+/// A design layer's strings, seen down the orbit's line of sight and fitted
+/// to the picture as the renderer fits an item.
+fn paint_preview_lines(painter: &egui::Painter, rect: egui::Rect, preview: &ExplorerPreview) {
+    let Some((lower, upper)) = preview.bounds else {
+        return;
+    };
+    let (center, half_height) = ExplorerPreview::framing((lower, upper));
+    let forward = preview.forward();
+    let right = forward.cross(glam::DVec3::Z).normalize_or(glam::DVec3::X);
+    let up = right.cross(forward);
+    let scale = f64::from(rect.height() * 0.5) / half_height;
+    let to_screen = |point: &glam::DVec3| {
+        let offset = *point - center;
+        rect.center() + egui::vec2((offset.dot(right) * scale) as f32, -(offset.dot(up) * scale) as f32)
+    };
+    for line in preview.lines.iter() {
+        if let [point] = line.points.as_slice() {
+            painter.circle_filled(to_screen(point), 1.5, line.color);
+        } else {
+            painter.add(egui::Shape::line(line.points.iter().map(to_screen).collect(), egui::Stroke::new(1.0, line.color)));
+        }
+    }
+}
 
 /// An entry's name: bold while loaded, plain while not. The row greys an
 /// unloaded name itself - see `ExplorerEntry::dimmed`.
@@ -102,8 +204,10 @@ fn paint_drop_target<P: DragPayload>(ui: &egui::Ui, row: &egui::Response, sectio
     if !accepts(section, payload.member()) || !row.contains_pointer() {
         return;
     }
+    // Inset from the row's edges: a section heading's run to the panel's,
+    // where the panel's own border is drawn over them.
     ui.painter().rect_stroke(
-        row.rect,
+        row.rect.shrink(2.0),
         crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS,
         ui.visuals().selection.stroke,
         egui::StrokeKind::Inside,
@@ -112,6 +216,37 @@ fn paint_drop_target<P: DragPayload>(ui: &egui::Ui, row: &egui::Response, sectio
 
 /// The payload types one section's drop zones listen for: one per kind the
 /// section admits, so a zone is only ever offered a drag it could take.
+/// A row a data reference shows, dragged out to bring it into the project
+/// where it is dropped. `member` is it in its own section, for whether a
+/// drop zone takes its kind.
+#[derive(Clone, Copy)]
+struct ReferencedDrag {
+    target: ReferencedRef,
+    member: FolderMember,
+}
+
+impl DragPayload for ReferencedDrag {
+    fn member(&self) -> FolderMember {
+        self.member
+    }
+}
+
+/// A referenced row dropped on a section's root (`folder` `None`) or one of
+/// its collections: brought into the project there.
+fn bring_in_if_dropped(ui: &egui::Ui, row: &egui::Response, section: SectionKind, folder: Option<FolderId>, commands: &mut Vec<UiCommand>) {
+    if egui::DragAndDrop::has_payload_of_type::<ReferencedDrag>(&row.ctx)
+        && let Some(dragged) = row.dnd_release_payload::<ReferencedDrag>()
+        && accepts(section, dragged.member)
+    {
+        commands.push(UiCommand::BringIntoProjectAt {
+            target: dragged.target,
+            section,
+            folder,
+        });
+    }
+    paint_drop_target::<ReferencedDrag>(ui, row, section);
+}
+
 trait DropZone {
     fn dropped(row: &egui::Response, section: SectionKind) -> Option<FolderMember>;
     fn paint_target(ui: &egui::Ui, row: &egui::Response, section: SectionKind);
@@ -175,10 +310,27 @@ fn with_kind_badge(entry: ExplorerEntry, section: SectionKind, kind: MemberKind)
 trait SectionEntry {
     fn section(&self) -> SectionKind;
     fn folder(&self) -> Option<FolderId>;
+    /// The data reference the row is shown from, or `None` for the
+    /// project's own.
+    fn reference(&self) -> Option<ReferenceId>;
+    /// The row as a data reference's group draws it.
+    fn referenced_row(&self) -> ReferencedRow<'_>;
+}
+
+/// What a row shown from a data reference needs, whatever its kind: they
+/// are all drawn alike, read-only, by [`referenced_row`].
+struct ReferencedRow<'a> {
+    name: &'a str,
+    section: SectionKind,
+    kind: MemberKind,
+    target: RowTarget,
+    row: ExplorerRow,
+    loaded: bool,
+    hidden: bool,
 }
 
 macro_rules! section_entry {
-    ($($ty:ty),* $(,)?) => {
+    ($($ty:ty => $kind:ident, $item:ident, $entity:ident);* $(;)?) => {
         $(
             impl SectionEntry for $ty {
                 fn section(&self) -> SectionKind {
@@ -187,18 +339,160 @@ macro_rules! section_entry {
                 fn folder(&self) -> Option<FolderId> {
                     self.folder
                 }
+                fn reference(&self) -> Option<ReferenceId> {
+                    self.reference
+                }
+                fn referenced_row(&self) -> ReferencedRow<'_> {
+                    ReferencedRow {
+                        name: &self.name,
+                        section: self.section,
+                        kind: MemberKind::$kind,
+                        target: RowTarget::Item(ItemRef::$item(self.id)),
+                        row: ExplorerRow::Entity(SceneEntityId::$entity(self.id)),
+                        loaded: self.is_loaded,
+                        hidden: self.is_hidden,
+                    }
+                }
             }
         )*
     };
 }
 section_entry!(
-    UiLayerEntry,
-    crate::ui::UiTriangulationEntry,
-    UiRasterTextureEntry,
-    UiPointCloudEntry,
-    UiBlockModelEntry,
-    UiDrillHoleEntry
+    crate::ui::UiTriangulationEntry => Triangulation, Triangulation, Triangulation;
+    UiRasterTextureEntry => Raster, Raster, Raster;
+    UiPointCloudEntry => PointCloud, PointCloud, PointCloud;
+    UiBlockModelEntry => BlockModel, BlockModel, BlockModel;
+    UiDrillHoleEntry => DrillHole, DrillHole, DrillHole;
 );
+
+impl SectionEntry for UiLayerEntry {
+    fn section(&self) -> SectionKind {
+        self.section
+    }
+    fn folder(&self) -> Option<FolderId> {
+        self.folder
+    }
+    fn reference(&self) -> Option<ReferenceId> {
+        self.reference
+    }
+    fn referenced_row(&self) -> ReferencedRow<'_> {
+        ReferencedRow {
+            name: &self.name,
+            section: self.section,
+            kind: MemberKind::Layer,
+            target: RowTarget::Layer(self.id),
+            row: ExplorerRow::Layer(self.id),
+            loaded: self.is_loaded,
+            hidden: self.is_hidden,
+        }
+    }
+}
+
+/// What every data reference's group in the tree reads.
+struct ReferenceContext<'a> {
+    references: &'a [UiDataReference],
+    selected_handles: &'a std::collections::HashSet<SceneEntityId>,
+    selected_layers: &'a std::collections::HashSet<LayerId>,
+}
+
+/// The icon a kind's rows carry where they carry one: its section heading's.
+pub(crate) fn kind_icon(kind: MemberKind) -> egui::ImageSource<'static> {
+    match kind {
+        MemberKind::Layer => unthemed_icon!("layer.svg"),
+        MemberKind::Triangulation => unthemed_icon!("triangulation.svg"),
+        MemberKind::Raster => unthemed_icon!("raster.svg"),
+        MemberKind::PointCloud => unthemed_icon!("section_point_clouds.svg"),
+        MemberKind::BlockModel => unthemed_icon!("section_block_models.svg"),
+        MemberKind::DrillHole => unthemed_icon!("drill_hole.svg"),
+    }
+}
+
+/// Draw one row shown from a data reference: its kind's icon with a chain in
+/// the corner, its name, and its eye. It can be shown, hidden, loaded and
+/// selected; everything that would change it waits until it is brought into
+/// the project.
+fn referenced_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, entry: ReferencedRow<'_>, reference: &UiDataReference, cx: &ReferenceContext<'_>) {
+    rows.push(entry.row);
+    let selected = match entry.row {
+        ExplorerRow::Layer(id) => cx.selected_layers.contains(&id),
+        ExplorerRow::Entity(handle) => cx.selected_handles.contains(&handle),
+    };
+    let visible = entry.loaded && !entry.hidden;
+    let id = egui::Id::unique(("explorer_referenced", reference.id, entry.row));
+    // Dragged out onto the project's own rows, it is brought into the
+    // project there. A pointer drag only, as the project's own rows are.
+    let draggable = !ui.ctx().input(|input| input.any_touches());
+    let row = ExplorerEntry::new(id, entry_label(entry.name, entry.loaded))
+        .dimmed(!entry.loaded)
+        .selected(selected)
+        .draggable(draggable)
+        .leading_icon(kind_icon(entry.kind), egui::Color32::WHITE)
+        .visibility_toggle(visible)
+        .show(ui);
+    if let Some(icon) = row.icon_rect
+        && ui.is_rect_visible(icon)
+    {
+        paint_chain_badge(ui, icon);
+    }
+    if row.visibility_clicked {
+        commands.push(entry.target.visible_command(!visible));
+    }
+    if row.response.double_clicked() {
+        commands.push(entry.target.load_command(!entry.loaded));
+    }
+    let from = tr!("explorer-referenced-from");
+    let response = match entry.target {
+        RowTarget::Layer(id) => preview_hint(row.response, PreviewSubject::Layer(id), Some(from.into())),
+        RowTarget::Item(item) => preview_hint(row.response, PreviewSubject::Item(item), Some(from.into())),
+    };
+    let (target, member) = match entry.target {
+        RowTarget::Layer(id) => (ReferencedRef::Layer(id), FolderMember::layer(entry.section, id)),
+        RowTarget::Item(item) => (ReferencedRef::Item(item), FolderMember::item(entry.section, item)),
+    };
+    response.dnd_set_drag_payload(ReferencedDrag { target, member });
+    if response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+    if response.clicked() {
+        commands.push(UiCommand::SelectExplorerRow(entry.row));
+    }
+    let target = entry.target;
+    context_menu_popup(&response, entry.name, |ui| {
+        let state = RowState {
+            target,
+            loaded: entry.loaded,
+            hidden: entry.hidden,
+            locked: true,
+        };
+        if ContextMenuAction::new(if state.visible() { tr!("explorer-hide") } else { tr!("explorer-show") })
+            .show(ui)
+            .clicked()
+        {
+            commands.push(target.visible_command(!state.visible()));
+            ui.close();
+        }
+        if ContextMenuAction::new(if entry.loaded { tr!("explorer-unload") } else { tr!("explorer-load") })
+            .show(ui)
+            .clicked()
+        {
+            commands.push(target.load_command(!entry.loaded));
+            ui.close();
+        }
+        context_menu_separator(ui);
+        if ContextMenuAction::new(tr!("explorer-bring-into-project")).show(ui).clicked() {
+            commands.push(UiCommand::BringIntoProject(match target {
+                RowTarget::Layer(id) => ReferencedRef::Layer(id),
+                RowTarget::Item(item) => ReferencedRef::Item(item),
+            }));
+            ui.close();
+        }
+    });
+}
+
+/// The chain in the bottom-right corner of a referenced row's icon.
+fn paint_chain_badge(ui: &egui::Ui, icon: egui::Rect) {
+    crate::ui::widgets::explorer::paint_icon_badge(ui, icon, unthemed_icon!("reference_chain.svg"));
+}
 
 /// The entries of `items` shown under `section` in `folder`, or at its root
 /// when `folder` is `None`.
@@ -207,6 +501,7 @@ section_entry!(
 fn shown_in<'a, T: SectionEntry>(items: &'a [T], section: SectionKind, folder: Option<FolderId>, known: &'a [Folder]) -> impl Iterator<Item = &'a T> + 'a {
     items.iter().filter(move |item| {
         item.section() == section
+            && item.reference().is_none()
             && match folder {
                 Some(id) => item.folder() == Some(id),
                 None => item.folder().is_none_or(|folder| !known.iter().any(|existing| existing.id == folder)),
@@ -227,7 +522,9 @@ fn tagged_count<T: SectionEntry>(items: &[T], section: SectionKind) -> usize {
 fn folder_group<Z: DropZone>(ui: &mut egui::Ui, section: SectionKind, folder: &Folder, commands: &mut Vec<UiCommand>, body: impl FnOnce(&mut egui::Ui, &mut Vec<UiCommand>)) {
     // Keyed by section and id, not by name, so renaming a folder leaves it as
     // open or as shut as the user left it.
-    let (toggle, heading, _) = ExplorerHeader::new(egui::Id::unique((section.key(), folder.id)), folder.name.as_str()).show(ui, |ui| body(ui, commands));
+    let (toggle, heading, _) = ExplorerHeader::new(egui::Id::unique((section.key(), folder.id)), folder.name.as_str())
+        .icon(unthemed_icon!("folder.svg"))
+        .show(ui, |ui| body(ui, commands));
     let row = toggle.union(heading.inner);
     if let Some(member) = Z::dropped(&row, section) {
         // `section` is this zone's own section, not necessarily where
@@ -240,6 +537,7 @@ fn folder_group<Z: DropZone>(ui: &mut egui::Ui, section: SectionKind, folder: &F
         });
     }
     Z::paint_target(ui, &row, section);
+    bring_in_if_dropped(ui, &row, section, Some(folder.id), commands);
     context_menu_popup(&row, folder.name.as_str(), |ui| {
         if ContextMenuAction::new(tr!("dialog-rename-submit")).show(ui).clicked() {
             commands.push(UiCommand::BeginRenameItem(RenameTarget::Folder(section, folder.id)));
@@ -527,7 +825,7 @@ fn layer_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEn
     if row.lock_clicked {
         commands.push(UiCommand::ToggleLayerLocked(layer_id));
     }
-    let layer_resp = row.response;
+    let layer_resp = preview_hint(row.response, PreviewSubject::Layer(layer_id), None);
     layer_resp.dnd_set_drag_payload(LayerDrag(FolderMember::layer(layer.section, layer_id)));
     if layer_resp.dragged() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -577,6 +875,18 @@ fn layer_row(ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, layer: &UiLayerEn
 trait RowSource {
     /// Draw the entries shown at `folder`, and report whether there were any.
     fn draw(&mut self, ui: &mut egui::Ui, commands: &mut Vec<UiCommand>, rows: &mut Vec<ExplorerRow>, section: SectionKind, folder: Option<FolderId>, folders: &[Folder]) -> bool;
+    /// Whether any entry under `section` is shown from `reference`.
+    fn has_referenced(&self, section: SectionKind, reference: ReferenceId) -> bool;
+    /// Draw the entries under `section` shown from `reference`.
+    fn draw_referenced(
+        &mut self,
+        ui: &mut egui::Ui,
+        commands: &mut Vec<UiCommand>,
+        rows: &mut Vec<ExplorerRow>,
+        section: SectionKind,
+        reference: &UiDataReference,
+        cx: &ReferenceContext<'_>,
+    );
 }
 
 /// One [`RowSource`]: a slice of entries of one kind, and the closure that
@@ -595,6 +905,24 @@ impl<T: SectionEntry, F: FnMut(&mut egui::Ui, &mut Vec<UiCommand>, &mut Vec<Expl
         }
         any
     }
+
+    fn has_referenced(&self, section: SectionKind, reference: ReferenceId) -> bool {
+        self.items.iter().any(|item| item.section() == section && item.reference() == Some(reference))
+    }
+
+    fn draw_referenced(
+        &mut self,
+        ui: &mut egui::Ui,
+        commands: &mut Vec<UiCommand>,
+        rows: &mut Vec<ExplorerRow>,
+        section: SectionKind,
+        reference: &UiDataReference,
+        cx: &ReferenceContext<'_>,
+    ) {
+        for item in self.items.iter().filter(|item| item.section() == section && item.reference() == Some(reference.id)) {
+            referenced_row(ui, commands, rows, item.referenced_row(), reference, cx);
+        }
+    }
 }
 
 /// Draw one section's rows: a group per folder, then whatever sits at the
@@ -607,6 +935,7 @@ fn draw_section_body<Z: DropZone>(
     folders: &[Folder],
     commands: &mut Vec<UiCommand>,
     rows: &mut Vec<ExplorerRow>,
+    references: &ReferenceContext<'_>,
     sources: &mut [&mut dyn RowSource],
 ) {
     for folder in folders {
@@ -623,6 +952,36 @@ fn draw_section_body<Z: DropZone>(
     for source in sources.iter_mut() {
         source.draw(ui, commands, rows, section, None, folders);
     }
+    // Below everything the project holds itself: a group per data reference
+    // with anything in this section, its rows read-only.
+    for reference in references.references {
+        if !sources.iter().any(|source| source.has_referenced(section, reference.id)) {
+            continue;
+        }
+        let (toggle, heading, _) = ExplorerHeader::new(egui::Id::unique((section.key(), "data_reference", reference.id)), reference.name.as_str())
+            .icon(unthemed_icon!("folder.svg"))
+            // The chain tells it from a collection, which has the same folder.
+            .icon_badge(unthemed_icon!("reference_chain.svg"))
+            // Shut until opened: a reference can hold a great deal, and the
+            // project's own rows above it are what is being worked on.
+            .default_open(false)
+            .show(ui, |ui| {
+                for source in sources.iter_mut() {
+                    source.draw_referenced(ui, commands, rows, section, reference, references);
+                }
+            });
+        let row = toggle.union(heading.inner).hint(reference.path.display().to_string());
+        context_menu_popup(&row, reference.name.as_str(), |ui| {
+            if ContextMenuAction::new(tr!("data-references-reload")).show(ui).clicked() {
+                commands.push(UiCommand::ReloadDataReference(reference.id));
+                ui.close();
+            }
+            if ContextMenuAction::new(tr!("data-references-remove")).show(ui).clicked() {
+                commands.push(UiCommand::RemoveDataReference(reference.id));
+                ui.close();
+            }
+        });
+    }
 }
 
 /// Attach a section heading's root drop zone: releasing a row of a kind `Z`
@@ -632,6 +991,7 @@ fn attach_header_drop<Z: DropZone>(ui: &egui::Ui, row: &egui::Response, section:
         commands.push(UiCommand::MoveToFolder { member, section, folder: None });
     }
     Z::paint_target(ui, row, section);
+    bring_in_if_dropped(ui, row, section, None, commands);
 }
 
 /// The "Move to Collection" submenu shared by every section's row context
@@ -952,6 +1312,13 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
     // What a right-click on any selected row acts on, gathered once rather
     // than per row.
     let selection = explorer_selection(editor, project);
+    // The rows' hover cards read the preview from here, and say what they
+    // are open on back: see `preview_hint`.
+    let (preview_id, hovered_id) = preview_ids();
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(preview_id, std::sync::Arc::new(editor.explorer_preview.clone()));
+        data.remove::<PreviewSubject>(hovered_id);
+    });
     // Keep the scroll area's contents as wide as the side panel even
     // when every section is collapsed. `ScrollArea` otherwise shrinks
     // horizontally to the headers' intrinsic width; a visible
@@ -973,6 +1340,11 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
             selected_layers,
             ..
         } = &*editor;
+        let reference_cx = ReferenceContext {
+            references: &project.data_references,
+            selected_handles,
+            selected_layers,
+        };
         // Empty-state messages should behave like explorer entries at
         // narrow widths: stay on one line and end with an ellipsis.
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
@@ -1020,7 +1392,7 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                         layer_row(ui, commands, layer, rows, &design_row_context)
                     },
                 };
-                draw_section_body::<(LayerDrag,)>(ui, SectionKind::Designs, design_folders, commands, &mut rows, &mut [&mut design_layers]);
+                draw_section_body::<(LayerDrag,)>(ui, SectionKind::Designs, design_folders, commands, &mut rows, &reference_cx, &mut [&mut design_layers]);
             });
         let designs_row = designs_header_toggle.union(designs_header.inner);
         attach_header_drop::<(LayerDrag,)>(ui, &designs_row, SectionKind::Designs, commands);
@@ -1072,7 +1444,7 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
             if row.lock_clicked {
                 commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::Triangulation(tri_id)));
             }
-            let response = row.response.hint(&tri_path);
+            let response = preview_hint(row.response, PreviewSubject::Item(ItemRef::Triangulation(tri_id)), Some(tri_path.into()));
             response.dnd_set_drag_payload(TriangulationDrag(FolderMember::item(tri.section, ItemRef::Triangulation(tri_id))));
             if response.dragged() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -1144,6 +1516,7 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     triangulation_folders,
                     commands,
                     &mut rows,
+                    &reference_cx,
                     &mut [&mut triangulations_source],
                 );
             });
@@ -1214,7 +1587,7 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     if row.lock_clicked {
                         commands.push(UiCommand::ToggleRasterLocked(raster.id));
                     }
-                    let response = row.response.hint(&details);
+                    let response = preview_hint(row.response, PreviewSubject::Item(ItemRef::Raster(raster.id)), Some(details.into()));
                     response.dnd_set_drag_payload(RasterDrag(FolderMember::item(raster.section, ItemRef::Raster(raster.id))));
                     if response.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -1262,7 +1635,7 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     items: &project.raster_textures,
                     draw: render_raster_entry,
                 };
-                draw_section_body::<(RasterDrag,)>(ui, SectionKind::Rasters, raster_folders, commands, &mut rows, &mut [&mut rasters_source]);
+                draw_section_body::<(RasterDrag,)>(ui, SectionKind::Rasters, raster_folders, commands, &mut rows, &reference_cx, &mut [&mut rasters_source]);
             });
         let rasters_row = rasters_header_toggle.union(rasters_header.inner);
         attach_header_drop::<(RasterDrag,)>(ui, &rasters_row, SectionKind::Rasters, commands);
@@ -1327,7 +1700,7 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     if row.lock_clicked {
                         commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::PointCloud(point_cloud.id)));
                     }
-                    let response = row.response.hint(&tooltip);
+                    let response = preview_hint(row.response, PreviewSubject::Item(ItemRef::PointCloud(point_cloud.id)), Some(tooltip.into()));
                     response.dnd_set_drag_payload(PointCloudDrag(FolderMember::item(point_cloud.section, ItemRef::PointCloud(point_cloud.id))));
                     if response.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -1366,7 +1739,15 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     items: &project.point_clouds,
                     draw: render_point_cloud_entry,
                 };
-                draw_section_body::<(PointCloudDrag,)>(ui, SectionKind::PointClouds, point_cloud_folders, commands, &mut rows, &mut [&mut point_clouds_source]);
+                draw_section_body::<(PointCloudDrag,)>(
+                    ui,
+                    SectionKind::PointClouds,
+                    point_cloud_folders,
+                    commands,
+                    &mut rows,
+                    &reference_cx,
+                    &mut [&mut point_clouds_source],
+                );
             });
         let point_clouds_row = point_clouds_header_toggle.union(point_clouds_header.inner);
         attach_header_drop::<(PointCloudDrag,)>(ui, &point_clouds_row, SectionKind::PointClouds, commands);
@@ -1426,12 +1807,19 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                         .as_deref()
                         .map(|name| format!("\n{}", tr!("explorer-source-name", name = name.to_string())))
                         .unwrap_or_default();
-                    let response = row.response.hint(tr!(
-                        "explorer-id-block-model-id-source",
-                        id = block_model.id.0.to_string(),
-                        source = block_model_source_suffix.to_string(),
-                        count = block_model.variable_count.to_string()
-                    ));
+                    let response = preview_hint(
+                        row.response,
+                        PreviewSubject::Item(ItemRef::BlockModel(block_model.id)),
+                        Some(
+                            tr!(
+                                "explorer-id-block-model-id-source",
+                                id = block_model.id.0.to_string(),
+                                source = block_model_source_suffix.to_string(),
+                                count = block_model.variable_count.to_string()
+                            )
+                            .into(),
+                        ),
+                    );
                     response.dnd_set_drag_payload(BlockModelDrag(FolderMember::item(block_model.section, ItemRef::BlockModel(block_model.id))));
                     if response.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -1469,7 +1857,15 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     items: &project.block_models,
                     draw: render_block_model_entry,
                 };
-                draw_section_body::<(BlockModelDrag,)>(ui, SectionKind::BlockModels, block_model_folders, commands, &mut rows, &mut [&mut block_models_source]);
+                draw_section_body::<(BlockModelDrag,)>(
+                    ui,
+                    SectionKind::BlockModels,
+                    block_model_folders,
+                    commands,
+                    &mut rows,
+                    &reference_cx,
+                    &mut [&mut block_models_source],
+                );
             });
         let block_models_row = block_models_header_toggle.union(block_models_header.inner);
         attach_header_drop::<(BlockModelDrag,)>(ui, &block_models_row, SectionKind::BlockModels, commands);
@@ -1531,7 +1927,7 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     if row.lock_clicked {
                         commands.push(UiCommand::ToggleEntityLocked(SceneEntityId::DrillHole(dataset.id)));
                     }
-                    let response = row.response.hint(&tooltip);
+                    let response = preview_hint(row.response, PreviewSubject::Item(ItemRef::DrillHole(dataset.id)), Some(tooltip.into()));
                     response.dnd_set_drag_payload(DrillHoleDrag(FolderMember::item(dataset.section, ItemRef::DrillHole(dataset.id))));
                     if response.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -1576,7 +1972,15 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                     items: &project.drill_holes,
                     draw: render_drill_hole_entry,
                 };
-                draw_section_body::<(DrillHoleDrag,)>(ui, SectionKind::DrillHoles, drill_hole_folders, commands, &mut rows, &mut [&mut drill_holes_source]);
+                draw_section_body::<(DrillHoleDrag,)>(
+                    ui,
+                    SectionKind::DrillHoles,
+                    drill_hole_folders,
+                    commands,
+                    &mut rows,
+                    &reference_cx,
+                    &mut [&mut drill_holes_source],
+                );
             });
         let drill_holes_row = drill_holes_header_toggle.union(drill_holes_header.inner);
         attach_header_drop::<(DrillHoleDrag,)>(ui, &drill_holes_row, SectionKind::DrillHoles, commands);
@@ -1595,4 +1999,5 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
         paint_fixed_stripes(ui, stripes_slot, stripes_top, stripe);
     });
     editor.explorer_rows = rows;
+    editor.explorer_preview.hovered = ui.ctx().data(|data| data.get_temp::<PreviewSubject>(hovered_id));
 }

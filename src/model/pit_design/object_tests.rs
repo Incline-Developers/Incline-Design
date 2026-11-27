@@ -267,3 +267,48 @@ fn rounds_corners_into_arcs() {
     let verts = rounded_corners(&thin, 100.0);
     assert!(verts.iter().all(|vertex| vertex.pos.is_finite() && vertex.bulge.is_finite()));
 }
+
+#[test]
+fn settles_once_designed_needing_no_topography_after() {
+    let object = pit_object(square(100.0), settings());
+    let (verts, pit) = parts(&object);
+    // Not daylit, it has nothing to let go of.
+    assert!(pit.settled(verts).is_none());
+
+    let mut daylit = pit.clone();
+    daylit.settings.stop = StopMode::Daylight;
+    daylit.settings.topography = Some(TriangulationId(4));
+    daylit.settings.evaluation.block_model = Some(crate::model::block_model::BlockModelId(2));
+    daylit.settings.evaluation.shell = Some(TriangulationId(5));
+    let before = inputs_key(verts, &daylit.settings);
+    let reached = daylit.design().expect("a design").benches;
+    if let Some(derived) = &mut daylit.derived {
+        derived.inputs = before;
+        derived.ground = Some(GeometryVersion::mint());
+    }
+    let mut measured = super::evaluation::Evaluation::failed(1, "measured".to_owned());
+    measured.design = before;
+    daylit.evaluation = Some(measured);
+
+    // Stale, a daylit design has no count to keep yet.
+    let mut moved = verts.to_vec();
+    moved[1].pos.x += 5.0;
+    assert!(daylit.settled(&moved).is_none());
+
+    let settled = daylit.settled(verts).expect("designed, it settles");
+    assert_eq!(settled.settings.topography, None);
+    assert_eq!(
+        (settled.settings.evaluation.block_model, settled.settings.evaluation.shell),
+        (None, None),
+        "nor what it was measured against"
+    );
+    assert_eq!(settled.settings.stop, StopMode::Benches);
+    assert_eq!(settled.settings.benches, reached, "it keeps the count it daylit at");
+    // The design and its measure stand as they were, current under the
+    // settled settings, with no ground to be current against.
+    assert_eq!(settled.design(), daylit.design());
+    assert!(settled.is_fresh(verts, None));
+    assert!(settled.is_fresh(verts, Some(GeometryVersion::mint())), "ground changing changes nothing now");
+    assert_eq!(settled.evaluation.as_ref().map(|evaluation| evaluation.design), Some(inputs_key(verts, &settled.settings)));
+    assert!(settled.settled(verts).is_none(), "settled once");
+}

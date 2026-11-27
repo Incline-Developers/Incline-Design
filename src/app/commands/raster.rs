@@ -134,7 +134,10 @@ impl<'a> App<'a> {
     pub(super) fn add_loaded_raster(&mut self, loaded: crate::model::raster::LoadedRasterTexture) {
         let id = RasterTextureId(self.next_raster_texture_id);
         self.next_raster_texture_id += 1;
-        let name = crate::model::project::unique_item_name(loaded.name, self.raster_textures.iter().map(|item| item.name.as_str()));
+        let name = crate::model::project::unique_item_name(
+            loaded.name,
+            self.raster_textures.iter().filter(|item| item.state.is_working()).map(|item| item.name.as_str()),
+        );
         userspace_log!(
             "{}",
             tr!(
@@ -228,8 +231,8 @@ impl<'a> App<'a> {
     }
 
     /// Drape the raster over every loaded triangulation whose
-    /// world-XY extent overlaps the raster footprint. Until draped, a loaded
-    /// raster only shows as a flat plan-view image.
+    /// world-XY extent overlaps the raster footprint. It shows as a flat
+    /// image in plan view as well, draped or not, under everything else.
     pub(crate) fn drape_raster_over_surfaces(&mut self, id: RasterTextureId) -> Result<()> {
         let raster = self
             .raster_textures
@@ -265,8 +268,8 @@ impl<'a> App<'a> {
         Ok(())
     }
 
-    /// Undrape every raster at once, returning all of them to the flat
-    /// plan-view image. Menu-bar counterpart to per-raster [`Self::undrape_raster`].
+    /// Undrape every raster at once, leaving each as the flat plan-view
+    /// image it also is. Menu-bar counterpart to per-raster [`Self::undrape_raster`].
     pub(crate) fn undrape_all_rasters(&mut self) {
         let draped: Vec<_> = self
             .triangulations
@@ -281,7 +284,7 @@ impl<'a> App<'a> {
     }
 
     /// Remove the raster from every triangulation it is draped
-    /// over, returning it to the flat plan-view image.
+    /// over, leaving the flat plan-view image it also is.
     pub(crate) fn undrape_raster(&mut self, id: RasterTextureId) {
         let draped: Vec<_> = self
             .triangulations

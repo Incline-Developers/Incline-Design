@@ -3105,7 +3105,6 @@ i18n-could-not-select-language-error = Could not select a language: { $error }
 init-gpu-adapter-vendor-name-backend = GPU adapter: { $vendor } / { $name } / { $backend } / { $device_type }
 init-gpu-driver = GPU driver: { $driver } { $driver_info }
 init-gpu-limits-max-buffer-size = GPU limits: max_buffer_size={ $max_buffer_size } MiB, max_storage_buffer_binding_size={ $max_storage_buffer_binding_size } MiB, max_storage_buffers_per_shader_stage={ $max_storage_buffers_per_shader_stage }, max_uniform_buffer_binding_size={ $max_uniform_buffer_binding_size } KiB, max_texture_dimension_2d={ $max_texture_dimension_2d }, max_bind_groups={ $max_bind_groups }
-init-gpu-supports-maximum-buffer-size = GPU supports a maximum buffer size of { $size } MiB; large scenes may not display fully
 init-surface-present-mode = Surface presentation mode: { $mode }
 init-wgpu-error-continuing-error = wgpu error (continuing): { $error }
 
@@ -3315,6 +3314,7 @@ omf-project-author-not-retained = Project author is not retained
 omf-project-description-not-retained = Project description is not retained
 omf-unsupported-metadata-keys = Project has unsupported metadata keys: { $keys }
 omf-optimization-scenarios-unreadable = The project's optimisation scenarios could not be read and were left out: { $error }
+omf-reference-links-unreadable = The project's links to data reference items could not be read and were left out: { $error }
 omf-skipped-drillhole-data-saved-older = Skipped drillhole data saved in an older layout ({ $names }); import it again from its source files
 
 ## Plot strings
@@ -4951,7 +4951,6 @@ err-omf-asset-missing-from-backing = The unloaded asset is missing from its back
 err-omf-read-container = Could not read the OMF container { $source }
 err-omf-open-archive = Could not open the OMF archive
 err-omf-read-project-index = Could not read the project index
-err-omf-version-1 = This is an OMF 1 file{ $detail }. Incline Design reads OMF 2 only, so re-export it as OMF 2 from the application that wrote it
 err-omf-validate-line-designs = The OMF line set designs are not valid
 err-omf-missing-asset-backing = The asset has no backing data
 err-omf-block-count-overflow = The block count is too large
@@ -5927,3 +5926,45 @@ pit-design-rehab-failed = The dump could not be reshaped: { $reason }
 pit-design-rehab-cut = Cut from the dump
 pit-design-rehab-fill = Placed beyond it
 pit-design-rehab-footprint = Footprint
+
+## Read-only projects, file locks and data references
+
+title-read-only = { $name } (read-only)
+cmd-omf-opened-omf1 = Opened { $source_name }, an OMF 1 file ({ $version }), read-only. Save it as an OMF 2 file to keep your changes.
+err-omf-convert-omf1 = Could not convert this OMF 1 file to OMF 2
+read-only-omf1-title = Save as OMF 2
+read-only-omf1-message = { $name } is an OMF 1 file. Incline Design uses OMF 2 and never writes OMF 1. Would you like to save it as an OMF 2 file?
+read-only-save-as-omf2 = Save as OMF 2…
+read-only-locked-title = Project in Use
+read-only-locked-message = { $name } is being edited by { $holder } (since { $since }). Save your changes to a new file, or take the project over. If they still have it open, one of you will overwrite the other's work.
+read-only-save-as = Save As…
+read-only-take-over = Take Over and Save
+lock-holder = { $user } on { $host }
+lock-holder-unknown = someone else
+lock-opened-read-only = { $name } is being edited by { $holder } (since { $since }), so it has been opened read-only.
+lock-lost = { $name } has been taken over by { $holder }. It is read-only here now: save your changes to a new file.
+lock-failed = Could not lock { $name } for editing: { $error }. Other people will not see that you have it open.
+lock-save-as-held = { $name } is being edited by { $holder }. Choose another file to save to.
+lock-taken-over = Took over { $name } from { $holder }.
+properties-data = Data
+data-references-title = Data References
+data-references-add = Add Reference…
+data-references-remove = Remove
+data-references-reload = Reload
+data-references-none = No data references.
+data-references-desktop-only = Data references are available in the desktop app.
+data-reference-loading = Loading…
+data-reference-missing = File not found
+data-reference-open-as-project = Open as the project
+data-reference-failed = Could not be read: { $error }
+data-reference-already = { $path } is already a data reference.
+data-reference-load-failed = Could not read the data reference { $name }: { $error }
+data-reference-loaded-log = Data reference { $name } shown. Items: { $count }
+explorer-bring-into-project = Bring into Project
+explorer-referenced-from = Read-only: item is a data reference
+explorer-preview-loading = Loading preview…
+explorer-preview-not-loaded = Not loaded
+explorer-preview-empty = Nothing to show
+explorer-preview-failed = No preview
+cmd-brought-into-project = Brought { $name } into the project from { $reference }.
+cmd-referenced-read-only = { $name } is from a data reference, so it is read-only. Bring it into the project to edit it.

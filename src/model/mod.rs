@@ -12,6 +12,8 @@ pub(crate) mod blast;
 pub(crate) mod block_model;
 pub(crate) mod crs;
 pub(crate) mod drill_hole;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod file_lock;
 pub(crate) mod folders;
 pub(crate) mod forest;
 pub(crate) mod formats;
@@ -126,6 +128,11 @@ pub(crate) struct Layer {
     /// Explorer section this layer is shown under.
     #[serde(default = "SectionKind::natural_layer", skip_serializing_if = "SectionKind::is_natural_layer")]
     pub(crate) section: SectionKind,
+    /// The data reference this layer was read from, if it is not the
+    /// project's own. A referenced layer is read-only and never saved with
+    /// the project: see [`crate::model::project::ReferenceId`].
+    #[serde(skip)]
+    pub(crate) reference: Option<crate::model::project::ReferenceId>,
 }
 
 impl Layer {
@@ -143,6 +150,7 @@ impl Layer {
         self.hidden.hash(hasher);
         self.folder.hash(hasher);
         self.section.hash(hasher);
+        self.reference.hash(hasher);
     }
 }
 
@@ -1765,6 +1773,7 @@ impl Document {
             elevation,
             folder: None,
             section: SectionKind::natural_layer(),
+            reference: None,
         });
         self.touch();
         id
@@ -2395,6 +2404,20 @@ impl Document {
         true
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    /// Tag a layer as shown from a data reference, or, with `None`, as the
+    /// project's own.
+    pub(crate) fn set_layer_reference(&mut self, id: LayerId, reference: Option<project::ReferenceId>) -> bool {
+        let Some(layer) = self.layers.iter_mut().find(|layer| layer.id == id) else {
+            return false;
+        };
+        if layer.reference != reference {
+            layer.reference = reference;
+            self.touch();
+        }
+        true
+    }
+
     /// Show a layer under `section`. Moving it clears the folder it was in.
     pub(crate) fn set_layer_section(&mut self, id: LayerId, section: SectionKind) -> bool {
         let Some(layer) = self.layers.iter_mut().find(|layer| layer.id == id) else {
@@ -2448,8 +2471,11 @@ impl Document {
         healed
     }
 
+    /// The project's own layer called `name`. A layer a data reference shows
+    /// is not one: it may share a name with the project's, being from another
+    /// file, and nothing is ever written into it.
     pub(crate) fn layer_id_by_name(&self, name: &str) -> Option<LayerId> {
-        self.layers.iter().find(|layer| layer.name == name).map(|layer| layer.id)
+        self.layers.iter().find(|layer| layer.reference.is_none() && layer.name == name).map(|layer| layer.id)
     }
 
     pub(crate) fn first_layer_id(&self) -> Option<LayerId> {
@@ -2639,7 +2665,7 @@ impl Document {
         use std::hash::{DefaultHasher, Hash, Hasher};
         let hashes = self.layer_content_hashes(cache, folders);
         let mut hasher = DefaultHasher::new();
-        for layer in &self.layers {
+        for layer in self.layers.iter().filter(|layer| layer.reference.is_none()) {
             let id = layer.id.0 & u64::from(u32::MAX);
             id.hash(&mut hasher);
             hashes.get(&id).hash(&mut hasher);

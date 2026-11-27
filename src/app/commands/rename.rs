@@ -16,7 +16,11 @@ use crate::{
 /// Names of the other items of the same kind, which a rename must not collide with.
 macro_rules! sibling_names {
     ($collection:expr, $id:expr) => {
-        $collection.iter().filter(|item| item.id != $id).map(|item| item.name.clone()).collect()
+        $collection
+            .iter()
+            .filter(|item| item.id != $id && item.state.is_working())
+            .map(|item| item.name.clone())
+            .collect()
     };
 }
 

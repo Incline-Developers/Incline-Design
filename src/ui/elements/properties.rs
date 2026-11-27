@@ -24,7 +24,7 @@ use crate::{
 /// and export dialogs are as tall (`dialogs::import_export`).
 pub(crate) const PREFERENCES_SIZE: egui::Vec2 = egui::vec2(600.0, 380.0);
 
-pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     if !editor.show_preferences {
         return;
     }
@@ -62,6 +62,7 @@ pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, comm
                     (PropertyTab::Interface, tr!("properties-interface")),
                     (PropertyTab::Camera, tr!("properties-camera")),
                     (PropertyTab::Performance, tr!("properties-performance")),
+                    (PropertyTab::Data, tr!("properties-data")),
                     (PropertyTab::Mcp, tr!("mcp-title")),
                     (PropertyTab::Developer, tr!("properties-developer")),
                 ] {
@@ -83,6 +84,7 @@ pub(crate) fn draw_preferences(ui: &mut egui::Ui, editor: &mut EditorState, comm
                         PropertyTab::Interface => draw_interface_settings(ui, editor, commands),
                         PropertyTab::Camera => draw_camera_settings(ui, editor, commands),
                         PropertyTab::Performance => draw_performance_settings(ui, editor, commands),
+                        PropertyTab::Data => draw_data_settings(ui, project, commands),
                         PropertyTab::Mcp => draw_mcp_settings(ui, editor, commands),
                         PropertyTab::Developer => draw_developer_settings(ui, editor, commands),
                     });
@@ -194,7 +196,7 @@ pub(crate) fn draw_selection_appearance(
                 .projects
                 .iter()
                 .find(|entry| entry.is_active)
-                .and_then(|entry| entry.layers.first())
+                .and_then(|entry| entry.layers.iter().find(|layer| layer.reference.is_none()))
                 .map(|layer| layer.id);
             editor.move_to_layer_dialog = Some(crate::ui::state::MoveToLayerDialog {
                 object_ids: objects,
@@ -506,6 +508,117 @@ fn draw_interface_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands
 
 /// The MCP server: on or off, its port, and where it is. Each change is made as it is committed, as the rest of Preferences'
 /// are, and saved apart from them (`mcp`).
+/// Preferences > Data: the OMF files every project shows read-only.
+fn draw_data_settings(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+    menu::menu_section(ui, tr!("data-references-title"));
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (project, commands);
+        menu::menu_note(ui, tr!("data-references-desktop-only"));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use crate::model::project::ReferenceStatus;
+
+        if project.data_references.is_empty() {
+            ui.label(egui::RichText::new(tr!("data-references-none")).weak());
+        }
+        const ICON: f32 = 16.0;
+        for reference in &project.data_references {
+            // Loaded, a reference says what it holds with its sections'
+            // icons; otherwise, why not.
+            let status = match &reference.status {
+                ReferenceStatus::Loading => Some((tr!("data-reference-loading"), false)),
+                ReferenceStatus::Loaded { .. } => None,
+                ReferenceStatus::Missing => Some((tr!("data-reference-missing"), true)),
+                ReferenceStatus::OpenAsProject => Some((tr!("data-reference-open-as-project"), false)),
+                ReferenceStatus::Failed(error) => Some((tr!("data-reference-failed", error = error.clone()), true)),
+            };
+            const BUTTON: f32 = 24.0;
+            ui.horizontal(|ui| {
+                // Room is kept for the two buttons, so a long path never
+                // pushes them out of the panel.
+                let room = (ui.available_width() - 2.0 * BUTTON - 2.0 - ui.spacing().item_spacing.x - 6.0).max(0.0);
+                ui.vertical(|ui| {
+                    ui.set_max_width(room);
+                    // Where the file is, which is what tells two references
+                    // apart. Too long for the panel, it loses its start: the
+                    // end names the file. Whole in the hint.
+                    let path = reference.path.display().to_string();
+                    let font = egui::TextStyle::Body.resolve(ui.style());
+                    let shown = elide_start(ui, &path, &font, room);
+                    ui.add(egui::Label::new(egui::RichText::new(shown).font(font).color(ui.visuals().strong_text_color())).wrap_mode(egui::TextWrapMode::Extend))
+                        .hint(path);
+                    match status {
+                        Some((text, failed)) => {
+                            let text = egui::RichText::new(text).small();
+                            ui.label(if failed { text.color(ui.visuals().warn_fg_color) } else { text.weak() });
+                        }
+                        None => {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                for (kind, label) in &reference.sections {
+                                    ui.add(egui::Image::new(crate::ui::elements::explorer::kind_icon(*kind)).fit_to_exact_size(egui::vec2(ICON, ICON)))
+                                        .hint(label.clone());
+                                }
+                            });
+                        }
+                    }
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    let button = |ui: &mut egui::Ui, image: egui::Image<'static>, tooltip: String, salt: &str| {
+                        ui.add(
+                            crate::ui::widgets::toolbar::ToolbarButton::new(image, tooltip)
+                                .id_salt(("data_reference", reference.id, salt))
+                                .button_side(BUTTON),
+                        )
+                        .clicked()
+                    };
+                    if button(
+                        ui,
+                        egui::Image::new(crate::ui::unthemed_icon!("delete_scenario.svg")),
+                        tr!("data-references-remove"),
+                        "remove",
+                    ) {
+                        commands.push(UiCommand::RemoveDataReference(reference.id));
+                    }
+                    if button(ui, egui::Image::new(crate::ui::themed_icon!(ui, "reload.svg")), tr!("data-references-reload"), "reload") {
+                        commands.push(UiCommand::ReloadDataReference(reference.id));
+                    }
+                });
+            });
+            ui.add_space(6.0);
+        }
+        menu::menu_actions(ui, |ui| {
+            if ui.add(menu::MenuButton::new(tr!("data-references-add")).primary()).clicked() {
+                commands.push(UiCommand::ChooseDataReference);
+            }
+        });
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// `text` as it fits in `width`: whole, or its end after an ellipsis.
+fn elide_start(ui: &egui::Ui, text: &str, font: &egui::FontId, width: f32) -> String {
+    let fits = |candidate: &str| ui.painter().layout_no_wrap(candidate.to_owned(), font.clone(), egui::Color32::PLACEHOLDER).size().x <= width;
+    if fits(text) {
+        return text.to_owned();
+    }
+    // The shortest cut from the start that fits: every cut longer fits too.
+    let cuts = text.char_indices().map(|(index, _)| index).collect::<Vec<_>>();
+    let (mut low, mut high) = (0, cuts.len());
+    while low < high {
+        let middle = (low + high) / 2;
+        if fits(&format!("…{}", &text[cuts[middle]..])) {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    cuts.get(low).map_or_else(|| "…".to_owned(), |&cut| format!("…{}", &text[cut..]))
+}
+
 fn draw_mcp_settings(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>) {
     menu::menu_section(ui, tr!("mcp-title"));
     #[cfg(target_arch = "wasm32")]

@@ -32,13 +32,13 @@ pub(crate) struct SolidPreviewScene<'frame> {
 
 pub(super) struct SolidPreviewTarget {
     texture: wgpu::Texture,
-    view: wgpu::TextureView,
+    pub(super) view: wgpu::TextureView,
     gui_view: wgpu::TextureView,
-    texture_id: egui::TextureId,
+    pub(super) texture_id: egui::TextureId,
     config: wgpu::SurfaceConfiguration,
-    size: PhysicalSize<u32>,
-    camera: Camera,
-    projection: Projection,
+    pub(super) size: PhysicalSize<u32>,
+    pub(super) camera: Camera,
+    pub(super) projection: Projection,
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
@@ -51,7 +51,7 @@ pub(super) struct SolidPreviewTarget {
 }
 
 impl SolidPreviewTarget {
-    fn new(graphics: &mut Graphics<'_>, size: PhysicalSize<u32>) -> Self {
+    pub(super) fn new(graphics: &mut Graphics<'_>, size: PhysicalSize<u32>) -> Self {
         let size = PhysicalSize::new(size.width.max(1), size.height.max(1));
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
@@ -140,7 +140,25 @@ impl SolidPreviewTarget {
         (texture, view, gui_view)
     }
 
-    fn recreate_targets(&mut self, graphics: &mut Graphics<'_>, size: PhysicalSize<u32>) {
+    /// Trade this target's camera, targets and size with the renderer's, so
+    /// the renderer's own passes draw into it. Called in pairs.
+    pub(super) fn swap_into(&mut self, graphics: &mut Graphics<'_>) {
+        std::mem::swap(&mut graphics.camera, &mut self.camera);
+        std::mem::swap(&mut graphics.projection, &mut self.projection);
+        std::mem::swap(&mut graphics.camera_uniform, &mut self.camera_uniform);
+        std::mem::swap(&mut graphics.camera_buffer, &mut self.camera_buffer);
+        std::mem::swap(&mut graphics.camera_bind_group, &mut self.camera_bind_group);
+        std::mem::swap(&mut graphics.msaa_color, &mut self.msaa_color);
+        std::mem::swap(&mut graphics.msaa_view, &mut self.msaa_view);
+        std::mem::swap(&mut graphics.depth_texture, &mut self.depth_texture);
+        std::mem::swap(&mut graphics.depth_view, &mut self.depth_view);
+        std::mem::swap(&mut graphics.block_model_transparency_targets, &mut self.transparency_targets);
+        std::mem::swap(&mut graphics.block_model_volume_target, &mut self.volume_target);
+        std::mem::swap(&mut graphics.config, &mut self.config);
+        std::mem::swap(&mut graphics.size, &mut self.size);
+    }
+
+    pub(super) fn recreate_targets(&mut self, graphics: &mut Graphics<'_>, size: PhysicalSize<u32>) {
         self.size = PhysicalSize::new(size.width.max(1), size.height.max(1));
         self.config.width = self.size.width;
         self.config.height = self.size.height;
@@ -175,7 +193,7 @@ fn mesh_bounds(meshes: &[OpenTriangulation]) -> Option<(glam::DVec3, glam::DVec3
 }
 
 /// Centre and bounding radius of a box.
-fn framing_of(lower: glam::DVec3, upper: glam::DVec3) -> (glam::DVec3, f64) {
+pub(super) fn framing_of(lower: glam::DVec3, upper: glam::DVec3) -> (glam::DVec3, f64) {
     // Half the diagonal, so the mesh stays inside the frame at every orbit
     // angle rather than only the one it was fitted at.
     ((lower + upper) * 0.5, ((upper - lower).length() * 0.5).max(1e-3))
@@ -412,19 +430,7 @@ impl Graphics<'_> {
         let framed = view.framed_center(center, radius);
         target.camera.look_to(framed - forward * distance, forward, glam::DVec3::Z, distance);
 
-        std::mem::swap(&mut self.camera, &mut target.camera);
-        std::mem::swap(&mut self.projection, &mut target.projection);
-        std::mem::swap(&mut self.camera_uniform, &mut target.camera_uniform);
-        std::mem::swap(&mut self.camera_buffer, &mut target.camera_buffer);
-        std::mem::swap(&mut self.camera_bind_group, &mut target.camera_bind_group);
-        std::mem::swap(&mut self.msaa_color, &mut target.msaa_color);
-        std::mem::swap(&mut self.msaa_view, &mut target.msaa_view);
-        std::mem::swap(&mut self.depth_texture, &mut target.depth_texture);
-        std::mem::swap(&mut self.depth_view, &mut target.depth_view);
-        std::mem::swap(&mut self.block_model_transparency_targets, &mut target.transparency_targets);
-        std::mem::swap(&mut self.block_model_volume_target, &mut target.volume_target);
-        std::mem::swap(&mut self.config, &mut target.config);
-        std::mem::swap(&mut self.size, &mut target.size);
+        target.swap_into(self);
 
         // The mesh is the only thing in this view, so the depth range follows
         // straight from its own extent rather than the scene's.
@@ -494,18 +500,6 @@ impl Graphics<'_> {
         );
         self.queue.submit(std::iter::once(encoder.finish()));
 
-        std::mem::swap(&mut self.camera, &mut target.camera);
-        std::mem::swap(&mut self.projection, &mut target.projection);
-        std::mem::swap(&mut self.camera_uniform, &mut target.camera_uniform);
-        std::mem::swap(&mut self.camera_buffer, &mut target.camera_buffer);
-        std::mem::swap(&mut self.camera_bind_group, &mut target.camera_bind_group);
-        std::mem::swap(&mut self.msaa_color, &mut target.msaa_color);
-        std::mem::swap(&mut self.msaa_view, &mut target.msaa_view);
-        std::mem::swap(&mut self.depth_texture, &mut target.depth_texture);
-        std::mem::swap(&mut self.depth_view, &mut target.depth_view);
-        std::mem::swap(&mut self.block_model_transparency_targets, &mut target.transparency_targets);
-        std::mem::swap(&mut self.block_model_volume_target, &mut target.volume_target);
-        std::mem::swap(&mut self.config, &mut target.config);
-        std::mem::swap(&mut self.size, &mut target.size);
+        target.swap_into(self);
     }
 }
