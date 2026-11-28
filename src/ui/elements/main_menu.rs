@@ -640,8 +640,8 @@ const PRODUCTION_MENUS: &[WorkspaceMenu] = &[
 ];
 
 const GEOLOGY_MENUS: &[WorkspaceMenu] = &[
-    // Leo's Design functions and every drawing tool, grouped by what each
-    // does to a string.
+    // The Production Design menu's functions and every drawing tool, grouped
+    // by what each does to a string.
     WorkspaceMenu {
         title: MenuTitle::GeologyDesign,
         groups: &[

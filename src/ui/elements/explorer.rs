@@ -1616,7 +1616,8 @@ pub(crate) fn draw_object_tree(ui: &mut egui::Ui, editor: &mut EditorState, proj
                             .trailing(if moved { SOURCE_MOVED_MARK_WIDTH } else { 0.0 });
                         let row = with_kind_badge(row, grid.section, MemberKind::PrismoidGrid).show(ui);
                         if let Some(slot) = row.trailing {
-                            // Denis's mark as he paints it, saying on hover what the row says.
+                            // The stale mark the optimisation scenarios show,
+                            // saying on hover what the row says.
                             let side = slot.height().min(slot.width()) - 6.0;
                             egui::Image::new(unthemed_icon!("status_stale.svg")).paint_at(ui, egui::Rect::from_center_size(slot.center(), egui::Vec2::splat(side)));
                             ui.interact(slot, egui::Id::unique(("explorer_prismoid_grid_moved", grid.id)), egui::Sense::hover())

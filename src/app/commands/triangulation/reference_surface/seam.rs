@@ -8,8 +8,7 @@
 //! slope there, read off its own nodes, and the other surface lies that far
 //! below a roof or above a floor. Beyond the outline of the points the
 //! spline's trend carries on for [`TREND_REACH`] and then holds, so it does
-//! not run on past the data [Heckscher & Saunders, "Precision in the dip";
-//! Heckscher, Hughes, Saunders & Owen 2024, "Beyond traditional methods"].
+//! not run on past the data.
 
 use anyhow::Result;
 use glam::{DVec2, DVec3};

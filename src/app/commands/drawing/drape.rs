@@ -178,7 +178,7 @@ impl<'a> App<'a> {
     }
 
     /// Once a frame: the one wait kept beside the job queue. A tree this drape
-    /// builds itself resumes it from the job. Leo's background build for a
+    /// builds itself resumes it from the job. The background build for a
     /// query has no job whose apply could, so while the drape waits on a tree
     /// another builder claimed, or on one no job builds any more (its own job
     /// cancelled, as unloading or deleting the surface does), this looks again

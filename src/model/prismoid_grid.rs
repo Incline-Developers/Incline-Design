@@ -42,7 +42,7 @@ pub(crate) const DEFAULT_PRISMOID_GRID_COLOR: [f32; 4] = [0.72, 0.72, 0.75, 1.0]
 pub(crate) const THICKNESS_RAMP: DrillColorPreset = DrillColorPreset::Rainbow;
 
 /// What a prismoid grid is coloured by: one of its values by name, or its
-/// vertical thickness with `None`, on one of Leo's colour scales.
+/// vertical thickness with `None`, on one of the drill colour scales.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct PrismoidColorBy {
@@ -4048,7 +4048,7 @@ impl PrismoidGrid {
 /// holding modelled ground, its place and numbers.
 #[derive(Clone, Debug)]
 pub(crate) struct RegularBoxes {
-    /// Boxes along x, y and z, by Leo's round-up rule.
+    /// Boxes along x, y and z, by the kriging grid's round-up.
     pub(crate) dims: [usize; 3],
     /// The categories in the order first met.
     pub(crate) labels: Vec<String>,
@@ -4093,7 +4093,7 @@ impl RegularBoxes {
 /// Why [`regular_boxes`] measured nothing.
 #[derive(Debug)]
 pub(crate) enum RegularRefusal {
-    /// Leo's grid rule refuses the envelope and block size.
+    /// The kriging grid refuses the envelope and block size.
     Grid,
     /// The grid at this position is not regular on the envelope's lattice.
     OffLattice(usize),
