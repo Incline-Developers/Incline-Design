@@ -2098,8 +2098,6 @@ io-worksheet-writes-two-files = Записує відомість під виб�
 cmd-file-exported-worksheet-path = Відомість виправлень експортовано в { $path }, а виправлення поруч із нею в { $records }
 cmd-file-worksheet-export-failed-error = Помилка експорту відомості виправлень: { $error }
 cmd-file-worksheet-no-corrections = У { $name } немає виправлень для експорту
-cmd-file-worksheet-only-unread-corrections = У { $name } немає виправлень, які ця версія може прочитати: { $count } записів виправлень збережено як є, але їх не можна експортувати
-cmd-file-worksheet-leaves-out-unread = До таблиці виправлень { $name } не потрапили { $count } записів виправлень, які ця версія не може прочитати; вони залишаються в проєкті як збережені
 state-export-corrections-worksheet = Експорт відомості виправлень
 
 ## Jobs strings
@@ -2206,9 +2204,6 @@ object-edit-vertices = Вершини
 
 omf-element-name-has-count-tie = Елемент «{ $name }» містить { $count } з'єднань зі свердловинами, яких у ньому вже немає
 omf-element-name-has-count-unreadable = Елемент «{ $name }» має нечитабельних робочих пластів: { $count }; їх пропущено
-omf-element-name-has-count-unreadable-strat = В елементі '{ $name }' нечитабельних стратиграфічних колонок: { $count }; їх пропущено
-omf-element-name-has-count-as-logged = В елементі '{ $name }' значень як записано, які не вдалося прочитати чи розмістити: { $count }; їх збережено, але не застосовано
-omf-element-name-strat-field-unreadable = В елемента '{ $name }' нечитабельне стратиграфічне поле; його пропущено
 omf-element-name-color-stops-unreadable = В елемента '{ $name }' замало кольорових зупинок для шкали; використано зупинки пресета
 omf-element-name-color-unreadable = В елемента '{ $name }' нечитабельні налаштування кольору; набір відкривається зі стандартними кольорами, а його робочі секції та стратиграфічні колонки пропущено
 omf-element-name-geophysics-unreadable = В елемента '{ $name }' нечитабельний геофізичний зв'язок; його пропущено
@@ -2217,7 +2212,6 @@ omf-element-name-names-unknown-section = Елемент «{ $name }» посил
 omf-quality-mark-unreadable = Не вдалося прочитати мітку показника на поверхні { $name }; вона відкривається як звичайна поверхня
 omf-layer-quality-mark-unreadable = Не вдалося прочитати мітку показника на шарі { $name }; його точки відкриваються як звичайні точки
 omf-ignoring-colour-map-omf-attribute = Кольорову карту атрибута OMF «{ $attribute }» проігноровано: { $error }
-omf-correction-records-unread = Не вдалося прочитати записів виправлень у { $name }: { $count }. Їх збережено як є, але не застосовано
 omf-corrections-unreadable = Не вдалося прочитати записи виправлення для { $name }; їх пропущено
 omf-mining-data-exported-incline = Гірничі дані, експортовані Incline
 omf-import = Імпорт OMF

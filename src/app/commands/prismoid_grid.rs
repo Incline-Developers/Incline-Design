@@ -600,7 +600,7 @@ impl App<'_> {
             value: name.clone(),
             from: ValueFrom::Difference {
                 other: other_name.clone(),
-                of: Some(quantity.clone()),
+                of: quantity.clone(),
             },
         };
         let compute = move |cancel: &CancelFlag, _: &Progress| -> Result<(PrismoidGrid, Vec<String>)> {

@@ -2041,8 +2041,6 @@ io-worksheet-writes-two-files = Menulis lembar dengan nama yang Anda pilih, satu
 cmd-file-exported-worksheet-path = Lembar koreksi diekspor ke { $path } dan koreksi di sampingnya ke { $records }
 cmd-file-worksheet-export-failed-error = Ekspor lembar koreksi gagal: { $error }
 cmd-file-worksheet-no-corrections = { $name } tidak memiliki koreksi untuk diekspor
-cmd-file-worksheet-only-unread-corrections = { $name } tidak memiliki koreksi yang dapat dibaca versi ini: { $count } catatan koreksinya disimpan apa adanya tetapi tidak dapat diekspor
-cmd-file-worksheet-leaves-out-unread = Lembar koreksi { $name } tidak menyertakan { $count } catatan koreksi yang tidak dapat dibaca versi ini; catatan itu tetap di proyek apa adanya
 state-export-corrections-worksheet = Ekspor Lembar Koreksi
 
 ## Jobs strings
@@ -2149,9 +2147,6 @@ object-edit-vertices = Verteks
 
 omf-element-name-has-count-tie = Elemen '{ $name }' memiliki { $count } sambungan yang menyebut lubang yang tidak lagi dimilikinya
 omf-element-name-has-count-unreadable = Elemen '{ $name }' memiliki { $count } working section yang tidak terbaca; working section tersebut dikecualikan
-omf-element-name-has-count-unreadable-strat = Elemen '{ $name }' memiliki { $count } kolom stratigrafi yang tidak terbaca; kolom itu dilewati
-omf-element-name-has-count-as-logged = Elemen '{ $name }' memiliki { $count } nilai as-logged yang tidak dapat dibaca atau ditempatkan; nilai itu disimpan tetapi tidak diterapkan
-omf-element-name-strat-field-unreadable = Elemen '{ $name }' memiliki bidang stratigrafi yang tidak terbaca; bidang itu dilewati
 omf-element-name-color-stops-unreadable = Elemen '{ $name }' memiliki terlalu sedikit titik warna untuk menggambar rampa; titik warna dari preset digunakan
 omf-element-name-color-unreadable = Elemen '{ $name }' memiliki pengaturan warna yang tidak dapat dibaca; set dibuka dengan warna bawaan, dan bagian kerja serta kolom strat-nya dilewati
 omf-element-name-geophysics-unreadable = Elemen '{ $name }' memiliki tautan geofisika yang tidak terbaca; tautan itu dilewati
@@ -2160,7 +2155,6 @@ omf-element-name-names-unknown-section = Elemen '{ $name }' menyebut seksi tidak
 omf-quality-mark-unreadable = Tanda kualitas pada permukaan { $name } tidak dapat dibaca; permukaan dibuka sebagai permukaan biasa
 omf-layer-quality-mark-unreadable = Tanda kualitas pada lapisan { $name } tidak dapat dibaca; titiknya dibuka sebagai titik biasa
 omf-ignoring-colour-map-omf-attribute = Mengabaikan peta warna pada atribut OMF '{ $attribute }': { $error }
-omf-correction-records-unread = { $count } catatan koreksi milik { $name } tidak dapat dibaca: disimpan apa adanya tetapi tidak diterapkan
 omf-corrections-unreadable = Catatan koreksi dari { $name } tidak dapat dibaca dan dikecualikan
 omf-mining-data-exported-incline = Data pertambangan yang diekspor oleh Incline
 omf-import = Impor OMF

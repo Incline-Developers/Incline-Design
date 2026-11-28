@@ -280,8 +280,8 @@ pub(crate) struct ProjectMetadata {
     pub(crate) coordinate_reference_system: String,
     #[serde(default)]
     pub(crate) units: String,
-    /// Left out while it holds the defaults, so a project that never changed
-    /// them writes and reads as it did before they existed.
+    /// Left out while it holds the defaults; a project without it reads
+    /// the defaults.
     #[serde(default, skip_serializing_if = "ModellingSettings::is_default")]
     pub(crate) modelling: ModellingSettings,
 }
@@ -290,10 +290,8 @@ pub(crate) struct ProjectMetadata {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SurfaceMethod {
-    /// The thin plate spline, exact through every point. Also what a method
-    /// this build does not have reads as, so an older project still opens.
+    /// The thin plate spline, exact through every point.
     #[default]
-    #[serde(other)]
     ThinPlateSpline,
 }
 

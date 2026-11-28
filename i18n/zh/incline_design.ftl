@@ -2041,8 +2041,6 @@ io-worksheet-writes-two-files = 以所选名称写入工作表，每组相同的
 cmd-file-exported-worksheet-path = 已将订正工作表导出到 { $path }，并将旁边的订正导出到 { $records }
 cmd-file-worksheet-export-failed-error = 订正工作表导出失败：{ $error }
 cmd-file-worksheet-no-corrections = { $name } 没有可导出的订正
-cmd-file-worksheet-only-unread-corrections = { $name } 没有此版本能够读取的订正：其 { $count } 条订正记录按原样保留，但无法导出
-cmd-file-worksheet-leaves-out-unread = { $name } 的订正工作表遗漏了 { $count } 条此版本无法读取的订正记录；它们按原样保留在项目中
 state-export-corrections-worksheet = 导出订正工作表
 
 ## Jobs strings
@@ -2149,9 +2147,6 @@ object-edit-vertices = 顶点
 
 omf-element-name-has-count-tie = 元素“{ $name }”有 { $count } 个连接指向其已不包含的炮孔
 omf-element-name-has-count-unreadable = 元素“{ $name }”有 { $count } 个无法读取的工作层段；已被排除
-omf-element-name-has-count-unreadable-strat = 元素 '{ $name }' 有 { $count } 个无法读取的地层列，已被略去
-omf-element-name-has-count-as-logged = 元素 '{ $name }' 有 { $count } 个无法读取或放置的原始记录值，已保留但不会应用
-omf-element-name-strat-field-unreadable = 元素 '{ $name }' 有一个无法读取的地层字段;已略过
 omf-element-name-color-stops-unreadable = 元素 '{ $name }' 的色标停靠点太少,无法绘制色带;已使用预设的停靠点
 omf-element-name-color-unreadable = 元素 '{ $name }' 的颜色设置无法读取;该集合以默认颜色打开,其工作分段和地层列已略过
 omf-element-name-geophysics-unreadable = 元素 '{ $name }' 有一个无法读取的地球物理链接;已略过
@@ -2160,7 +2155,6 @@ omf-element-name-names-unknown-section = 元素“{ $name }”指定了未知分
 omf-quality-mark-unreadable = 无法读取表面 { $name } 上的品质标记;它以普通表面打开
 omf-layer-quality-mark-unreadable = 无法读取图层 { $name } 上的品质标记;其点以普通点打开
 omf-ignoring-colour-map-omf-attribute = 忽略 OMF 属性“{ $attribute }”上的色彩图：{ $error }
-omf-correction-records-unread = { $name } 的 { $count } 条修正记录无法读取:它们按保存时的样子保留,但不会被应用
 omf-corrections-unreadable = { $name } 的订正记录无法读取，已被排除
 omf-mining-data-exported-incline = 由 Incline 导出的采矿数据
 omf-import = OMF 导入

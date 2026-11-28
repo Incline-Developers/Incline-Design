@@ -234,8 +234,8 @@ pub(crate) struct Correction {
 
 /// Numbers of drill-hole values and depths as a file holds them. JSON has no
 /// NaN or infinity, so such a number is written as its text and read back
-/// from it, and a null an earlier save left reads as NaN: a row survives a
-/// save whatever it holds. Finite values keep the shape they always had.
+/// from it: a row survives a save whatever it holds. Finite values are
+/// written as numbers.
 mod stored {
     pub(super) mod number {
         use std::fmt;
@@ -255,15 +255,15 @@ mod stored {
             deserializer.deserialize_any(Number)
         }
 
-        /// Reads a number as [`serialize`] writes it, and a null as NaN. Any
-        /// other text is no number, and the record holding it is not read.
+        /// Reads a number as [`serialize`] writes it. Any other text is no
+        /// number, and the record holding it is not read.
         struct Number;
 
         impl de::Visitor<'_> for Number {
             type Value = f64;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a number, \"NaN\", \"inf\", \"-inf\" or null")
+                formatter.write_str("a number, \"NaN\", \"inf\" or \"-inf\"")
             }
 
             fn visit_f64<E: de::Error>(self, number: f64) -> Result<f64, E> {
@@ -285,14 +285,6 @@ mod stored {
                     "-inf" => Ok(f64::NEG_INFINITY),
                     _ => Err(E::custom(format!("not a number: {text:?}"))),
                 }
-            }
-
-            fn visit_unit<E: de::Error>(self) -> Result<f64, E> {
-                Ok(f64::NAN)
-            }
-
-            fn visit_none<E: de::Error>(self) -> Result<f64, E> {
-                Ok(f64::NAN)
             }
         }
     }
@@ -1323,14 +1315,6 @@ pub(crate) struct DrillHoleDataset {
     /// Interval columns an Incline tool wrote and may write again. A column
     /// of the same name that came in with the data is never written over.
     pub(crate) derived_columns: BTreeSet<String>,
-    /// Records this build could not read, each after the count of readable
-    /// records saved before it: written back in that place, as saved, never
-    /// applied.
-    pub(crate) unread_corrections: Vec<(usize, serde_json::Value)>,
-    /// As-logged copies this build could not read or place, each with the
-    /// hole key it was saved under: written back apart from the readable
-    /// ones, under their own key, never applied.
-    pub(crate) unread_logged: Vec<(String, serde_json::Value)>,
     /// The records of each hole that change how deep it was, deletions that
     /// took out a row and floor moves, by index into `corrections`, worked
     /// out on first use after an edit. Not saved.
@@ -1355,8 +1339,6 @@ impl DrillHoleDataset {
             corrections: Vec::new(),
             charges: BTreeMap::new(),
             derived_columns: BTreeSet::new(),
-            unread_corrections: Vec::new(),
-            unread_logged: Vec::new(),
             deletions: std::sync::OnceLock::new(),
         };
         // The one gate every importer and project load passes through, so the
@@ -2375,16 +2357,6 @@ impl DrillHoleDataset {
                 .values()
                 .map(|charge| size_of::<usize>() + charge.estimated_bytes())
                 .fold(0usize, usize::saturating_add)
-            + self
-                .unread_corrections
-                .iter()
-                .map(|(_, value)| size_of::<(usize, serde_json::Value)>().saturating_add(json_bytes(value)))
-                .fold(0usize, usize::saturating_add)
-            + self
-                .unread_logged
-                .iter()
-                .map(|(key, value)| size_of::<(String, serde_json::Value)>().saturating_add(key.len()).saturating_add(json_bytes(value)))
-                .fold(0usize, usize::saturating_add)
     }
 
     pub(crate) fn field(&self, key: &str) -> Option<&DrillField> {
@@ -2531,15 +2503,13 @@ pub(crate) struct DrillColorState {
     #[serde(default)]
     pub(crate) by_working_section: bool,
     /// The order of each categorical field's codes down the deposit, kept
-    /// beside the working sections and read as leniently, so a project
-    /// written before there was one loads with none.
-    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "lenient_strat_columns")]
+    /// beside the working sections; a file without them loads with none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) strat_columns: Vec<StratColumn>,
     /// The field the strat column reads until one is picked by hand: the
     /// parent (seam) field an import found, else the field it ordered.
-    /// Written by import only and read as leniently as the columns, so a
-    /// project written before it loads with none.
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient_strat_field")]
+    /// Written by import only; a file without it loads with none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) strat_field: Option<String>,
     /// How the set is drawn. A set saved before there was a choice reads
     /// back at its true diameter, the look it was saved with; an imported
@@ -2941,20 +2911,6 @@ fn lenient_working_sections<'de, D: serde::Deserializer<'de>>(deserializer: D) -
     })
 }
 
-/// Reads the strat field; anything but a non-blank string reads as none.
-fn lenient_strat_field<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Field {
-        Key(String),
-        Unreadable(serde::de::IgnoredAny),
-    }
-    Ok(match Field::deserialize(deserializer)? {
-        Field::Key(key) if !key.trim().is_empty() => Some(key),
-        _ => None,
-    })
-}
-
 /// The codes a strat column keeps: no blank, no unknown, none twice.
 fn kept_strat_codes(codes: Vec<String>) -> Vec<String> {
     let mut kept: Vec<String> = Vec::with_capacity(codes.len());
@@ -2967,37 +2923,6 @@ fn kept_strat_codes(codes: Vec<String>) -> Vec<String> {
     kept
 }
 
-/// Reads the strat columns a field at a time, so one malformed entry costs
-/// only itself and not the colours saved beside it.
-fn lenient_strat_columns<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<StratColumn>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Entry {
-        Column(StratColumn),
-        Unreadable(serde::de::IgnoredAny),
-    }
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum List {
-        Entries(Vec<Entry>),
-        Unreadable(serde::de::IgnoredAny),
-    }
-    Ok(match List::deserialize(deserializer)? {
-        List::Entries(entries) => entries
-            .into_iter()
-            .filter_map(|entry| match entry {
-                Entry::Column(column) => Some(StratColumn {
-                    codes: kept_strat_codes(column.codes),
-                    ..column
-                }),
-                Entry::Unreadable(_) => None,
-            })
-            .filter(|column| !column.codes.is_empty())
-            .collect(),
-        List::Unreadable(_) => Vec::new(),
-    })
-}
-
 /// How many saved working sections the reader passes over in a colour
 /// state's JSON: each list entry that is not a section, or one for a value
 /// that is not a list. Nothing saved counts nothing.
@@ -3006,27 +2931,6 @@ pub(crate) fn skipped_working_sections(color: &serde_json::Value) -> usize {
         None | Some(serde_json::Value::Null) => 0,
         Some(serde_json::Value::Array(entries)) => entries.iter().filter(|entry| WorkingSection::deserialize(*entry).is_err()).count(),
         Some(_) => 1,
-    }
-}
-
-/// How many saved strat columns the reader passes over in a colour state's
-/// JSON, counted as [`skipped_working_sections`] counts: each list entry
-/// that is not a column, or one for a value that is not a list.
-pub(crate) fn skipped_strat_columns(color: &serde_json::Value) -> usize {
-    match color.get("strat_columns") {
-        None | Some(serde_json::Value::Null) => 0,
-        Some(serde_json::Value::Array(entries)) => entries.iter().filter(|entry| StratColumn::deserialize(*entry).is_err()).count(),
-        Some(_) => 1,
-    }
-}
-
-/// Whether a colour state's JSON saved a strat field the reader passes
-/// over: present, not null, and not a non-blank string.
-pub(crate) fn skipped_strat_field(color: &serde_json::Value) -> bool {
-    match color.get("strat_field") {
-        None | Some(serde_json::Value::Null) => false,
-        Some(serde_json::Value::String(key)) => key.trim().is_empty(),
-        Some(_) => true,
     }
 }
 
@@ -3784,23 +3688,6 @@ fn shares_table(interval: &DrillInterval, columns: &BTreeSet<&String>) -> bool {
 /// columns, and so could be of any table.
 fn in_table(interval: &DrillInterval, columns: &BTreeSet<&String>, derived: &BTreeSet<String>) -> bool {
     shares_table(interval, columns) || (interval.from.is_finite() && interval.to.is_finite() && interval.values.keys().all(|key| derived.contains(key)))
-}
-
-/// A rough measure of the memory a kept JSON value holds: a node's size each,
-/// plus its text and keys. Map leaves count as full and inner nodes not at all.
-fn json_bytes(value: &serde_json::Value) -> usize {
-    use serde_json::Value;
-    let node = size_of::<Value>();
-    match value {
-        Value::String(text) => node.saturating_add(text.len()),
-        Value::Array(items) => items.iter().fold(node, |sum, item| sum.saturating_add(json_bytes(item))),
-        // The map's B-tree leaves hold 11 slots each, filled or not.
-        Value::Object(map) => map.iter().fold(
-            node.saturating_add(map.len().div_ceil(11).saturating_mul(11 * size_of::<(String, Value)>() + 16)),
-            |sum, (key, item)| sum.saturating_add(key.len()).saturating_add(json_bytes(item).saturating_sub(size_of::<Value>())),
-        ),
-        _ => node,
-    }
 }
 
 /// Roughly how much memory `values` holds: per entry its key, its header

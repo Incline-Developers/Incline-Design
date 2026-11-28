@@ -2150,8 +2150,6 @@ io-worksheet-writes-two-files = يكتب الورقة بالاسم الذي تخ
 cmd-file-exported-worksheet-path = تم تصدير ورقة التصحيحات إلى { $path } والتصحيحات بجانبها إلى { $records }
 cmd-file-worksheet-export-failed-error = فشل تصدير ورقة التصحيحات: { $error }
 cmd-file-worksheet-no-corrections = لا توجد في { $name } تصحيحات للتصدير
-cmd-file-worksheet-only-unread-corrections = لا توجد في { $name } تصحيحات يمكن لهذا الإصدار قراءتها: سجلات التصحيح الـ { $count } محفوظة كما هي لكن لا يمكن تصديرها
-cmd-file-worksheet-leaves-out-unread = ورقة تصحيحات { $name } تستثني { $count } من سجلات التصحيح التي لا يستطيع هذا الإصدار قراءتها؛ وتبقى في المشروع كما حُفظت
 state-export-corrections-worksheet = تصدير ورقة التصحيحات
 
 ## Jobs strings
@@ -2258,9 +2256,6 @@ object-edit-vertices = الرؤوس
 
 omf-element-name-has-count-tie = العنصر «{ $name }» لديه { $count } توصيلات تشير إلى ثقوب لم يعد يحتويها
 omf-element-name-has-count-unreadable = العنصر «{ $name }» فيه { $count } من مقاطع العمل غير القابلة للقراءة؛ تم استبعادها
-omf-element-name-has-count-unreadable-strat = يحتوي العنصر '{ $name }' على { $count } من أعمدة الطبقات غير القابلة للقراءة؛ تم استبعادها
-omf-element-name-has-count-as-logged = يحتوي العنصر '{ $name }' على { $count } من قيم التسجيل الأصلي التي تعذرت قراءتها أو وضعها؛ تم الاحتفاظ بها دون تطبيقها
-omf-element-name-strat-field-unreadable = العنصر «{ $name }» فيه حقل طبقات غير قابل للقراءة؛ تم استبعاده
 omf-element-name-color-stops-unreadable = العنصر «{ $name }» فيه عدد قليل جدًا من نقاط الألوان لرسم تدرّج؛ استُخدمت نقاط الإعداد المسبق
 omf-element-name-color-unreadable = العنصر «{ $name }» فيه إعدادات ألوان لا يمكن قراءتها؛ تُفتح المجموعة بالألوان الافتراضية، واستُبعدت أقسام العمل وأعمدة الطبقات الخاصة بها
 omf-element-name-geophysics-unreadable = العنصر «{ $name }» فيه رابط جيوفيزيائي غير قابل للقراءة؛ تم استبعاده
@@ -2269,7 +2264,6 @@ omf-element-name-names-unknown-section = العنصر «{ $name }» يسمّي �
 omf-quality-mark-unreadable = تعذّرت قراءة علامة الجودة على السطح { $name }؛ يُفتح سطحًا عاديًا
 omf-layer-quality-mark-unreadable = تعذّرت قراءة علامة الجودة على الطبقة { $name }؛ تُفتح نقاطها نقاطًا عادية
 omf-ignoring-colour-map-omf-attribute = سيتم تجاهل خريطة الألوان في سمة OMF «{ $attribute }»: { $error }
-omf-correction-records-unread = تعذّرت قراءة { $count } من سجلات التصحيح الخاصة بـ { $name }: تُحفظ كما حُفظت لكنها لا تُطبَّق
 omf-corrections-unreadable = تعذّرت قراءة سجلات التصحيح الخاصة بـ { $name } وتم استبعادها
 omf-mining-data-exported-incline = بيانات تعدين صدّرها Incline
 omf-import = استيراد OMF

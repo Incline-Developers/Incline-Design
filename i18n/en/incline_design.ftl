@@ -4112,8 +4112,6 @@ io-worksheet-writes-two-files = Writes the worksheet under the name you choose, 
 cmd-file-exported-worksheet-path = Exported the corrections worksheet to { $path } and the corrections beside it to { $records }
 cmd-file-worksheet-export-failed-error = Corrections worksheet export failed: { $error }
 cmd-file-worksheet-no-corrections = { $name } has no corrections to export
-cmd-file-worksheet-only-unread-corrections = { $name } has no corrections this build can read: its { $count } correction records are kept as saved but cannot be exported
-cmd-file-worksheet-leaves-out-unread = The corrections worksheet of { $name } leaves out { $count } correction records this build cannot read; they stay in the project as saved
 state-export-corrections-worksheet = Export Corrections Worksheet
 
 ## Jobs strings
@@ -4226,9 +4224,6 @@ object-edit-vertices = Vertices
 
 omf-element-name-has-count-tie = Element '{ $name }' has { $count } tie-in(s) naming holes it no longer contains
 omf-element-name-has-count-unreadable = Element '{ $name }' has { $count } unreadable working section(s); they were left out
-omf-element-name-has-count-unreadable-strat = Element '{ $name }' has { $count } unreadable strat column(s); they were left out
-omf-element-name-has-count-as-logged = Element '{ $name }' has { $count } as-logged value(s) that could not be read or placed; they are kept but not applied
-omf-element-name-strat-field-unreadable = Element '{ $name }' has an unreadable strat field; it was left out
 omf-element-name-color-stops-unreadable = Element '{ $name }' has too few colour stops to draw a ramp; the preset's stops were used
 omf-element-name-color-unreadable = Element '{ $name }' has colour settings that could not be read; the set opens with the default colours, and its working sections and strat columns were left out
 omf-element-name-geophysics-unreadable = Element '{ $name }' has an unreadable geophysics link; it was left out
@@ -4237,7 +4232,6 @@ omf-element-name-names-unknown-section = Element '{ $name }' names an unknown se
 omf-quality-mark-unreadable = The quality mark on surface { $name } could not be read; it opens as a plain surface
 omf-layer-quality-mark-unreadable = The quality mark on layer { $name } could not be read; its points open as plain points
 omf-ignoring-colour-map-omf-attribute = Ignoring the colour map on OMF attribute '{ $attribute }': { $error }
-omf-correction-records-unread = { $count } correction records of { $name } could not be read: they are kept as saved but not applied
 omf-corrections-unreadable = The correction records of { $name } could not be read and were left out
 omf-damaged = This file is damaged or is not an Incline project
 omf-mining-data-exported-incline = Mining data exported by Incline

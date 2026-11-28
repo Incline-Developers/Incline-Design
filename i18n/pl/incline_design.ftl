@@ -2119,8 +2119,6 @@ io-worksheet-writes-two-files = Zapisuje arkusz pod wybraną nazwą, jeden wiers
 cmd-file-exported-worksheet-path = Wyeksportowano arkusz poprawek do { $path }, a poprawki obok do { $records }
 cmd-file-worksheet-export-failed-error = Eksport arkusza poprawek nie powiódł się: { $error }
 cmd-file-worksheet-no-corrections = { $name } nie ma poprawek do wyeksportowania
-cmd-file-worksheet-only-unread-corrections = { $name } nie ma poprawek, które ta wersja potrafi odczytać: jego { $count } rekordów poprawek zachowano w stanie zapisu, ale nie można ich wyeksportować
-cmd-file-worksheet-leaves-out-unread = Arkusz poprawek { $name } pomija { $count } rekordów poprawek, których ta wersja nie potrafi odczytać; pozostają w projekcie w stanie zapisu
 state-export-corrections-worksheet = Eksportuj arkusz poprawek
 
 ## Jobs strings
@@ -2227,9 +2225,6 @@ object-edit-vertices = Wierzchołki
 
 omf-element-name-has-count-tie = Element „{ $name }” ma { $count } połączeń wskazujących otwory, których już nie zawiera
 omf-element-name-has-count-unreadable = Element „{ $name }” ma nieczytelne przekroje robocze: { $count }; zostały pominięte
-omf-element-name-has-count-unreadable-strat = Element '{ $name }' ma nieczytelne kolumny stratygraficzne ({ $count }); pominięto je
-omf-element-name-has-count-as-logged = Element '{ $name }' ma wartości zapisane pierwotnie, których nie dało się odczytać lub umieścić ({ $count }); zostały zachowane, ale nie są stosowane
-omf-element-name-strat-field-unreadable = Element '{ $name }' ma nieczytelne pole stratygraficzne; pominięto je
 omf-element-name-color-stops-unreadable = Element '{ $name }' ma za mało punktów koloru do narysowania skali; użyto punktów ustawienia wstępnego
 omf-element-name-color-unreadable = Element '{ $name }' ma ustawienia kolorów, których nie udało się odczytać; zestaw otwiera się z kolorami domyślnymi, a jego sekcje robocze i kolumny stratygraficzne pominięto
 omf-element-name-geophysics-unreadable = Element '{ $name }' ma nieczytelne powiązanie geofizyczne; pominięto je
@@ -2238,7 +2233,6 @@ omf-element-name-names-unknown-section = Element „{ $name }” wskazuje niezna
 omf-quality-mark-unreadable = Nie można odczytać znacznika jakości na powierzchni { $name }; otwiera się jako zwykła powierzchnia
 omf-layer-quality-mark-unreadable = Nie można odczytać znacznika jakości na warstwie { $name }; jej punkty otwierają się jako zwykłe punkty
 omf-ignoring-colour-map-omf-attribute = Pominięto mapę kolorów atrybutu OMF „{ $attribute }”: { $error }
-omf-correction-records-unread = Nie udało się odczytać { $count } rekordów korekt elementu { $name }: są zachowane tak, jak zapisano, ale nie są stosowane
 omf-corrections-unreadable = Nie udało się odczytać rekordów poprawek zestawu { $name }; zostały pominięte
 omf-mining-data-exported-incline = Dane górnicze wyeksportowane przez Incline
 omf-import = Import OMF

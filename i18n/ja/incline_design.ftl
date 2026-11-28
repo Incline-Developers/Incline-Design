@@ -2070,8 +2070,6 @@ io-worksheet-writes-two-files = 選択した名前でワークシートを書き
 cmd-file-exported-worksheet-path = 訂正ワークシートを { $path } に、その隣の訂正を { $records } にエクスポートしました
 cmd-file-worksheet-export-failed-error = 訂正ワークシートのエクスポートに失敗しました: { $error }
 cmd-file-worksheet-no-corrections = { $name } にはエクスポートする訂正がありません
-cmd-file-worksheet-only-unread-corrections = { $name } には、このビルドで読める訂正がありません。{ $count } 件の訂正レコードは保存されたまま保持されますが、エクスポートできません
-cmd-file-worksheet-leaves-out-unread = { $name } の訂正ワークシートには、このビルドで読めない訂正レコード { $count } 件が含まれません。それらは保存されたままプロジェクトに残ります
 state-export-corrections-worksheet = 訂正ワークシートをエクスポート
 
 ## Jobs strings
@@ -2178,9 +2176,6 @@ object-edit-vertices = 頂点
 
 omf-element-name-has-count-tie = 要素「{ $name }」には、既に含まれていない孔を参照する結線が { $count } 件あります
 omf-element-name-has-count-unreadable = 要素 '{ $name }' には読み取れない作業セクションが { $count } 件あり、除外されました
-omf-element-name-has-count-unreadable-strat = 要素 '{ $name }' に読み取れない層序列が { $count } 件あり、除外されました
-omf-element-name-has-count-as-logged = 要素 '{ $name }' に読み取れない、または配置できない記録時の値が { $count } 件あります。値は保持されますが、適用されません
-omf-element-name-strat-field-unreadable = 要素 '{ $name }' には読み取れない層序フィールドがあり、除外されました
 omf-element-name-color-stops-unreadable = 要素 '{ $name }' はカラーランプを描くには色の停止点が少なすぎるため、プリセットの停止点を使いました
 omf-element-name-color-unreadable = 要素 '{ $name }' には読み取れない色設定があり、セットは既定の色で開き、作業セクションと層序列は除外されました
 omf-element-name-geophysics-unreadable = 要素 '{ $name }' には読み取れない物理探査リンクがあり、除外されました
@@ -2189,7 +2184,6 @@ omf-element-name-names-unknown-section = 要素 '{ $name }' は不明なセク�
 omf-quality-mark-unreadable = 面 { $name } の品質マークを読めませんでした。通常の面として開きます
 omf-layer-quality-mark-unreadable = レイヤー { $name } の品質マークを読めませんでした。点は通常の点として開きます
 omf-ignoring-colour-map-omf-attribute = OMF属性「{ $attribute }」のカラーマップを無視します: { $error }
-omf-correction-records-unread = { $name } の訂正レコード { $count } 件を読み取れませんでした。保存されたまま保持されますが、適用されません
 omf-corrections-unreadable = { $name } の訂正レコードを読み取れなかったため除外しました
 omf-mining-data-exported-incline = Incline によってエクスポートされた鉱山データ
 omf-import = OMFインポート

@@ -2041,8 +2041,6 @@ io-worksheet-writes-two-files = برگه را با نامی که انتخاب م
 cmd-file-exported-worksheet-path = برگهٔ تصحیحات به { $path } و تصحیحات کنار آن به { $records } صادر شد
 cmd-file-worksheet-export-failed-error = صادر کردن برگهٔ تصحیحات ناموفق بود: { $error }
 cmd-file-worksheet-no-corrections = { $name } تصحیحی برای صادر کردن ندارد
-cmd-file-worksheet-only-unread-corrections = { $name } تصحیحی ندارد که این نسخه بتواند بخواند: { $count } رکورد تصحیح آن همان‌طور که ذخیره شده نگه داشته می‌شود اما قابل صادر کردن نیست
-cmd-file-worksheet-leaves-out-unread = برگه تصحیحات { $name } تعداد { $count } رکورد تصحیح را که این نسخه نمی‌تواند بخواند کنار می‌گذارد؛ آن‌ها همان‌طور که ذخیره شده در پروژه می‌مانند
 state-export-corrections-worksheet = صادر کردن برگهٔ تصحیحات
 
 ## Jobs strings
@@ -2149,9 +2147,6 @@ object-edit-vertices = رأس‌ها
 
 omf-element-name-has-count-tie = عنصر «{ $name }» دارای { $count } اتصال است که نام چال‌هایی را دارد که دیگر در آن نیستند
 omf-element-name-has-count-unreadable = عنصر «{ $name }» دارای { $count } بخش کاری ناخوانا است؛ کنار گذاشته شدند
-omf-element-name-has-count-unreadable-strat = عنصر '{ $name }' دارای { $count } ستون چینه‌نگاری ناخوانا است؛ آنها کنار گذاشته شدند
-omf-element-name-has-count-as-logged = عنصر '{ $name }' دارای { $count } مقدار ثبت‌شده اولیه است که خوانده یا جایگذاری نشد؛ آنها نگه داشته می‌شوند اما اعمال نمی‌شوند
-omf-element-name-strat-field-unreadable = عنصر «{ $name }» دارای یک فیلد چینه‌شناسی ناخوانا است؛ نادیده گرفته شد
 omf-element-name-color-stops-unreadable = عنصر «{ $name }» نقطه‌های رنگی بسیار کمی برای رسم طیف دارد؛ نقطه‌های پیش‌تنظیم به کار رفتند
 omf-element-name-color-unreadable = عنصر «{ $name }» تنظیمات رنگی دارد که خوانده نشد؛ مجموعه با رنگ‌های پیش‌فرض باز می‌شود و بخش‌های کاری و ستون‌های چینه‌شناسی آن کنار گذاشته شدند
 omf-element-name-geophysics-unreadable = عنصر «{ $name }» دارای پیوند ژئوفیزیکی ناخوانا است؛ نادیده گرفته شد
@@ -2160,7 +2155,6 @@ omf-element-name-names-unknown-section = عنصر «{ $name }» بخش ناشن�
 omf-quality-mark-unreadable = نشان کیفیت روی سطح { $name } خوانده نشد؛ به‌صورت سطح ساده باز می‌شود
 omf-layer-quality-mark-unreadable = نشان کیفیت روی لایه { $name } خوانده نشد؛ نقطه‌هایش به‌صورت نقطه ساده باز می‌شوند
 omf-ignoring-colour-map-omf-attribute = نقشهٔ رنگ ویژگی OMF «{ $attribute }» نادیده گرفته می‌شود: { $error }
-omf-correction-records-unread = { $count } رکورد اصلاح مربوط به { $name } خوانده نشد: همان‌گونه که ذخیره شده‌اند نگه داشته می‌شوند اما اعمال نمی‌شوند
 omf-corrections-unreadable = رکوردهای تصحیح { $name } خوانده نشد و کنار گذاشته شد
 omf-mining-data-exported-incline = داده‌های معدنی صادرشده توسط Incline
 omf-import = وارد کردن OMF

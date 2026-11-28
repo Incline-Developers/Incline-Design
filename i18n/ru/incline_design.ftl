@@ -2104,8 +2104,6 @@ io-worksheet-writes-two-files = Записывает ведомость под �
 cmd-file-exported-worksheet-path = Ведомость исправлений экспортирована в { $path }, а исправления рядом с ней в { $records }
 cmd-file-worksheet-export-failed-error = Ошибка экспорта ведомости исправлений: { $error }
 cmd-file-worksheet-no-corrections = В { $name } нет исправлений для экспорта
-cmd-file-worksheet-only-unread-corrections = В { $name } нет исправлений, которые эта версия может прочитать: { $count } записей исправлений сохранены как есть, но их нельзя экспортировать
-cmd-file-worksheet-leaves-out-unread = В таблицу исправлений { $name } не вошли { $count } записей исправлений, которые эта версия не может прочитать; они остаются в проекте как сохранены
 state-export-corrections-worksheet = Экспорт ведомости исправлений
 
 ## Jobs strings
@@ -2212,9 +2210,6 @@ object-edit-vertices = Вершины
 
 omf-element-name-has-count-tie = Элемент «{ $name }» содержит { $count } соединений со скважинами, которых в нём больше нет
 omf-element-name-has-count-unreadable = В элементе «{ $name }» нечитаемых рабочих пачек: { $count }; они исключены
-omf-element-name-has-count-unreadable-strat = В элементе '{ $name }' нечитаемых стратиграфических колонок: { $count }; они пропущены
-omf-element-name-has-count-as-logged = В элементе '{ $name }' значений как записано, которые не удалось прочитать или разместить: { $count }; они сохранены, но не применяются
-omf-element-name-strat-field-unreadable = У элемента '{ $name }' нечитаемое стратиграфическое поле; оно было пропущено
 omf-element-name-color-stops-unreadable = У элемента '{ $name }' слишком мало цветовых остановок для шкалы; использованы остановки пресета
 omf-element-name-color-unreadable = У элемента '{ $name }' нечитаемые настройки цвета; набор открывается с цветами по умолчанию, а его рабочие секции и стратиграфические колонки были пропущены
 omf-element-name-geophysics-unreadable = У элемента '{ $name }' нечитаемая геофизическая связь; она была пропущена
@@ -2223,7 +2218,6 @@ omf-element-name-names-unknown-section = Элемент «{ $name }» указы
 omf-quality-mark-unreadable = Не удалось прочитать метку показателя у поверхности { $name }; она открывается как обычная поверхность
 omf-layer-quality-mark-unreadable = Не удалось прочитать метку показателя у слоя { $name }; его точки открываются как обычные точки
 omf-ignoring-colour-map-omf-attribute = Цветовая карта атрибута OMF «{ $attribute }» игнорируется: { $error }
-omf-correction-records-unread = Не удалось прочитать записей коррекции у { $name }: { $count }. Они сохранены как есть, но не применяются
 omf-corrections-unreadable = Не удалось прочитать записи исправления для { $name }; они исключены
 omf-mining-data-exported-incline = Горные данные, экспортированные Incline
 omf-import = Импорт OMF

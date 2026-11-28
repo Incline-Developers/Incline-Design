@@ -2139,8 +2139,6 @@ io-worksheet-writes-two-files = Schreibt das Arbeitsblatt unter dem gewählten N
 cmd-file-exported-worksheet-path = Korrektur-Arbeitsblatt nach { $path } exportiert und die Korrekturen daneben nach { $records }
 cmd-file-worksheet-export-failed-error = Export des Korrektur-Arbeitsblatts fehlgeschlagen: { $error }
 cmd-file-worksheet-no-corrections = { $name } hat keine Korrekturen zum Exportieren
-cmd-file-worksheet-only-unread-corrections = { $name } hat keine Korrekturen, die diese Version lesen kann: die { $count } Korrektursätze bleiben wie gespeichert erhalten, lassen sich aber nicht exportieren
-cmd-file-worksheet-leaves-out-unread = Das Korrekturarbeitsblatt von { $name } lässt { $count } Korrektursätze aus, die diese Version nicht lesen kann; sie bleiben wie gespeichert im Projekt
 state-export-corrections-worksheet = Korrektur-Arbeitsblatt exportieren
 
 ## Jobs strings
@@ -2247,9 +2245,6 @@ object-edit-vertices = Eckpunkte
 
 omf-element-name-has-count-tie = Element '{ $name }' hat { $count } Verbindung(en), die Löcher benennen, die es nicht mehr enthält
 omf-element-name-has-count-unreadable = Element '{ $name }' hat { $count } unlesbare(n) Abbauabschnitt(e); sie wurden ausgelassen
-omf-element-name-has-count-unreadable-strat = Element '{ $name }' hat { $count } nicht lesbare Schichtspalte(n); sie wurden weggelassen
-omf-element-name-has-count-as-logged = Element '{ $name }' hat { $count } Wert(e) wie protokolliert, die nicht gelesen oder zugeordnet werden konnten; sie bleiben erhalten, werden aber nicht angewendet
-omf-element-name-strat-field-unreadable = Element '{ $name }' hat ein unlesbares Schichtfeld; es wurde ausgelassen
 omf-element-name-color-stops-unreadable = Element '{ $name }' hat zu wenige Farbstopps für einen Verlauf; die Stopps der Vorlage wurden verwendet
 omf-element-name-color-unreadable = Element '{ $name }' hat Farbeinstellungen, die nicht gelesen werden konnten; der Satz öffnet mit den Standardfarben, seine Arbeitsabschnitte und Schichtspalten wurden ausgelassen
 omf-element-name-geophysics-unreadable = Element '{ $name }' hat eine unlesbare Geophysik-Verknüpfung; sie wurde ausgelassen
@@ -2258,7 +2253,6 @@ omf-element-name-names-unknown-section = Element '{ $name }' nennt einen unbekan
 omf-quality-mark-unreadable = Die Qualitätsmarke auf Fläche { $name } konnte nicht gelesen werden; sie öffnet als einfache Fläche
 omf-layer-quality-mark-unreadable = Die Qualitätsmarke auf Ebene { $name } konnte nicht gelesen werden; ihre Punkte öffnen als einfache Punkte
 omf-ignoring-colour-map-omf-attribute = Farbtabelle des OMF-Attributs '{ $attribute }' wird ignoriert: { $error }
-omf-correction-records-unread = { $count } Korrektursätze von { $name } konnten nicht gelesen werden: sie bleiben wie gespeichert erhalten, werden aber nicht angewendet
 omf-corrections-unreadable = Die Korrektursätze von { $name } konnten nicht gelesen werden und wurden ausgelassen
 omf-mining-data-exported-incline = Von Incline exportierte Bergbaudaten
 omf-import = OMF-Import

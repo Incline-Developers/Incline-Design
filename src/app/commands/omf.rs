@@ -58,26 +58,6 @@ pub(super) fn reconcile_restored_drill_color(open: &mut crate::model::drill_hole
             )
         );
     }
-    if !open.dataset.unread_corrections.is_empty() {
-        userspace_warn!(
-            "{}",
-            tr!(
-                "omf-correction-records-unread",
-                count = open.dataset.unread_corrections.len().to_string(),
-                name = open.name.clone().to_string()
-            )
-        );
-    }
-    if !open.dataset.unread_logged.is_empty() {
-        userspace_warn!(
-            "{}",
-            tr!(
-                "omf-element-name-has-count-as-logged",
-                name = open.name.clone().to_string(),
-                count = open.dataset.unread_logged.len().to_string()
-            )
-        );
-    }
     if open.color.by_working_section
         && let Some(field) = open.color.active_field.as_deref()
         && !open.color.working_sections.iter().any(|section| section.field == field)

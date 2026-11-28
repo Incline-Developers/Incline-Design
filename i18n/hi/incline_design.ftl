@@ -2041,8 +2041,6 @@ io-worksheet-writes-two-files = आपके चुने नाम से व�
 cmd-file-exported-worksheet-path = सुधार वर्कशीट { $path } में और उसके पास सुधार { $records } में निर्यात किए गए
 cmd-file-worksheet-export-failed-error = सुधार वर्कशीट निर्यात विफल रहा: { $error }
 cmd-file-worksheet-no-corrections = { $name } में निर्यात के लिए कोई सुधार नहीं है
-cmd-file-worksheet-only-unread-corrections = { $name } में इस बिल्ड द्वारा पढ़े जा सकने वाले कोई सुधार नहीं हैं: इसके { $count } सुधार रिकॉर्ड जैसे सहेजे गए थे वैसे ही रखे गए हैं, पर निर्यात नहीं किए जा सकते
-cmd-file-worksheet-leaves-out-unread = { $name } की सुधार वर्कशीट में { $count } सुधार रिकॉर्ड शामिल नहीं हैं जिन्हें यह बिल्ड नहीं पढ़ सकता; वे प्रोजेक्ट में जैसे सहेजे गए थे वैसे ही रहते हैं
 state-export-corrections-worksheet = सुधार वर्कशीट निर्यात करें
 
 ## Jobs strings
@@ -2149,9 +2147,6 @@ object-edit-vertices = शीर्ष
 
 omf-element-name-has-count-tie = तत्व '{ $name }' में { $count } टाई-इन हैं जो उन छेदों का नाम लेते हैं जो अब उसमें नहीं हैं
 omf-element-name-has-count-unreadable = तत्व '{ $name }' में { $count } अपठनीय कार्य खंड हैं; उन्हें छोड़ दिया गया
-omf-element-name-has-count-unreadable-strat = तत्व '{ $name }' में { $count } अपठनीय स्तर स्तंभ हैं; उन्हें छोड़ दिया गया
-omf-element-name-has-count-as-logged = तत्व '{ $name }' में { $count } जैसा-दर्ज मान हैं जिन्हें पढ़ा या रखा नहीं जा सका; उन्हें सहेजकर रखा गया है, पर लागू नहीं किया गया
-omf-element-name-strat-field-unreadable = तत्व '{ $name }' में एक अपठनीय स्तर-क्रम फ़ील्ड है; उसे छोड़ दिया गया
 omf-element-name-color-stops-unreadable = तत्व '{ $name }' में रैंप बनाने के लिए रंग स्टॉप बहुत कम हैं; प्रीसेट के स्टॉप इस्तेमाल किए गए
 omf-element-name-color-unreadable = तत्व '{ $name }' की रंग सेटिंग पढ़ी नहीं जा सकीं; सेट डिफ़ॉल्ट रंगों के साथ खुलता है, और उसके कार्य खंड तथा स्ट्रैट कॉलम छोड़ दिए गए
 omf-element-name-geophysics-unreadable = तत्व '{ $name }' में एक अपठनीय भूभौतिकी लिंक है; उसे छोड़ दिया गया
@@ -2160,7 +2155,6 @@ omf-element-name-names-unknown-section = तत्व '{ $name }' एक अज�
 omf-quality-mark-unreadable = सतह { $name } पर गुणवत्ता चिह्न पढ़ा नहीं जा सका; यह सादी सतह के रूप में खुलती है
 omf-layer-quality-mark-unreadable = परत { $name } पर गुणवत्ता चिह्न पढ़ा नहीं जा सका; इसके बिंदु सादे बिंदुओं के रूप में खुलते हैं
 omf-ignoring-colour-map-omf-attribute = OMF एट्रिब्यूट '{ $attribute }' का रंग मानचित्र अनदेखा किया जा रहा है: { $error }
-omf-correction-records-unread = { $name } के { $count } सुधार रिकॉर्ड पढ़े नहीं जा सके: वे जैसे सहेजे गए थे वैसे ही रखे गए हैं, पर लागू नहीं किए जाते
 omf-corrections-unreadable = { $name } के सुधार रिकॉर्ड पढ़े नहीं जा सके और छोड़ दिए गए
 omf-mining-data-exported-incline = Incline द्वारा निर्यात किया गया खनन डेटा
 omf-import = OMF आयात

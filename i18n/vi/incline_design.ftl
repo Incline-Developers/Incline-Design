@@ -2068,8 +2068,6 @@ io-worksheet-writes-two-files = Ghi bảng theo tên bạn chọn, mỗi nhóm h
 cmd-file-exported-worksheet-path = Đã xuất bảng hiệu chỉnh sang { $path } và các hiệu chỉnh bên cạnh sang { $records }
 cmd-file-worksheet-export-failed-error = Xuất bảng hiệu chỉnh thất bại: { $error }
 cmd-file-worksheet-no-corrections = { $name } không có hiệu chỉnh nào để xuất
-cmd-file-worksheet-only-unread-corrections = { $name } không có hiệu chỉnh nào mà bản này đọc được: { $count } bản ghi hiệu chỉnh của nó được giữ nguyên như đã lưu nhưng không thể xuất
-cmd-file-worksheet-leaves-out-unread = Bảng hiệu chỉnh của { $name } bỏ qua { $count } bản ghi hiệu chỉnh mà bản này không đọc được; chúng vẫn nằm trong dự án như đã lưu
 state-export-corrections-worksheet = Xuất bảng hiệu chỉnh
 
 ## Jobs strings
@@ -2176,9 +2174,6 @@ object-edit-vertices = Đỉnh
 
 omf-element-name-has-count-tie = Phần tử '{ $name }' có { $count } đấu nối đặt tên các lỗ khoan mà nó không còn chứa
 omf-element-name-has-count-unreadable = Phần tử '{ $name }' có { $count } phân đoạn làm việc không đọc được; chúng đã bị bỏ qua
-omf-element-name-has-count-unreadable-strat = Phần tử '{ $name }' có { $count } cột địa tầng không đọc được; chúng đã bị bỏ qua
-omf-element-name-has-count-as-logged = Phần tử '{ $name }' có { $count } giá trị như đã ghi không đọc hoặc đặt được; chúng được giữ lại nhưng không áp dụng
-omf-element-name-strat-field-unreadable = Phần tử '{ $name }' có một trường địa tầng không đọc được; nó đã bị bỏ qua
 omf-element-name-color-stops-unreadable = Phần tử '{ $name }' có quá ít điểm dừng màu để vẽ dải màu; đã dùng các điểm dừng của mẫu đặt sẵn
 omf-element-name-color-unreadable = Phần tử '{ $name }' có cài đặt màu không đọc được; bộ mở với màu mặc định, còn các phần làm việc và cột địa tầng của nó đã bị bỏ qua
 omf-element-name-geophysics-unreadable = Phần tử '{ $name }' có một liên kết địa vật lý không đọc được; nó đã bị bỏ qua
@@ -2187,7 +2182,6 @@ omf-element-name-names-unknown-section = Phần tử '{ $name }' chỉ định m
 omf-quality-mark-unreadable = Không đọc được dấu chỉ tiêu trên bề mặt { $name }; nó mở như bề mặt thường
 omf-layer-quality-mark-unreadable = Không đọc được dấu chỉ tiêu trên lớp { $name }; các điểm của nó mở như điểm thường
 omf-ignoring-colour-map-omf-attribute = Bỏ qua bảng màu trên thuộc tính OMF '{ $attribute }': { $error }
-omf-correction-records-unread = Không đọc được { $count } bản ghi hiệu chỉnh của { $name }: chúng được giữ nguyên như đã lưu nhưng không được áp dụng
 omf-corrections-unreadable = Không đọc được các bản ghi hiệu chỉnh của { $name } và chúng đã bị bỏ qua
 omf-mining-data-exported-incline = Dữ liệu khai thác được xuất bởi Incline
 omf-import = Nhập OMF

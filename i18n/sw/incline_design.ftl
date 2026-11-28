@@ -2122,8 +2122,6 @@ io-worksheet-writes-two-files = Huandika karatasi kwa jina unalochagua, mstari m
 cmd-file-exported-worksheet-path = Karatasi ya masahihisho imehamishwa kwenda { $path } na masahihisho kando yake kwenda { $records }
 cmd-file-worksheet-export-failed-error = Kuhamisha karatasi ya masahihisho kumeshindwa: { $error }
 cmd-file-worksheet-no-corrections = { $name } haina masahihisho ya kuhamisha
-cmd-file-worksheet-only-unread-corrections = { $name } haina masahihisho ambayo toleo hili linaweza kusoma: rekodi zake { $count } za masahihisho zimehifadhiwa kama zilivyohifadhiwa lakini haziwezi kuhamishwa
-cmd-file-worksheet-leaves-out-unread = Jedwali la masahihisho la { $name } linaacha rekodi { $count } za masahihisho ambazo toleo hili haliwezi kusoma; zinabaki kwenye mradi kama zilivyohifadhiwa
 state-export-corrections-worksheet = Hamisha Karatasi ya Masahihisho
 
 ## Jobs strings
@@ -2230,9 +2228,6 @@ object-edit-vertices = Vipeo
 
 omf-element-name-has-count-tie = Kipengele '{ $name }' kina viunganishi { $count } vinavyotaja mashimo ambayo hakina tena
 omf-element-name-has-count-unreadable = Kipengele '{ $name }' kina sehemu { $count } za kazi zisizosomeka; ziliachwa
-omf-element-name-has-count-unreadable-strat = Kipengele '{ $name }' kina safu wima { $count } za tabaka zisizosomeka; ziliachwa
-omf-element-name-has-count-as-logged = Kipengele '{ $name }' kina thamani { $count } za jinsi zilivyorekodiwa ambazo hazikuweza kusomwa au kuwekwa; zimehifadhiwa lakini hazitumiki
-omf-element-name-strat-field-unreadable = Kipengele '{ $name }' kina sehemu ya tabaka isiyosomeka; imeachwa
 omf-element-name-color-stops-unreadable = Kipengele '{ $name }' kina vituo vichache mno vya rangi kuchora mteremko; vituo vya mpangilio awali vilitumika
 omf-element-name-color-unreadable = Kipengele '{ $name }' kina mipangilio ya rangi isiyosomeka; seti hufunguka na rangi chaguomsingi, na sehemu zake za kazi na safu wima za tabaka ziliachwa
 omf-element-name-geophysics-unreadable = Kipengele '{ $name }' kina kiungo cha jiofizikia kisichosomeka; kimeachwa
@@ -2241,7 +2236,6 @@ omf-element-name-names-unknown-section = Kipengele '{ $name }' kinataja sehemu i
 omf-quality-mark-unreadable = Alama ya ubora kwenye uso { $name } haikusomeka; unafunguka kama uso wa kawaida
 omf-layer-quality-mark-unreadable = Alama ya ubora kwenye tabaka { $name } haikusomeka; pointi zake zinafunguka kama pointi za kawaida
 omf-ignoring-colour-map-omf-attribute = Inapuuza ramani ya rangi kwenye sifa ya OMF '{ $attribute }': { $error }
-omf-correction-records-unread = Rekodi { $count } za marekebisho za { $name } hazikuweza kusomwa: zimehifadhiwa kama zilivyohifadhiwa lakini hazitumiki
 omf-corrections-unreadable = Rekodi za sahihisho za { $name } hazikuweza kusomwa na ziliachwa
 omf-mining-data-exported-incline = Data ya madini iliyohamishwa na Incline
 omf-import = Uingizaji wa OMF

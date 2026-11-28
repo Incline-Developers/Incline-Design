@@ -2083,8 +2083,6 @@ io-worksheet-writes-two-files = Çizelgeyi seçtiğiniz adla yazar, inceleme iç
 cmd-file-exported-worksheet-path = Düzeltme çizelgesi { $path } konumuna, yanındaki düzeltmeler { $records } konumuna dışa aktarıldı
 cmd-file-worksheet-export-failed-error = Düzeltme çizelgesi dışa aktarımı başarısız oldu: { $error }
 cmd-file-worksheet-no-corrections = { $name } içinde dışa aktarılacak düzeltme yok
-cmd-file-worksheet-only-unread-corrections = { $name } içinde bu sürümün okuyabildiği düzeltme yok: { $count } düzeltme kaydı kaydedildiği gibi korunuyor ancak dışa aktarılamıyor
-cmd-file-worksheet-leaves-out-unread = { $name } düzeltme çalışma sayfası, bu sürümün okuyamadığı { $count } düzeltme kaydını dışarıda bırakıyor; kayıtlar projede kaydedildiği gibi kalıyor
 state-export-corrections-worksheet = Düzeltme Çizelgesini Dışa Aktar
 
 ## Jobs strings
@@ -2191,9 +2189,6 @@ object-edit-vertices = Köşeler
 
 omf-element-name-has-count-tie = '{ $name }' elemanının artık içermediği delikleri adlandıran { $count } bağlantısı var
 omf-element-name-has-count-unreadable = '{ $name }' öğesinde okunamayan { $count } çalışma damarı var; bunlar dışarıda bırakıldı
-omf-element-name-has-count-unreadable-strat = '{ $name }' öğesinde okunamayan { $count } tabaka sütunu var; bunlar dışarıda bırakıldı
-omf-element-name-has-count-as-logged = '{ $name }' öğesinde okunamayan veya yerleştirilemeyen { $count } kayıt anı değeri var; bunlar korunuyor ancak uygulanmıyor
-omf-element-name-strat-field-unreadable = '{ $name }' öğesinde okunamayan bir tabaka alanı var; atlandı
 omf-element-name-color-stops-unreadable = '{ $name }' öğesinde bir renk geçişi çizmek için çok az renk durağı var; ön ayarın durakları kullanıldı
 omf-element-name-color-unreadable = '{ $name }' öğesinde okunamayan renk ayarları var; küme varsayılan renklerle açılır, çalışma bölümleri ve tabaka sütunları atlandı
 omf-element-name-geophysics-unreadable = '{ $name }' öğesinde okunamayan bir jeofizik bağlantısı var; atlandı
@@ -2202,7 +2197,6 @@ omf-element-name-names-unknown-section = '{ $name }' öğesi bilinmeyen bir '{ $
 omf-quality-mark-unreadable = { $name } yüzeyindeki kalite işareti okunamadı; düz yüzey olarak açılıyor
 omf-layer-quality-mark-unreadable = { $name } katmanındaki kalite işareti okunamadı; noktaları düz nokta olarak açılıyor
 omf-ignoring-colour-map-omf-attribute = OMF '{ $attribute }' özniteliğindeki renk haritası yok sayılıyor: { $error }
-omf-correction-records-unread = { $name } öğesinin { $count } düzeltme kaydı okunamadı: kaydedildiği gibi korunuyor ancak uygulanmıyor
 omf-corrections-unreadable = { $name } için düzeltme kayıtları okunamadı ve dışarıda bırakıldı
 omf-mining-data-exported-incline = Incline tarafından dışa aktarılan maden verisi
 omf-import = OMF içe aktarma

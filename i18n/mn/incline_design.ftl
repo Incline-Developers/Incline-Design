@@ -2092,8 +2092,6 @@ io-worksheet-writes-two-files = Таны сонгосон нэрээр хүсн�
 cmd-file-exported-worksheet-path = Залруулгын хүснэгтийг { $path } руу, хажууд нь залруулгыг { $records } руу экспортоллоо
 cmd-file-worksheet-export-failed-error = Залруулгын хүснэгтийн экспорт амжилтгүй боллоо: { $error }
 cmd-file-worksheet-no-corrections = { $name }-д экспортлох залруулга алга
-cmd-file-worksheet-only-unread-corrections = { $name }-д энэ хувилбарын уншиж чадах залруулга алга: түүний { $count } залруулгын бичлэг хадгалсан хэвээрээ байгаа ч экспортлох боломжгүй
-cmd-file-worksheet-leaves-out-unread = { $name }-ийн залруулгын хуудаснаас энэ хувилбарын уншиж чадахгүй { $count } залруулгын бичлэг орхигдсон; тэд хадгалсан хэвээрээ төсөлд үлдэнэ
 state-export-corrections-worksheet = Залруулгын хүснэгт экспортлох
 
 ## Jobs strings
@@ -2200,9 +2198,6 @@ object-edit-vertices = Орой цэгүүд
 
 omf-element-name-has-count-tie = '{ $name }' элемент цаашид агуулаагүй цооногуудыг нэрлэсэн { $count } холболт агуулж байна
 omf-element-name-has-count-unreadable = '{ $name }' элементэд уншигдахгүй { $count } ажлын үе байна; тэдгээрийг хассан
-omf-element-name-has-count-unreadable-strat = '{ $name }' элемент уншигдахгүй { $count } давхраажилтын багана агуулсан тул орхигдуулав
-omf-element-name-has-count-as-logged = '{ $name }' элемент уншиж эсвэл байрлуулж чадаагүй { $count } анхны бүртгэлийн утга агуулсан; тэдгээрийг хадгалсан боловч ашиглаагүй
-omf-element-name-strat-field-unreadable = '{ $name }' элемент уншигдахгүй давхрагийн талбартай тул түүнийг алгассан
 omf-element-name-color-stops-unreadable = '{ $name }' элемент өнгөний градиент зурахад хэт цөөн өнгөний цэгтэй тул урьдчилсан тохиргооны цэгүүдийг ашигласан
 omf-element-name-color-unreadable = '{ $name }' элемент уншигдахгүй өнгөний тохиргоотой тул олонлог үндсэн өнгөөр нээгдэх бөгөөд ажлын хэсгүүд болон давхрагын баганыг алгассан
 omf-element-name-geophysics-unreadable = '{ $name }' элемент уншигдахгүй геофизикийн холбоостой тул түүнийг алгассан
@@ -2211,7 +2206,6 @@ omf-element-name-names-unknown-section = '{ $name }' элемент тодорх
 omf-quality-mark-unreadable = { $name } гадаргуу дээрх чанарын тэмдгийг уншиж чадсангүй; энгийн гадаргуу болж нээгдэнэ
 omf-layer-quality-mark-unreadable = { $name } давхарга дээрх чанарын тэмдгийг уншиж чадсангүй; цэгүүд нь энгийн цэг болж нээгдэнэ
 omf-ignoring-colour-map-omf-attribute = OMF-н '{ $attribute }' аттрибут дээрх өнгийн зургийг үл хэрэгсэж байна: { $error }
-omf-correction-records-unread = { $name }-ийн { $count } залруулгын бүртгэл уншигдсангүй: тэдгээр хадгалагдсан хэвээрээ үлдэх боловч хэрэгжихгүй
 omf-corrections-unreadable = { $name }-н залруулгын бичлэгүүдийг уншиж чадаагүй тул хассан
 omf-mining-data-exported-incline = Incline-с экспортолсон уул уурхайн өгөгдөл
 omf-import = OMF импорт

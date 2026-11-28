@@ -2075,8 +2075,6 @@ io-worksheet-writes-two-files = 선택한 이름으로 워크시트를 기록합
 cmd-file-exported-worksheet-path = 정정 워크시트를 { $path }(으)로, 그 옆의 정정을 { $records }(으)로 내보냈습니다
 cmd-file-worksheet-export-failed-error = 정정 워크시트 내보내기 실패: { $error }
 cmd-file-worksheet-no-corrections = { $name }에 내보낼 정정이 없습니다
-cmd-file-worksheet-only-unread-corrections = { $name }에는 이 빌드에서 읽을 수 있는 정정이 없습니다. 정정 기록 { $count }개는 저장된 그대로 보관되지만 내보낼 수 없습니다
-cmd-file-worksheet-leaves-out-unread = { $name }의 정정 워크시트에서 이 빌드가 읽을 수 없는 정정 기록 { $count }개가 제외되었습니다. 해당 기록은 저장된 그대로 프로젝트에 남아 있습니다
 state-export-corrections-worksheet = 정정 워크시트 내보내기
 
 ## Jobs strings
@@ -2183,9 +2181,6 @@ object-edit-vertices = 정점
 
 omf-element-name-has-count-tie = 요소 '{ $name }'에 더 이상 포함되지 않는 발파공을 지정하는 연결 { $count }개가 있습니다
 omf-element-name-has-count-unreadable = 요소 '{ $name }'에 읽을 수 없는 작업 구간이 { $count }개 있어 제외했습니다
-omf-element-name-has-count-unreadable-strat = 요소 '{ $name }'에 읽을 수 없는 층서 열이 { $count }개 있어 제외되었습니다
-omf-element-name-has-count-as-logged = 요소 '{ $name }'에 읽거나 배치할 수 없는 원본 기록 값이 { $count }개 있습니다. 값은 보존되지만 적용되지 않습니다
-omf-element-name-strat-field-unreadable = 요소 '{ $name }'에 읽을 수 없는 층서 필드가 있어 제외되었습니다
 omf-element-name-color-stops-unreadable = 요소 '{ $name }'의 색상 정지점이 너무 적어 색상 램프를 그릴 수 없어 프리셋의 정지점을 사용했습니다
 omf-element-name-color-unreadable = 요소 '{ $name }'에 읽을 수 없는 색상 설정이 있어 세트는 기본 색상으로 열리며 작업 구간과 층서 열은 제외되었습니다
 omf-element-name-geophysics-unreadable = 요소 '{ $name }'에 읽을 수 없는 물리탐사 링크가 있어 제외되었습니다
@@ -2194,7 +2189,6 @@ omf-element-name-names-unknown-section = 요소 '{ $name }'이(가) 알 수 없�
 omf-quality-mark-unreadable = 면 { $name }의 품질 표시를 읽지 못했습니다. 일반 면으로 엽니다
 omf-layer-quality-mark-unreadable = 레이어 { $name }의 품질 표시를 읽지 못했습니다. 점은 일반 점으로 엽니다
 omf-ignoring-colour-map-omf-attribute = OMF 속성 '{ $attribute }'의 색상 맵을 무시합니다: { $error }
-omf-correction-records-unread = { $name }의 수정 기록 { $count }개를 읽을 수 없습니다. 저장된 그대로 보관되지만 적용되지는 않습니다
 omf-corrections-unreadable = { $name }의 정정 레코드를 읽을 수 없어 제외했습니다
 omf-mining-data-exported-incline = Incline에서 내보낸 마이닝 데이터
 omf-import = OMF 가져오기

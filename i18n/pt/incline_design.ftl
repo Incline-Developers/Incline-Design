@@ -2096,8 +2096,6 @@ io-worksheet-writes-two-files = Grava a folha com o nome que escolher, uma linha
 cmd-file-exported-worksheet-path = Folha de correções exportada para { $path } e as correções ao lado para { $records }
 cmd-file-worksheet-export-failed-error = Falha ao exportar a folha de correções: { $error }
 cmd-file-worksheet-no-corrections = { $name } não tem correções para exportar
-cmd-file-worksheet-only-unread-corrections = { $name } não tem correções que esta versão consiga ler: os seus { $count } registos de correção são mantidos como foram guardados, mas não podem ser exportados
-cmd-file-worksheet-leaves-out-unread = A folha de correções de { $name } deixa de fora { $count } registos de correção que esta versão não consegue ler; permanecem no projeto como foram guardados
 state-export-corrections-worksheet = Exportar folha de correções
 
 ## Jobs strings
@@ -2204,9 +2202,6 @@ object-edit-vertices = Vértices
 
 omf-element-name-has-count-tie = O elemento «{ $name }» tem { $count } ligação(ões) que referem furos que já não contém
 omf-element-name-has-count-unreadable = O elemento '{ $name }' tem { $count } secção(ões) de trabalho ilegível(eis); foram excluídas
-omf-element-name-has-count-unreadable-strat = O elemento '{ $name }' tem { $count } coluna(s) estratigráfica(s) ilegível(is); foram omitidas
-omf-element-name-has-count-as-logged = O elemento '{ $name }' tem { $count } valor(es) como registrado(s) que não puderam ser lidos ou posicionados; foram mantidos, mas não aplicados
-omf-element-name-strat-field-unreadable = O elemento '{ $name }' tem um campo estratigráfico ilegível; foi omitido
 omf-element-name-color-stops-unreadable = O elemento '{ $name }' tem poucas paradas de cor para desenhar uma rampa; foram usadas as da predefinição
 omf-element-name-color-unreadable = O elemento '{ $name }' tem configurações de cor que não puderam ser lidas; o conjunto abre com as cores padrão e suas seções de trabalho e colunas estratigráficas foram omitidas
 omf-element-name-geophysics-unreadable = O elemento '{ $name }' tem um vínculo de geofísica ilegível; foi omitido
@@ -2215,7 +2210,6 @@ omf-element-name-names-unknown-section = O elemento '{ $name }' indica uma secç
 omf-quality-mark-unreadable = Não foi possível ler a marca de qualidade da superfície { $name }; ela abre como superfície simples
 omf-layer-quality-mark-unreadable = Não foi possível ler a marca de qualidade da camada { $name }; seus pontos abrem como pontos simples
 omf-ignoring-colour-map-omf-attribute = A ignorar o mapa de cores no atributo OMF '{ $attribute }': { $error }
-omf-correction-records-unread = { $count } registros de correção de { $name } não puderam ser lidos: ficam como foram salvos, mas não são aplicados
 omf-corrections-unreadable = Não foi possível ler os registos de correção de { $name } e foram excluídos
 omf-mining-data-exported-incline = Dados de mineração exportados pelo Incline
 omf-import = Importação OMF
