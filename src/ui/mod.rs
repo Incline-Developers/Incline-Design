@@ -675,8 +675,7 @@ fn viewport_message(editor: &EditorState) -> Option<ViewportMessage> {
 
 /// The distance read, then the segment's plan length, rise, bearing and
 /// grade: a reading, so all of it at full strength, as the strike and dip.
-/// The rise and degrees are signed unless they round to zero, the percent
-/// only when falling.
+/// The rise, degrees and percent are signed unless they round to zero.
 fn segment_readout_text(readout: &state::SegmentReadout, distance: String) -> String {
     let signed = |value: f64, places: usize| {
         let text = format!("{value:+.places$}");
@@ -696,7 +695,7 @@ fn segment_readout_text(readout: &state::SegmentReadout, distance: String) -> St
             rise = rise,
             bearing = format!("{bearing:06.2}"),
             grade = grade,
-            percent = signed(percent, 1).trim_start_matches('+').to_owned()
+            percent = signed(percent, 1)
         ),
         _ => tr!("ui-segment-readout-vertical", distance = distance, rise = rise, grade = grade),
     }

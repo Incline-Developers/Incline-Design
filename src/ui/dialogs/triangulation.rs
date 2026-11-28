@@ -1507,8 +1507,8 @@ pub(crate) fn draw_build_prismoid_grid_dialog(ui: &mut egui::Ui, editor: &mut Ed
             ui.separator();
 
             let loaded_id = |id: Option<TriangulationId>| id.filter(|id| loaded_name(Some(*id)).is_some());
-            // The pickers are Leo's and offer every loaded surface; a quality
-            // one, which the build refuses, keeps Build grey instead.
+            // The shared pickers offer every loaded surface; a quality one,
+            // which the build refuses, keeps Build grey instead.
             let quality = [editor.tri_prismoid_roof_id, editor.tri_prismoid_floor_id]
                 .into_iter()
                 .flatten()

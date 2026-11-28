@@ -4467,6 +4467,15 @@ impl OmfExportSelection {
     }
 }
 
+/// Why the canvas may not edit an object ([`EditorState::canvas_refusal`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CanvasRefusal {
+    Gone,
+    LayerLocked,
+    Locked,
+    Hidden,
+}
+
 impl EditorState {
     /// Pit Design is drawing the string of a new pit, rather than editing
     /// one in its panel.
@@ -4913,13 +4922,24 @@ impl EditorState {
     /// project's: it is there, shown, and not locked, which is what picking
     /// asks of anything it hands a tool.
     pub(crate) fn canvas_edits_object(&self, document: &crate::model::Document, id: ObjectId) -> bool {
+        self.canvas_refusal(document, id).is_none()
+    }
+
+    /// Why the canvas may not edit object `id` of `document`, or None when
+    /// it may. A layer lock is told first: it is mirrored onto the objects.
+    pub(crate) fn canvas_refusal(&self, document: &crate::model::Document, id: ObjectId) -> Option<CanvasRefusal> {
         let handle = SceneEntityId::Object(id);
-        document
-            .get_object(id)
-            .is_some_and(|object| document.layer(object.layer()).is_some_and(crate::model::Layer::is_visible) && !self.locked_layers.contains(&object.layer()))
-            && !document.is_object_hidden(id)
-            && !self.hidden_handles.contains(&handle)
-            && !self.frozen_handles.contains(&handle)
+        let Some(object) = document.get_object(id) else {
+            return Some(CanvasRefusal::Gone);
+        };
+        if self.locked_layers.contains(&object.layer()) {
+            return Some(CanvasRefusal::LayerLocked);
+        }
+        if self.frozen_handles.contains(&handle) {
+            return Some(CanvasRefusal::Locked);
+        }
+        let shown = document.layer(object.layer()).is_some_and(crate::model::Layer::is_visible) && !document.is_object_hidden(id) && !self.hidden_handles.contains(&handle);
+        (!shown).then_some(CanvasRefusal::Hidden)
     }
 
     /// The index of the ring drawn nearest `px` (physical px) within
@@ -8274,7 +8294,6 @@ impl UiCommand {
             | Self::SetDrillHoleWorkingSections { .. }
             | Self::CheckStratColumn { .. }
             | Self::OpenDrillHoleColorDialog(_)
-            | Self::LinkGeophysics(_)
             | Self::ReadHoleGeophysics { .. }
             | Self::OpenReferencePoints
             | Self::OpenReferenceSurface
@@ -8651,6 +8670,7 @@ impl UiCommand {
             Self::RemovePrismoidGrid(_) => report(tr!("state-remove-prismoid-grid"), String::new()),
             Self::SetBlockModelColorVariable { variable, .. } => report(tr!("state-set-block-model-variable"), variable.clone()),
             Self::ImportDrillHole(source) => report(tr!("state-import-drillholes"), source.display_name()),
+            Self::LinkGeophysics(_) => report(tr!("state-link-geophysics"), tr!("state-choose-one-more-files")),
             Self::CreateDrillPattern { name, collars, .. } => report(
                 tr!("common-create-drill-pattern"),
                 tr!("state-name-count-holes", name = name.to_string(), count = collars.len().to_string()),
@@ -12478,6 +12498,9 @@ pub(crate) struct PairsFile {
 pub(crate) struct ThicknessTable {
     pub(crate) name: String,
     pub(crate) surface: String,
+    /// The side of the seam the surface was built on, whose pick each
+    /// point stands at.
+    pub(crate) side: crate::model::drill_hole::ReferenceSide,
     pub(crate) points: Vec<crate::model::thickness_points::ThicknessPoint>,
 }
 

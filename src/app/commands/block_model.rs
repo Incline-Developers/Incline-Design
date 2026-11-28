@@ -1412,8 +1412,8 @@ pub(crate) fn regular_block_issue(envelope: Option<&ModelEnvelope>, grids: &[Reg
         }
         return Err(tr!("block-model-regular-not-multiple", sizes = sizes.join(", ")));
     }
-    // Counted in f64 by Leo's round-up before his grid is asked for, whose
-    // count overflows a 32-bit usize in the browser past 4.29e9 blocks.
+    // Counted in f64 by the kriging grid's round-up before that grid is asked,
+    // as its count overflows a 32-bit usize in the browser past 4.29e9 blocks.
     let (lower, upper) = crate::model::prismoid_grid::regular_frame(envelope, size);
     let spans = ((upper - lower) / size).ceil();
     let count = spans.x * spans.y * spans.z;
@@ -1468,7 +1468,7 @@ fn regular_refusal(refusal: RegularRefusal, grids: &[(&PrismoidGrid, &str, &str)
 /// whole box) where any grid has one, `prismoid_grid` (the label with the
 /// most volume, the earlier on a tie), `share <label>` for each label (its
 /// volume over the box), and the box's top and bottom RL as
-/// [`CORNER_HEIGHT_COLUMNS`]. Blocks follow Leo's regular order, x fastest,
+/// [`CORNER_HEIGHT_COLUMNS`]. Blocks follow the regular order, x fastest,
 /// then y, then z; the frame is the envelope's plan corner at the lowest
 /// cut of [`regular_frame`], and the extent the boxes' lattice.
 ///
@@ -1532,7 +1532,7 @@ fn regular_block_model(
     let whole = size.powi(3);
     let (origin, _) = crate::model::prismoid_grid::regular_frame(envelope, size);
     let base = origin.z;
-    // The measure gives rows outermost; Leo's regular models run x fastest,
+    // The measure gives rows outermost; regular models run x fastest,
     // then y, then z.
     let mut order: Vec<usize> = (0..boxes.at.len()).collect();
     order.sort_unstable_by_key(|index| {

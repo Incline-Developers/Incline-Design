@@ -37,6 +37,7 @@ pub(crate) struct DataTable<'a> {
     fingerprint: u64,
     max_height: f32,
     measure_last: usize,
+    scroll_bar_lane: bool,
 }
 
 /// A rectangular block of cells marked for copying: the cell the reader
@@ -86,6 +87,7 @@ impl<'a> DataTable<'a> {
             fingerprint: 0,
             max_height: f32::INFINITY,
             measure_last: 0,
+            scroll_bar_lane: false,
         }
     }
 
@@ -120,6 +122,13 @@ impl<'a> DataTable<'a> {
     /// most: rows a caller lists after its own.
     pub(crate) fn measure_last(mut self, rows: usize) -> Self {
         self.measure_last = rows;
+        self
+    }
+
+    /// Give the vertical scroll bar a lane of its own, rather than lying over
+    /// the last column.
+    pub(crate) fn scroll_bar_lane(mut self) -> Self {
+        self.scroll_bar_lane = true;
         self
     }
 
@@ -164,6 +173,10 @@ impl<'a> DataTable<'a> {
         let mut table_left: Option<f32> = None;
         let mut first_row_top: Option<f32> = None;
         let list_height = self.max_height.min(ui.available_height()).max(row_height * MIN_VISIBLE_ROWS);
+        let scroll = ui.spacing().scroll;
+        if self.scroll_bar_lane {
+            ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+        }
         let output = egui::ScrollArea::both()
             .id_salt(self.id.with("scroll"))
             .max_width(available)
@@ -216,6 +229,7 @@ impl<'a> DataTable<'a> {
                 }
             });
         ui.spacing_mut().item_spacing.y = spacing;
+        ui.spacing_mut().scroll = scroll;
 
         // Follows the pointer from here rather than from the origin row's
         // response, since that row can scroll out of view mid-drag.

@@ -239,6 +239,7 @@ impl<'a> App<'a> {
             return;
         }
         let Some((SceneEntityId::Object(id), _)) = self.pick_under_cursor() else {
+            userspace_log!("{}", tr!("cmd-string-click-missed"));
             return;
         };
         match self.editor.split_crossings_target.take() {
@@ -263,10 +264,9 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Take string `id` as the one to cut, read from its own project. A
-    /// locked string may cut another but is not cut itself.
+    /// Take string `id` as the one to cut, read from its own project.
     fn pick_crossings_target(&mut self, id: ObjectId) {
-        if !self.activate_project_for_object(id) || !self.editor.canvas_edits_object(self.active_document(), id) {
+        if !self.clicked_string_editable(id) {
             return;
         }
         let Some(string @ Object::Polyline { verts, closed, .. }) = self.active_document().get_object(id) else {
@@ -296,13 +296,18 @@ impl<'a> App<'a> {
         else {
             return;
         };
-        // The cutter as drawn, locked or not; the string itself is no cutter.
+        // The cutter as drawn; the string itself is no cutter.
         let Some(Object::Polyline {
             verts: cutter_verts,
             closed: cutter_closed,
             ..
         }) = self.scene_document.get_object(cutter).filter(|_| cutter != id)
         else {
+            if cutter == id {
+                userspace_log!("{}", tr!("ui-click-crossing-string"));
+            } else {
+                userspace_log!("{}", tr!("cmd-string-click-missed"));
+            }
             self.editor.split_crossings_target = Some(before);
             return;
         };
@@ -360,11 +365,11 @@ impl<'a> App<'a> {
             return;
         }
         let Some((SceneEntityId::Object(id), _)) = self.pick_under_cursor() else {
+            userspace_log!("{}", tr!("cmd-string-click-missed"));
             return;
         };
-        // Picking takes a locked string too: it may cut, not be cut. The
-        // string is read again from its own project, not from the scene.
-        if !self.activate_project_for_object(id) || !self.editor.canvas_edits_object(self.active_document(), id) {
+        // The string is read again from its own project, not from the scene.
+        if !self.clicked_string_editable(id) {
             return;
         }
         let Some(before @ Object::Polyline { verts, closed, .. }) = self.active_document().get_object(id) else {

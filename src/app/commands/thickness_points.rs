@@ -409,7 +409,7 @@ impl<'a> App<'a> {
                     if app.finish_thickness_points(runtime_id, made, against, surface_read.name, seam) && then_surface {
                         // Only after a run that applied: the surface job reads it.
                         if let Err(error) = app.make_seam_surface(against.0) {
-                            userspace_warn!("{}", format!("{error:#}"));
+                            userspace_warn!("{}", tr!("cmd-seam-surface-failed", error = format!("{error:#}")));
                         }
                     }
                 }
@@ -799,6 +799,7 @@ impl<'a> App<'a> {
         let table = Arc::new(ThicknessTable {
             name,
             surface,
+            side: chosen.side,
             points: run.points,
         });
         self.session.thickness_tables.insert((runtime_id, layer), table);
@@ -1073,7 +1074,7 @@ impl<'a> App<'a> {
                     app.session.seam_tables.insert(id, table);
                 }
             }
-            Err(error) if !crate::app::jobs::is_cancelled(&error) => crate::userspace_error!("{}", tr!("cmd-seam-surface-failed", error = format!("{error:#}"))),
+            Err(error) if !crate::app::jobs::is_cancelled(&error) => userspace_warn!("{}", tr!("cmd-seam-surface-failed", error = format!("{error:#}"))),
             Err(_) => {}
         };
         self.spawn_job_reporting_progress(tr!("cmd-seam-surface-making"), vec![project_key], compute, apply);

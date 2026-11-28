@@ -462,8 +462,9 @@ borehole-inspector-seam-depths = { $from }-{ $to }  { $thickness }
 borehole-inspector-seam-gap = ·
 borehole-inspector-seam-missing = Haipo kwenye shimo hili
 borehole-inspector-set-side = Safu wima ya seti
-borehole-inspector-strat = Stratigrafia
+borehole-inspector-strat-auto = { $field } (kiotomatiki)
 borehole-inspector-strat-column = Safu wima ya stratigrafia
+borehole-inspector-strat-field = Sehemu ya stratigrafia
 borehole-inspector-summary = Muhtasari
 prismoid-inspector-by-tonnes = tani, kutoka { $density }
 prismoid-inspector-by-volume = ujazo (gridi haina msongamano)
@@ -711,23 +712,61 @@ cmd-next-vertex-copied-vertices = Vipeo { $count } vimenakiliwa kando ya mfuatan
 cmd-string-rework-closed = Mfuatano uliofungwa hauna mwisho wa kuendeleza
 cmd-string-rework-changed = Mfuatano umebadilika, uchague tena
 cmd-string-rework-dropped = Kuendeleza au kuchora upya kulimalizika nafasi ya kazi ilipobadilika; pointi { $count } zilizochorwa hazikuhifadhiwa
-cmd-string-rework-redrew = Vipeo { $count } vimechorwa upya
+cmd-string-rework-redrew =
+    Sehemu imechorwa upya: { $removed ->
+        [one] kipeo { $removed } kimeondolewa
+       *[other] vipeo { $removed } vimeondolewa
+    }, { $count ->
+        [one] nukta { $count } imechorwa
+       *[other] nukta { $count } zimechorwa
+    }
 cmd-string-fill-short = Sehemu si ndefu kuliko nafasi
-cmd-string-fill-added = Sehemu imejazwa kwa vipeo vipya { $count }
+cmd-string-fill-added =
+    { $count ->
+        [one] Sehemu imejazwa kwa kipeo kipya { $count }
+       *[other] Sehemu imejazwa kwa vipeo vipya { $count }
+    }
 cmd-string-fill-too-many = Hilo lingeongeza vipeo { $count }; kiwango cha juu ni { $most }. Tumia nafasi kubwa zaidi, au gawanya sehemu kwa Ingiza Nukta kisha jaza kila sehemu
 cmd-string-split-into = Imegawanywa kuwa mifuatano { $count }
 cmd-string-split-opened = Pete imefunguliwa mahali mfuatano unapoikatiza
 cmd-string-split-no-crossing = Hakuna makutano kwenye mfuatano huo
 cmd-string-trim-removed = Kipande kati ya makutano kimeondolewa
+cmd-string-click-missed = Hakuna mstari unaoonekana usiofungwa chini ya kielekezi
+cmd-string-click-missed-vertex = Hakuna kipeo cha mstari unaoonekana usiofungwa chini ya kielekezi
+cmd-string-click-by-vertex = Karibu mno na kipeo: bofya sehemu mbali na ncha zake
+cmd-string-nudge-locked = Kipeo kilichoshikiliwa kiko kwenye mstari uliofichwa au uliofungwa, kwa hiyo kinabaki mahali kilipo
 cmd-object-edit-edited-kind = { $kind } imehaririwa
 cmd-object-edit-edited-kind-count-vertices = { $kind } imehaririwa (vipeo { $count })
 cmd-object-edit-no-changes-apply = Hakuna mabadiliko ya kutumia
 cmd-object-edit-object-changed-since-editor-opened = Kitu hiki kimebadilika tangu kihariri kufunguliwa; kifungue tena ili kuhariri toleo la sasa
 cmd-object-edit-target-changed = Lengo la uhariri wa kitu limebadilika; uhariri unaondolewa
 cmd-object-edit-object-no-longer-exists-document = Kitu hicho hakipo tena kwenye hati
-cmd-object-edit-no-strings-reverse = Hakuna mstari uliochaguliwa unaoweza kugeuzwa (umefichwa au umefungwa)
-cmd-object-edit-strings-read-same-reversed = Kila mstari uliochaguliwa husomeka sawa ukigeuzwa, kwa hiyo hakuna kilichobadilika
-cmd-object-edit-reversed-strings = Mistari { $count } imegeuzwa
+cmd-object-edit-no-strings-reverse = Hakuna mstari uliochaguliwa uliogeuzwa
+cmd-object-edit-strings-read-same-reversed =
+    { $count ->
+        [one] Mstari { $count } umeachwa kama ulivyo: husomeka sawa ukigeuzwa
+       *[other] Mistari { $count } imeachwa kama ilivyo: husomeka sawa ikigeuzwa
+    }
+cmd-object-edit-reversed-strings =
+    { $count ->
+        [one] Mstari { $count } umegeuzwa
+       *[other] Mistari { $count } imegeuzwa
+    }
+cmd-object-edit-reverse-left-layer-locked =
+    { $count ->
+        [one] Mstari { $count } kwenye safu iliyofungwa umeachwa kama ulivyo
+       *[other] Mistari { $count } kwenye safu zilizofungwa imeachwa kama ilivyo
+    }
+cmd-object-edit-reverse-left-locked =
+    { $count ->
+        [one] Mstari { $count } uliofungwa umeachwa kama ulivyo
+       *[other] Mistari { $count } iliyofungwa imeachwa kama ilivyo
+    }
+cmd-object-edit-reverse-left-hidden =
+    { $count ->
+        [one] Mstari { $count } uliofichwa umeachwa kama ulivyo
+       *[other] Mistari { $count } iliyofichwa imeachwa kama ilivyo
+    }
 cmd-object-edit-select-single-design-object-edit = Chagua kitu kimoja cha muundo ili kukihariri
 cmd-object-edit-unassigned = Haijawekwa
 cmd-offset-create-offset = Unda Mkabala
@@ -1154,8 +1193,22 @@ cmd-text-edit-finished = Umemaliza kuhariri maandishi ya kitu { $object_id }
 cmd-text-updated = Umesasisha maandishi kwenye kitu { $object_id }
 cmd-thin-nothing-removed = Hakuna kipeo ndani ya { $tolerance } m; hakuna kilichopunguzwa
 cmd-thin-thin-strings = Punguza Mistari
-cmd-thin-count-removed = Vipeo { $removed } kutoka mistari { $count }
-cmd-thin-thinned-count = Mistari { $count } imepunguzwa, vipeo { $removed } vimeondolewa
+cmd-thin-count-removed =
+    { $removed ->
+        [one] Kipeo { $removed }
+       *[other] Vipeo { $removed }
+    } kutoka { $count ->
+        [one] mstari { $count }
+       *[other] mistari { $count }
+    }
+cmd-thin-thinned-count =
+    { $count ->
+        [one] Mstari { $count } umepunguzwa
+       *[other] Mistari { $count } imepunguzwa
+    }, { $removed ->
+        [one] kipeo { $removed } kimeondolewa
+       *[other] vipeo { $removed } vimeondolewa
+    }
 cmd-thickness-not-a-grid = Haiwezi kupimwa dhidi ya { $name }: { $reason }
 cmd-thickness-not-a-grid-cells = si gridi moja ya kawaida ya seli za mraba, kama Jenga Uso inavyotengeneza
 cmd-thickness-not-a-grid-heights = vipeo vyake viwili vinashiriki kifundo kimoja cha gridi kwa urefu tofauti
@@ -1420,7 +1473,7 @@ csv-drill-hole-holes-hole-s-carry-overlapping = mashimo { $holes } yana vipindi 
 csv-drill-hole-skipped-row-reason = Safu imerukwa: { $reason }
 csv-drill-hole-row-attribute-not-number = { $file } safu { $row } ina '{ $value }' katika safu wima ya namba
 csv-drill-hole-row-repeats-dhid = { $file } safu { $row } inarudia DHID '{ $dhid }'
-csv-drill-hole-most-rows-unreadable = { $file }: safu { $skipped } kati ya { $count } hazikuweza kusomwa; sababu ziko kwenye konsoli
+csv-drill-hole-most-rows-unreadable = { $file }: safu { $skipped } kati ya { $count } hazikuweza kusomwa
 csv-drill-hole-file-maps-dip-column-twice = { $file } inapanga safu wima ya mteremko au mwinamo mara mbili
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } inapanga safu wima ya kina cha jumla mara mbili
 csv-drill-hole-total-depths-left-out =
@@ -1476,7 +1529,7 @@ csv-geophysics-row-column-count = { $file } safu { $row } ina safu wima { $found
 csv-geophysics-row-negative-depth = { $file } safu { $row } ina kina hasi
 csv-geophysics-row-no-depth = { $file } safu { $row } haina kina kinachosomeka
 csv-geophysics-file-s-path-not-valid = njia ya faili si UTF-8 halali, jambo ambalo mradi hauwezi kuhifadhi: badilisha jina la faili au folda yake kisha uiunganishe tena
-csv-geophysics-rows-skipped = { $file }: safu { $skipped } kati ya { $rows } hazikuweza kusomwa; sababu ziko kwenye dashibodi
+csv-geophysics-rows-skipped = { $file }: safu { $skipped } kati ya { $rows } hazikuweza kusomwa
 csv-geophysics-runs-not-grouped = Jiofizikia ya mashimo { $count } inakuja katika zaidi ya mfululizo mmoja, haijapangwa kwa shimo; kila mfululizo unaofuata huongeza kina ambacho shimo lake halina usomaji pekee: { $holes }
 csv-geophysics-linked-downhole-geophysics-from-file = Umeunganisha jiofizikia ya ndani ya shimo kutoka { $file }: mashimo { $holes }, mikunjo { $curves }; safu { $rows } zimesomwa, { $skipped } zimerukwa. Usomaji unabaki kwenye faili na husomwa shimo moja kwa wakati
 csv-geophysics-no-readings = hakuna usomaji
@@ -1527,7 +1580,11 @@ drill-hole-preset = Mpangilio
 drill-hole-px = px
 drill-hole-rainbow = Upinde wa mvua
 drill-hole-rename-out-of-sequence-hole = Kubadilisha jina { $from } kuwa { $to } kunaiweka nje ya mpangilio wa safu wima ya stratigrafia kwenye shimo hili.
-drill-hole-rename-out-of-sequence-holes = Kubadilisha jina { $from } kuwa { $to } kunaiweka nje ya mpangilio wa safu wima ya stratigrafia kwenye mashimo { $count }.
+drill-hole-rename-out-of-sequence-holes =
+    { $count ->
+        [one] Kubadilisha jina { $from } kuwa { $to } kunaiweka nje ya mpangilio wa safu wima ya stratigrafia kwenye shimo { $count }.
+       *[other] Kubadilisha jina { $from } kuwa { $to } kunaiweka nje ya mpangilio wa safu wima ya stratigrafia kwenye mashimo { $count }.
+    }
 drill-hole-rename-out-of-sequence-note = Tabaka zilizopinduliwa au kurudiwa ziko nje ya mpangilio, kwa hivyo kubadilisha jina hakuzuiwi. Sawa hubadilisha jina hata hivyo; Ghairi hurudi kwenye kubadilisha jina.
 drill-hole-rename-out-of-sequence-title = Nje ya Mpangilio
 drill-hole-rename-seam-every-hole-of = Kila shimo la
@@ -1907,6 +1964,7 @@ files-xy-grid-options = Chaguzi za Gridi ya XY
 geophysics-checking-geophysics-files = Inakagua faili za jiofizikia
 geophysics-downhole-geophysics-name-could-not = Jiofizikia ya ndani ya shimo ya '{ $name }' haikuweza kuunganishwa: { $error }
 geophysics-file-changed = Faili ya jiofizikia imebadilika tangu kielezo chake kilipotengenezwa
+geophysics-file-unchanged-kept = { $file } haijabadilika tangu ilipoorodheshwa; faharasa yake inahifadhiwa
 geophysics-file-cannot-be-opened = { $file } haiwezi kufunguliwa: { $error }
 geophysics-file-unreadable = Faili ya jiofizikia iliyounganishwa na '{ $name }' haiwezi kusomwa kwenye { $path } ({ $error }); iunganishe tena kutoka menyu ya kubofya kulia ya seti ya data
 geophysics-linked-changed-rereading = Jiofizikia iliyounganishwa na '{ $name }' imebadilika tangu kielezo chake kilipotengenezwa; inaisoma tena
@@ -2065,8 +2123,6 @@ io-worksheet-writes-two-files = Huandika karatasi kwa jina unalochagua, mstari m
 cmd-file-exported-worksheet-path = Karatasi ya masahihisho imehamishwa kwenda { $path } na masahihisho kando yake kwenda { $records }
 cmd-file-worksheet-export-failed-error = Kuhamisha karatasi ya masahihisho kumeshindwa: { $error }
 cmd-file-worksheet-no-corrections = { $name } haina masahihisho ya kuhamisha
-cmd-file-worksheet-only-unread-corrections = { $name } haina masahihisho ambayo toleo hili linaweza kusoma: rekodi zake { $count } za masahihisho zimehifadhiwa kama zilivyohifadhiwa lakini haziwezi kuhamishwa
-cmd-file-worksheet-leaves-out-unread = Jedwali la masahihisho la { $name } linaacha rekodi { $count } za masahihisho ambazo toleo hili haliwezi kusoma; zinabaki kwenye mradi kama zilivyohifadhiwa
 state-export-corrections-worksheet = Hamisha Karatasi ya Masahihisho
 
 ## Jobs strings
@@ -2173,9 +2229,6 @@ object-edit-vertices = Vipeo
 
 omf-element-name-has-count-tie = Kipengele '{ $name }' kina viunganishi { $count } vinavyotaja mashimo ambayo hakina tena
 omf-element-name-has-count-unreadable = Kipengele '{ $name }' kina sehemu { $count } za kazi zisizosomeka; ziliachwa
-omf-element-name-has-count-unreadable-strat = Kipengele '{ $name }' kina safu wima { $count } za tabaka zisizosomeka; ziliachwa
-omf-element-name-has-count-as-logged = Kipengele '{ $name }' kina thamani { $count } za jinsi zilivyorekodiwa ambazo hazikuweza kusomwa au kuwekwa; zimehifadhiwa lakini hazitumiki
-omf-element-name-strat-field-unreadable = Kipengele '{ $name }' kina sehemu ya tabaka isiyosomeka; imeachwa
 omf-element-name-color-stops-unreadable = Kipengele '{ $name }' kina vituo vichache mno vya rangi kuchora mteremko; vituo vya mpangilio awali vilitumika
 omf-element-name-color-unreadable = Kipengele '{ $name }' kina mipangilio ya rangi isiyosomeka; seti hufunguka na rangi chaguomsingi, na sehemu zake za kazi na safu wima za tabaka ziliachwa
 omf-element-name-geophysics-unreadable = Kipengele '{ $name }' kina kiungo cha jiofizikia kisichosomeka; kimeachwa
@@ -2184,7 +2237,6 @@ omf-element-name-names-unknown-section = Kipengele '{ $name }' kinataja sehemu i
 omf-quality-mark-unreadable = Alama ya ubora kwenye uso { $name } haikusomeka; unafunguka kama uso wa kawaida
 omf-layer-quality-mark-unreadable = Alama ya ubora kwenye tabaka { $name } haikusomeka; pointi zake zinafunguka kama pointi za kawaida
 omf-ignoring-colour-map-omf-attribute = Inapuuza ramani ya rangi kwenye sifa ya OMF '{ $attribute }': { $error }
-omf-correction-records-unread = Rekodi { $count } za marekebisho za { $name } hazikuweza kusomwa: zimehifadhiwa kama zilivyohifadhiwa lakini hazitumiki
 omf-corrections-unreadable = Rekodi za sahihisho za { $name } hazikuweza kusomwa na ziliachwa
 omf-mining-data-exported-incline = Data ya madini iliyohamishwa na Incline
 omf-import = Uingizaji wa OMF
@@ -2453,6 +2505,7 @@ state-keep-outside = Weka nje
 state-kriged-block-model = Mfano wa Vitalu wa Kriging
 state-load-block-model = Pakia Mfano wa Vitalu
 state-load-drillholes = Pakia Mashimo ya Uchimbaji
+state-link-geophysics = Unganisha Jiofizikia
 state-load-layer = Pakia Tabaka
 state-load-point-cloud = Pakia Wingu la Vidokezo
 state-load-raster = Pakia Rasta

@@ -1259,8 +1259,9 @@ borehole-inspector-seam-depths = { $from }-{ $to }  { $thickness }
 borehole-inspector-seam-gap = ·
 borehole-inspector-seam-missing = Not in this hole
 borehole-inspector-set-side = Set column
-borehole-inspector-strat = Strat
+borehole-inspector-strat-auto = { $field } (automatic)
 borehole-inspector-strat-column = Strat column
+borehole-inspector-strat-field = Strat field
 borehole-inspector-summary = Summary
 
 ## Prismoid inspector
@@ -1569,23 +1570,61 @@ cmd-next-vertex-copied-vertices = Copied { $count } vertices along the string
 cmd-string-rework-closed = A closed string has no end to carry on from
 cmd-string-rework-changed = The string changed, pick it again
 cmd-string-rework-dropped = The carry on or redraw ended when the workspace changed; its { $count } drawn point(s) were not saved
-cmd-string-rework-redrew = Redrew { $count } vertices
+cmd-string-rework-redrew =
+    Redrew the run: { $removed ->
+        [one] { $removed } vertex
+       *[other] { $removed } vertices
+    } taken out, { $count ->
+        [one] { $count } point
+       *[other] { $count } points
+    } drawn in
 cmd-string-fill-short = The segment is no longer than the spacing
-cmd-string-fill-added = Filled the segment with { $count } new vertices
+cmd-string-fill-added =
+    { $count ->
+        [one] Filled the segment with { $count } new vertex
+       *[other] Filled the segment with { $count } new vertices
+    }
 cmd-string-fill-too-many = That would add { $count } vertices; the most is { $most }. Use a larger spacing, or split the segment with Insert Point and fill each part
 cmd-string-split-into = Split into { $count } strings
 cmd-string-split-opened = Opened the ring where the string crosses it
 cmd-string-split-no-crossing = No crossing on that string
 cmd-string-trim-removed = Removed a piece between crossings
+cmd-string-click-missed = No shown, unlocked string under the cursor
+cmd-string-click-missed-vertex = No vertex of a shown, unlocked string under the cursor
+cmd-string-click-by-vertex = Too close to a vertex: click the segment away from its ends
+cmd-string-nudge-locked = The held vertex is on a hidden or locked string, so it stays where it is
 cmd-object-edit-edited-kind = Edited { $kind }
 cmd-object-edit-edited-kind-count-vertices = Edited { $kind } ({ $count } vertices)
 cmd-object-edit-no-changes-apply = No changes to apply
 cmd-object-edit-object-changed-since-editor-opened = This object changed since the editor opened; reopen it to edit the current version
 cmd-object-edit-target-changed = Object edit target changed; discarding the edit
 cmd-object-edit-object-no-longer-exists-document = That object no longer exists in the document
-cmd-object-edit-no-strings-reverse = No selected string can be reversed (hidden or locked)
-cmd-object-edit-strings-read-same-reversed = Every selected string reads the same reversed, so nothing changed
-cmd-object-edit-reversed-strings = Reversed { $count } string(s)
+cmd-object-edit-no-strings-reverse = No selected string was reversed
+cmd-object-edit-strings-read-same-reversed =
+    { $count ->
+        [one] Left { $count } string as it was: it reads the same reversed
+       *[other] Left { $count } strings as they were: they read the same reversed
+    }
+cmd-object-edit-reversed-strings =
+    { $count ->
+        [one] Reversed { $count } string
+       *[other] Reversed { $count } strings
+    }
+cmd-object-edit-reverse-left-layer-locked =
+    { $count ->
+        [one] Left { $count } string on a locked layer as it was
+       *[other] Left { $count } strings on locked layers as they were
+    }
+cmd-object-edit-reverse-left-locked =
+    { $count ->
+        [one] Left { $count } locked string as it was
+       *[other] Left { $count } locked strings as they were
+    }
+cmd-object-edit-reverse-left-hidden =
+    { $count ->
+        [one] Left { $count } hidden string as it was
+       *[other] Left { $count } hidden strings as they were
+    }
 cmd-object-edit-select-single-design-object-edit = Select a single design object to edit
 cmd-object-edit-unassigned = Unassigned
 cmd-offset-create-offset = Create Offset
@@ -2055,8 +2094,22 @@ cmd-text-edit-finished = Finished text edit for object { $object_id }
 cmd-text-updated = Updated text on object { $object_id }
 cmd-thin-nothing-removed = No vertex is within { $tolerance } m; nothing thinned
 cmd-thin-thin-strings = Thin Strings
-cmd-thin-count-removed = { $removed } vertices from { $count } string(s)
-cmd-thin-thinned-count = Thinned { $count } string(s), { $removed } vertices removed
+cmd-thin-count-removed =
+    { $removed ->
+        [one] { $removed } vertex
+       *[other] { $removed } vertices
+    } from { $count ->
+        [one] { $count } string
+       *[other] { $count } strings
+    }
+cmd-thin-thinned-count =
+    Thinned { $count ->
+        [one] { $count } string
+       *[other] { $count } strings
+    }, { $removed ->
+        [one] { $removed } vertex
+       *[other] { $removed } vertices
+    } removed
 cmd-thickness-not-a-grid = { $name } cannot be measured against: { $reason }
 cmd-thickness-not-a-grid-cells = it is not one regular grid of square cells, as Build Surface makes
 cmd-thickness-not-a-grid-heights = two of its vertices share a grid node at different heights
@@ -3371,7 +3424,7 @@ csv-drill-hole-holes-hole-s-carry-overlapping = { $holes } hole(s) carry overlap
 csv-drill-hole-skipped-row-reason = Skipped a row: { $reason }
 csv-drill-hole-row-attribute-not-number = { $file } row { $row } has '{ $value }' in a numeric column
 csv-drill-hole-row-repeats-dhid = { $file } row { $row } repeats DHID '{ $dhid }'
-csv-drill-hole-most-rows-unreadable = { $file }: { $skipped } of { $count } rows could not be read; the reasons are in the console
+csv-drill-hole-most-rows-unreadable = { $file }: { $skipped } of { $count } rows could not be read
 csv-drill-hole-file-maps-dip-column-twice = { $file } maps a dip or inclination column twice
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } maps a total depth column twice
 csv-drill-hole-total-depths-left-out =
@@ -3427,7 +3480,7 @@ csv-geophysics-row-column-count = { $file } row { $row } has { $found } columns;
 csv-geophysics-row-negative-depth = { $file } row { $row } has a negative depth
 csv-geophysics-row-no-depth = { $file } row { $row } has no readable depth
 csv-geophysics-file-s-path-not-valid = the file's path is not valid UTF-8, which a project cannot save: rename the file or its folder and link it again
-csv-geophysics-rows-skipped = { $file }: { $skipped } of { $rows } rows could not be read; the reasons are in the console
+csv-geophysics-rows-skipped = { $file }: { $skipped } of { $rows } rows could not be read
 csv-geophysics-runs-not-grouped = Geophysics for { $count } hole(s) comes in more than one run, not grouped by hole; each later run adds only depths its hole has no reading at: { $holes }
 csv-geophysics-linked-downhole-geophysics-from-file = Linked downhole geophysics from { $file }: { $holes } hole(s), curves { $curves }; { $rows } row(s) read, { $skipped } skipped. The readings stay in the file and are read a hole at a time
 csv-geophysics-no-readings = no readings
@@ -3484,7 +3537,11 @@ drill-hole-preset = Preset
 drill-hole-px = px
 drill-hole-rainbow = Rainbow
 drill-hole-rename-out-of-sequence-hole = Renaming { $from } to { $to } puts it out of the strat column's order in this hole.
-drill-hole-rename-out-of-sequence-holes = Renaming { $from } to { $to } puts it out of the strat column's order in { $count } holes.
+drill-hole-rename-out-of-sequence-holes =
+    { $count ->
+        [one] Renaming { $from } to { $to } puts it out of the strat column's order in { $count } hole.
+       *[other] Renaming { $from } to { $to } puts it out of the strat column's order in { $count } holes.
+    }
 drill-hole-rename-out-of-sequence-note = Overturned or repeated strata sit out of order, so the rename is not blocked. OK renames anyway; Cancel goes back to the rename.
 drill-hole-rename-out-of-sequence-title = Out of Sequence
 drill-hole-rename-seam-every-hole-of = Every hole of
@@ -3886,6 +3943,7 @@ files-xy-grid-options = XY Grid Options
 geophysics-checking-geophysics-files = Checking geophysics files
 geophysics-downhole-geophysics-name-could-not = Downhole geophysics for '{ $name }' could not be linked: { $error }
 geophysics-file-changed = The geophysics file changed since it was indexed
+geophysics-file-unchanged-kept = { $file } has not changed since it was indexed; its index is kept
 geophysics-file-cannot-be-opened = { $file } cannot be opened: { $error }
 geophysics-file-unreadable = The geophysics file linked to '{ $name }' cannot be read at { $path } ({ $error }); link it again from the dataset's right-click menu
 geophysics-linked-changed-rereading = The geophysics linked to '{ $name }' changed since it was indexed; reading it again
@@ -4055,8 +4113,6 @@ io-worksheet-writes-two-files = Writes the worksheet under the name you choose, 
 cmd-file-exported-worksheet-path = Exported the corrections worksheet to { $path } and the corrections beside it to { $records }
 cmd-file-worksheet-export-failed-error = Corrections worksheet export failed: { $error }
 cmd-file-worksheet-no-corrections = { $name } has no corrections to export
-cmd-file-worksheet-only-unread-corrections = { $name } has no corrections this build can read: its { $count } correction records are kept as saved but cannot be exported
-cmd-file-worksheet-leaves-out-unread = The corrections worksheet of { $name } leaves out { $count } correction records this build cannot read; they stay in the project as saved
 state-export-corrections-worksheet = Export Corrections Worksheet
 
 ## Jobs strings
@@ -4169,9 +4225,6 @@ object-edit-vertices = Vertices
 
 omf-element-name-has-count-tie = Element '{ $name }' has { $count } tie-in(s) naming holes it no longer contains
 omf-element-name-has-count-unreadable = Element '{ $name }' has { $count } unreadable working section(s); they were left out
-omf-element-name-has-count-unreadable-strat = Element '{ $name }' has { $count } unreadable strat column(s); they were left out
-omf-element-name-has-count-as-logged = Element '{ $name }' has { $count } as-logged value(s) that could not be read or placed; they are kept but not applied
-omf-element-name-strat-field-unreadable = Element '{ $name }' has an unreadable strat field; it was left out
 omf-element-name-color-stops-unreadable = Element '{ $name }' has too few colour stops to draw a ramp; the preset's stops were used
 omf-element-name-color-unreadable = Element '{ $name }' has colour settings that could not be read; the set opens with the default colours, and its working sections and strat columns were left out
 omf-element-name-geophysics-unreadable = Element '{ $name }' has an unreadable geophysics link; it was left out
@@ -4180,7 +4233,6 @@ omf-element-name-names-unknown-section = Element '{ $name }' names an unknown se
 omf-quality-mark-unreadable = The quality mark on surface { $name } could not be read; it opens as a plain surface
 omf-layer-quality-mark-unreadable = The quality mark on layer { $name } could not be read; its points open as plain points
 omf-ignoring-colour-map-omf-attribute = Ignoring the colour map on OMF attribute '{ $attribute }': { $error }
-omf-correction-records-unread = { $count } correction records of { $name } could not be read: they are kept as saved but not applied
 omf-corrections-unreadable = The correction records of { $name } could not be read and were left out
 omf-damaged = This file is damaged or is not an Incline project
 omf-mining-data-exported-incline = Mining data exported by Incline
@@ -4471,6 +4523,7 @@ state-keep-outside = Keep outside
 state-kriged-block-model = Kriged Block Model
 state-load-block-model = Load Block Model
 state-load-drillholes = Load Drillholes
+state-link-geophysics = Link Geophysics
 state-load-layer = Load Layer
 state-load-point-cloud = Load Point Cloud
 state-load-raster = Load Raster

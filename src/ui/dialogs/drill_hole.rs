@@ -16,21 +16,24 @@ use crate::{
     },
 };
 
+/// Whether a text field has focus. Read before the window body draws: a
+/// single-line TextEdit gives up focus the same frame it consumes Enter, so
+/// checking focus after the body would miss the very field the user just
+/// pressed Enter in.
+fn text_field_focused(ctx: &egui::Context) -> bool {
+    ctx.memory(|memory| memory.focused())
+        .is_some_and(|focused_id| egui::TextEdit::load_state(ctx, focused_id).is_some())
+}
+
 pub(crate) fn draw_drill_hole_color_dialog(ui: &mut egui::Ui, editor: &mut EditorState, datasets: &[OpenDrillHoleDataset], commands: &mut Vec<UiCommand>) {
     let Some(id) = editor.drill_hole_color_dialog else {
         return;
     };
-    let Some(dataset) = datasets.iter().find(|dataset| dataset.id == id) else {
+    let Some(dataset) = datasets.iter().find(|dataset| dataset.id == id && dataset.state.loaded) else {
         editor.drill_hole_color_dialog = None;
         return;
     };
-    // Captured before the window body draws: a single-line TextEdit gives up
-    // focus the same frame it consumes Enter, so checking focus after the
-    // body would miss the very field the user just pressed Enter in.
-    let text_field_focused = ui
-        .ctx()
-        .memory(|memory| memory.focused())
-        .is_some_and(|focused_id| egui::TextEdit::load_state(ui.ctx(), focused_id).is_some());
+    let text_field_focused = text_field_focused(ui.ctx());
     let mut open = true;
     let title = tr!("drill-hole-appearance-title", name = dataset.name.clone().to_string());
     DragableMenu::new("drill_hole_colour_dialog", title)
@@ -99,6 +102,8 @@ pub(crate) fn draw_seam_rename_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
         draw_out_of_sequence_warning(ui, editor, holes, commands);
         return;
     }
+    // Enter in a field only finishes the field, as in the colour dialog.
+    let text_field_focused = text_field_focused(ui.ctx());
     let mut open = true;
     let mut rename = false;
     // Read after the menu closes: `open` is borrowed by the window for as
@@ -134,7 +139,7 @@ pub(crate) fn draw_seam_rename_dialog(ui: &mut egui::Ui, editor: &mut EditorStat
                 .show(ui);
             menu::menu_note(ui, tr!("drill-hole-rename-seam-logged-name-kept"));
             menu::menu_actions(ui, |ui| {
-                let confirm = menu::dialog_confirmed(ui.ctx());
+                let confirm = !text_field_focused && menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("dialog-rename-submit")).primary().enabled(can_rename)).clicked() || confirm) && can_rename {
                     rename = true;
                 }
@@ -181,7 +186,7 @@ fn draw_out_of_sequence_warning(ui: &mut egui::Ui, editor: &mut EditorState, hol
     let to = draft.to.trim().to_owned();
     let text = match draft.scope {
         RenameScope::Horizon { .. } => tr!("drill-hole-rename-out-of-sequence-hole", from = draft.from.clone(), to = to),
-        RenameScope::Set => tr!("drill-hole-rename-out-of-sequence-holes", from = draft.from.clone(), to = to, count = holes.to_string()),
+        RenameScope::Set => tr!("drill-hole-rename-out-of-sequence-holes", from = draft.from.clone(), to = to, count = holes),
     };
     match out_of_sequence_warning(ui.ctx(), "seam_rename_out_of_sequence", text, tr!("drill-hole-rename-out-of-sequence-note")) {
         Some(true) => {
@@ -237,10 +242,7 @@ pub(crate) fn draw_boundary_move_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
     };
     // As in the colour dialog: Enter in a field only finishes the field, so
     // the move is never sent on a depth the dialog has not judged yet.
-    let text_field_focused = ui
-        .ctx()
-        .memory(|memory| memory.focused())
-        .is_some_and(|focused_id| egui::TextEdit::load_state(ui.ctx(), focused_id).is_some());
+    let text_field_focused = text_field_focused(ui.ctx());
     let mut open = true;
     let mut move_it = false;
     let mut cancel = false;
@@ -258,7 +260,9 @@ pub(crate) fn draw_boundary_move_dialog(ui: &mut egui::Ui, editor: &mut EditorSt
             let at = if roof { tr!("drill-hole-move-roof-at") } else { tr!("drill-hole-move-floor-at") };
             read_only_row(ui, &at, &format!("{:.2} m", draft.edit.at));
             ui.add_space(4.0);
-            MenuFieldF64::new(tr!("drill-hole-move-boundary-depth"), &mut draft.edit.to, 0.0..=draft.end)
+            // Unclamped: the note below refuses a depth outside the hole.
+            MenuFieldF64::new(tr!("drill-hole-move-boundary-depth"), &mut draft.edit.to, f64::MIN..=f64::MAX)
+                .help_text(tr!("drill-hole-insert-interval-depth-hint", end = shown_depth(draft.end)))
                 .speed(0.01)
                 .max_decimals(3)
                 .suffix(" m")
@@ -337,10 +341,7 @@ pub(crate) fn draw_interval_insert_dialog(ui: &mut egui::Ui, editor: &mut Editor
         return;
     }
     // As in the move dialog: Enter in a field only finishes the field.
-    let text_field_focused = ui
-        .ctx()
-        .memory(|memory| memory.focused())
-        .is_some_and(|focused_id| egui::TextEdit::load_state(ui.ctx(), focused_id).is_some());
+    let text_field_focused = text_field_focused(ui.ctx());
     let mut open = true;
     let mut insert = None;
     let mut cancel = false;
@@ -468,10 +469,7 @@ pub(crate) fn draw_interval_delete_dialog(ui: &mut egui::Ui, editor: &mut Editor
         .and_then(|hole| hole.intervals.get(draft.interval))
         .is_some_and(|row| same_interval(row, &draft.row));
 
-    let text_field_focused = ui
-        .ctx()
-        .memory(|memory| memory.focused())
-        .is_some_and(|focused_id| egui::TextEdit::load_state(ui.ctx(), focused_id).is_some());
+    let text_field_focused = text_field_focused(ui.ctx());
     let mut open = true;
     let mut delete = false;
     let mut cancel = false;
@@ -603,6 +601,7 @@ pub(crate) fn draw_name_shift_dialog(ui: &mut egui::Ui, editor: &mut EditorState
         editor.name_shift_dialog = None;
         return;
     }
+    let text_field_focused = text_field_focused(ui.ctx());
     let mut open = true;
     let mut shift = false;
     let mut cancel = false;
@@ -636,7 +635,7 @@ pub(crate) fn draw_name_shift_dialog(ui: &mut egui::Ui, editor: &mut EditorState
                 menu::menu_note(ui, tr!("drill-hole-shift-names-unknown-note"));
             }
             menu::menu_actions(ui, |ui| {
-                let confirm = menu::dialog_confirmed(ui.ctx());
+                let confirm = !text_field_focused && menu::dialog_confirmed(ui.ctx());
                 if (ui.add(MenuButton::new(tr!("drill-hole-shift-names-submit")).primary().enabled(can_shift)).clicked() || confirm) && can_shift {
                     shift = true;
                 }

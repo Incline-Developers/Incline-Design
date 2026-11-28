@@ -42,7 +42,7 @@ pub(crate) const DEFAULT_PRISMOID_GRID_COLOR: [f32; 4] = [0.72, 0.72, 0.75, 1.0]
 pub(crate) const THICKNESS_RAMP: DrillColorPreset = DrillColorPreset::Rainbow;
 
 /// What a prismoid grid is coloured by: one of its values by name, or its
-/// vertical thickness with `None`, on one of Leo's colour scales.
+/// vertical thickness with `None`, on one of the drill colour scales.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct PrismoidColorBy {
@@ -3649,13 +3649,8 @@ pub(crate) struct ValueSource {
 pub(crate) enum ValueFrom {
     /// Read from a quality surface, as the grid's density when `density`.
     Surface { surface: SourceStamp, density: bool },
-    /// A difference against the grid of this name, by `of`; `None` in a
-    /// record written before it was kept.
-    Difference {
-        other: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        of: Option<Quantity>,
-    },
+    /// A difference against the grid of this name, by `of`.
+    Difference { other: String, of: Quantity },
 }
 
 /// What a prismoid grid was built from and when, as it stood then.
@@ -3675,9 +3670,8 @@ pub(crate) struct BuildRecord {
     #[serde(default)]
     pub(crate) values: Vec<ValueSource>,
     /// The correction records bearing on the grid at the build, one print
-    /// per drill-hole set read; `None` in a record written before prints.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) holes: Option<Vec<SetPrint>>,
+    /// per drill-hole set read.
+    pub(crate) holes: Vec<SetPrint>,
 }
 
 impl BuildRecord {
@@ -3692,7 +3686,7 @@ impl BuildRecord {
             built: chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
             application: format!("Incline {}", env!("CARGO_PKG_VERSION")),
             values: Vec::new(),
-            holes: Some(holes),
+            holes,
         }
     }
 
@@ -3880,9 +3874,9 @@ pub(crate) fn present_name<'s>(stamp: &'s SourceStamp, project: &ProjectSources<
 /// `lattice`, and which are gone. A surface is found by its token, else
 /// by its name. The records of holes whose box meets the grid's plan
 /// rectangle have moved when their print differs from the one kept at the
-/// build, whatever they corrected; a set without a kept print, or a record
-/// written before prints, falls back to records dated after the build (an
-/// unreadable date counts as after). The dated records word the line.
+/// build, whatever they corrected; a set without a kept print falls back
+/// to records dated after the build (an unreadable date counts as after).
+/// The dated records word the line.
 pub(crate) fn staleness(record: &BuildRecord, lattice: &Lattice, project: &ProjectSources<'_>) -> Staleness {
     let mut found = Staleness::default();
     let built = chrono::DateTime::parse_from_rfc3339(&record.built).ok();
@@ -3890,7 +3884,7 @@ pub(crate) fn staleness(record: &BuildRecord, lattice: &Lattice, project: &Proje
     for (index, set) in project.drill_holes.iter().enumerate().filter(|(_, set)| set.loaded) {
         let inside = records_inside(lattice, set);
         let later: Vec<_> = inside.iter().filter(|held| built.zip(held.when).is_none_or(|(built, when)| when > built)).collect();
-        let kept = record.holes.as_ref().and_then(|prints| prints.iter().find(|print| print.set == set.set));
+        let kept = record.holes.iter().find(|print| print.set == set.set);
         let moved = match kept {
             Some(kept) => *kept != set_print(set.set, &inside),
             None => !later.is_empty(),
@@ -3929,7 +3923,7 @@ pub(crate) fn staleness(record: &BuildRecord, lattice: &Lattice, project: &Proje
             found.gone.push(Gone::Surface(stamp.name.clone()));
         }
     }
-    for print in record.holes.iter().flatten() {
+    for print in &record.holes {
         if !project.drill_holes.iter().any(|set| set.set == print.set) {
             found.gone.push(Gone::HoleSet(print.set.clone()));
         }
@@ -4054,7 +4048,7 @@ impl PrismoidGrid {
 /// holding modelled ground, its place and numbers.
 #[derive(Clone, Debug)]
 pub(crate) struct RegularBoxes {
-    /// Boxes along x, y and z, by Leo's round-up rule.
+    /// Boxes along x, y and z, by the kriging grid's round-up.
     pub(crate) dims: [usize; 3],
     /// The categories in the order first met.
     pub(crate) labels: Vec<String>,
@@ -4099,7 +4093,7 @@ impl RegularBoxes {
 /// Why [`regular_boxes`] measured nothing.
 #[derive(Debug)]
 pub(crate) enum RegularRefusal {
-    /// Leo's grid rule refuses the envelope and block size.
+    /// The kriging grid refuses the envelope and block size.
     Grid,
     /// The grid at this position is not regular on the envelope's lattice.
     OffLattice(usize),

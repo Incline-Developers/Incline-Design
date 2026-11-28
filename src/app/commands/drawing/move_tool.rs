@@ -2,13 +2,15 @@ use glam::DVec3;
 
 use crate::{
     app::{App, CollarMoveSession, GizmoDragConstraint, GizmoDragState, MoveSession, VertexDrag},
+    i18n::tr,
     logging::CommandReportSpec,
     model::{
         Command, Object, ObjectId, ObjectPoint, SceneEntityId,
         drill_hole::{DrillHoleRef, HolePlacement},
     },
     rendering::camera::SectionSlab,
-    ui::state::ActiveTool,
+    ui::state::{ActiveTool, CanvasRefusal},
+    userspace_log,
 };
 
 impl<'a> App<'a> {
@@ -639,6 +641,12 @@ impl<'a> App<'a> {
         if !self.editor.active_workspace.has_drawing_aids() {
             return;
         }
+        if let Some((id, _)) = self.editor.move_vertex_target
+            && !self.editor.canvas_edits_object(self.active_document(), id)
+        {
+            userspace_log!("{}", tr!("cmd-string-click-missed"));
+            return;
+        }
         let (Some(press_px), Some(start)) = (self.editor.cursor_screen_px, self.held_vertex_position()) else {
             return;
         };
@@ -721,10 +729,15 @@ impl<'a> App<'a> {
         }
         // Undo, or an edit by another path, may have taken the vertex away.
         let Some(target) = self.resolve_held_vertex() else {
+            userspace_log!("{}", tr!("edit-nudge-rl-click-vertex"));
             self.cancel_move_delta();
             return;
         };
         if self.held_vertex_position().is_none() {
+            match self.editor.canvas_refusal(self.active_document(), target.0) {
+                None | Some(CanvasRefusal::Gone) => userspace_log!("{}", tr!("edit-nudge-rl-click-vertex")),
+                Some(_) => userspace_log!("{}", tr!("cmd-string-nudge-locked")),
+            }
             self.cancel_move_delta();
             return;
         }

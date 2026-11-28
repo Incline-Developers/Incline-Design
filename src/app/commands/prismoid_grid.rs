@@ -600,7 +600,7 @@ impl App<'_> {
             value: name.clone(),
             from: ValueFrom::Difference {
                 other: other_name.clone(),
-                of: Some(quantity.clone()),
+                of: quantity.clone(),
             },
         };
         let compute = move |cancel: &CancelFlag, _: &Progress| -> Result<(PrismoidGrid, Vec<String>)> {
@@ -1231,7 +1231,7 @@ impl App<'_> {
         self.request_topology_redraw();
     }
 
-    /// Pick the prismoid a click on a drawn grid landed on, by Leo's
+    /// Pick the prismoid a click on a drawn grid landed on, by the scene's
     /// selection modes one grain down: the grid stays selected while any of
     /// its cells is. False when the point is on no active cell.
     pub(crate) fn pick_prismoid_cell(&mut self, id: PrismoidGridId, world: DVec3) -> bool {
@@ -1322,7 +1322,7 @@ impl App<'_> {
             })
     }
 
-    /// What a click in a 2D section picks, from Leo's ray `pick`: the
+    /// What a click in a 2D section picks, from the ray `pick`: the
     /// prismoid under the plane point when `accepts` takes it and nothing
     /// drawn in front of its fill was hit. Both mouse buttons pick here.
     pub(crate) fn with_section_cell_pick(&self, graphics: &Graphics<'_>, pick: Option<ScenePick>, accepts: impl Fn(&ScenePick) -> bool) -> Option<ScenePick> {
@@ -1336,10 +1336,10 @@ impl App<'_> {
         }
     }
 
-    /// Apply a marquee to the cell selection after Leo's box has applied its
-    /// own, in its modifier order: shift toggles each cell taken, ctrl adds,
-    /// as a plain box does during a tool's pick, and otherwise a plain box
-    /// replaces. The grid is selected while any of its cells is.
+    /// Apply a marquee to the cell selection after the scene's box has
+    /// applied its own, in its modifier order: shift toggles each cell taken,
+    /// ctrl adds, as a plain box does during a tool's pick, and otherwise a
+    /// plain box replaces. The grid is selected while any of its cells is.
     pub(crate) fn select_prismoid_cells_in_box(&mut self, start: (f32, f32), end: (f32, f32)) {
         let (toggle, add) = (self.modifiers.shift_key(), self.modifiers.control_key() || self.editor.selection_pick.is_some());
         let Some((id, taken)) = self.prismoid_cells_in_screen_rect(start, end, toggle || add) else {
@@ -1372,9 +1372,9 @@ impl App<'_> {
         self.editor.cell_selection = cell_selection(entity, grid, &name, stratum, cells, count);
     }
 
-    /// The cells a marquee takes, as Lucas's dig blocks ride Leo's box: of
-    /// one drawn grid, shown and not frozen, each active cell whose box
-    /// centre falls inside, or with none the cells masked by hand there,
+    /// The cells a marquee takes, as the Layout's dig blocks ride the scene's
+    /// box: of one drawn grid, shown and not frozen, each active cell whose
+    /// box centre falls inside, or with none the cells masked by hand there,
     /// kept to the section's slab when one is up; in a 2D section each
     /// crossed cell by the middle of its crossing. With
     /// `keep_held` the grid holding cells is asked first; otherwise, or with
@@ -1914,7 +1914,7 @@ fn crossing_centres(grid: &PrismoidGrid, slab: &SectionSlab) -> impl Iterator<It
 }
 
 /// Whether, in a 2D section, a prismoid under the plane point takes a click
-/// over Leo's `pick`: with nothing picked, a pick on a surface or a grid,
+/// over the ray `pick`: with nothing picked, a pick on a surface or a grid,
 /// both drawn here only as cut lines, or a pick behind the cell's fill,
 /// which sits [`SECTION_FILL_DEPTH_TIE_M`] behind the plane and hides it.
 pub(crate) fn section_cell_wins(pick: Option<&ScenePick>, slab: &SectionSlab, forward: DVec3) -> bool {

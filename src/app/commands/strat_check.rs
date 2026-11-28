@@ -9,7 +9,9 @@ use crate::{
     i18n::tr,
     model::{
         drill_hole::{DrillFieldKind, DrillHoleDataset, DrillHoleId, WorkingSection, tidy_working_sections},
-        strat_order::{HoleFlag, MajorityOrder, Stop, default_strat_field, flagged_holes, flags_against_until, majority_order, majority_order_until, seeded_sections},
+        strat_order::{
+            HoleFlag, MajorityOrder, Stop, default_strat_field, flagged_holes, flags_against_until, is_ply_key, majority_order, majority_order_until, seam_field, seeded_sections,
+        },
     },
     ui::state::StratCheckReport,
     userspace_log, userspace_warn,
@@ -87,16 +89,39 @@ impl ImportedStrat {
 
 /// The strat column a freshly imported `dataset` starts with, on the most
 /// detailed field, and the check of the field the Column tab opens on, the
-/// parent when one is found. Pure and silent, for the import's worker;
-/// `None` when there is no field to order.
+/// parent when one is found. A ply field with no proved parent gives way to
+/// the seam field when the set has one ordering two seams or more. Pure and
+/// silent, for the import's worker; `None` when there is no field to order.
 pub(crate) fn imported_strat(dataset: &DrillHoleDataset) -> Option<ImportedStrat> {
-    let field = default_strat_field(&dataset.fields, &[], None)?.key.clone();
-    let found = majority_order(dataset, &field)?;
+    let mut field = default_strat_field(&dataset.fields, &[], None)?.key.clone();
+    let mut found = majority_order(dataset, &field)?;
+    // A ply column with no proved parent is read only when no seam column
+    // orders two seams or more: a set of one seam is ordered by its plies.
+    let seam = if found.parent.is_none() && is_ply_key(&field) {
+        seam_field(&dataset.fields).filter(|seam| seam.key != field).and_then(|seam| {
+            majority_order(dataset, &seam.key)
+                .filter(|order| order.order.len() >= 2)
+                .map(|order| (seam.key.clone(), order))
+        })
+    } else {
+        None
+    };
+    let swapped = seam.is_some();
+    if let Some((seam, order)) = seam {
+        field = seam;
+        found = order;
+    }
     if found.order.is_empty() {
         return None;
     }
     let (sections, _) = tidy_working_sections(seeded_sections(&found, &field), &dataset.fields);
-    let recorded = found.parent.as_ref().map_or_else(|| field.clone(), |parent| parent.field.clone());
+    // Having given way to the seam column, the import never records a ply
+    // column found as its parent.
+    let recorded = found
+        .parent
+        .as_ref()
+        .filter(|parent| !swapped || !is_ply_key(&parent.field))
+        .map_or_else(|| field.clone(), |parent| parent.field.clone());
     let shown = default_strat_field(&dataset.fields, &sections, Some(&recorded))
         .filter(|shown| shown.key != field)
         .map(|shown| {

@@ -133,7 +133,7 @@ impl<'a> App<'a> {
     /// left selected, ready for Build Surface. A locked or hidden string is
     /// left alone.
     pub(crate) fn explode_polyline_to_points(&mut self, object_id: ObjectId) {
-        if !self.activate_project_for_object(object_id) || !self.editor.canvas_edits_object(self.active_document(), object_id) {
+        if !self.clicked_string_editable(object_id) {
             return;
         }
         let source = match self.active_document().get_object(object_id) {

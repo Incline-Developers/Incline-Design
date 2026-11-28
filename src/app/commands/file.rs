@@ -1061,28 +1061,21 @@ impl<'a> App<'a> {
                 },
             ),
             #[cfg(target_arch = "wasm32")]
-            FileDialogAction::WebDownloadCorrectionsWorksheet { id, stem } => {
-                let (name, unread) = self
-                    .drill_holes
-                    .iter()
-                    .find(|item| item.id == id)
-                    .map(|item| (item.name.clone(), item.dataset.unread_corrections.len()))
-                    .unwrap_or_default();
-                self.spawn_drill_hole_tables_download(
-                    id,
-                    tr!("cmd-file-exporting-name", name = stem.clone()),
-                    vec![format!("{stem}_worksheet.csv"), format!("{stem}_corrections.csv")],
-                    |dataset| {
-                        let tables = crate::model::formats::csv_drill_hole::write_worksheet(dataset);
-                        vec![tables.worksheet, tables.corrections]
-                    },
-                    tr!("err-file-desc-corrections-worksheet"),
-                    move |result| match result {
-                        Ok(()) => warn_worksheet_leaves_out(&name, unread),
-                        Err(error) => userspace_warn!("{}", tr!("cmd-file-worksheet-export-failed-error", error = format!("{error:#}"))),
-                    },
-                )
-            }
+            FileDialogAction::WebDownloadCorrectionsWorksheet { id, stem } => self.spawn_drill_hole_tables_download(
+                id,
+                tr!("cmd-file-exporting-name", name = stem.clone()),
+                vec![format!("{stem}_worksheet.csv"), format!("{stem}_corrections.csv")],
+                |dataset| {
+                    let tables = crate::model::formats::csv_drill_hole::write_worksheet(dataset);
+                    vec![tables.worksheet, tables.corrections]
+                },
+                tr!("err-file-desc-corrections-worksheet"),
+                |result| {
+                    if let Err(error) = result {
+                        userspace_warn!("{}", tr!("cmd-file-worksheet-export-failed-error", error = format!("{error:#}")))
+                    }
+                },
+            ),
             #[cfg(target_arch = "wasm32")]
             FileDialogAction::WebDownloadBlockModelCsv { id, file_name, close_after } => {
                 let block_model = self
@@ -2020,7 +2013,7 @@ impl<'a> App<'a> {
             return;
         };
         if dataset.dataset.corrections.is_empty() {
-            warn_worksheet_has_nothing(&dataset.name, dataset.dataset.unread_corrections.len());
+            userspace_warn!("{}", tr!("cmd-file-worksheet-no-corrections", name = dataset.name.to_owned()));
             return;
         }
         let stem = drill_hole_export_stem(&dataset.name);
@@ -2052,10 +2045,9 @@ impl<'a> App<'a> {
             .with_context(|| tr!("cmd-file-selected-drillhole-dataset-no-longer"))?;
         // The records may have been undone while the save dialog was open.
         if dataset.dataset.corrections.is_empty() {
-            warn_worksheet_has_nothing(&dataset.name, dataset.dataset.unread_corrections.len());
+            userspace_warn!("{}", tr!("cmd-file-worksheet-no-corrections", name = dataset.name.to_owned()));
             return Ok(());
         }
-        let (name, unread) = (dataset.name.clone(), dataset.dataset.unread_corrections.len());
         if path.extension().is_none() {
             path.set_extension("csv");
         }
@@ -2074,10 +2066,7 @@ impl<'a> App<'a> {
                 vec![tables.worksheet, tables.corrections]
             },
             move |result| match result {
-                Ok(()) => {
-                    userspace_log!("{message}");
-                    warn_worksheet_leaves_out(&name, unread);
-                }
+                Ok(()) => userspace_log!("{message}"),
                 Err(error) => userspace_warn!("{}", tr!("cmd-file-worksheet-export-failed-error", error = format!("{error:#}"))),
             },
         )
@@ -3398,22 +3387,4 @@ fn write_browser_project_record(
             result,
         });
     });
-}
-
-/// Say why a worksheet cannot be made: the set has no corrections, or
-/// only records this build cannot read (`unread` of them).
-fn warn_worksheet_has_nothing(name: &str, unread: usize) {
-    if unread > 0 {
-        userspace_warn!("{}", tr!("cmd-file-worksheet-only-unread-corrections", name = name.to_owned(), count = unread.to_string()));
-    } else {
-        userspace_warn!("{}", tr!("cmd-file-worksheet-no-corrections", name = name.to_owned()));
-    }
-}
-
-/// Say that a worksheet just written leaves out `unread` records this
-/// build cannot read.
-fn warn_worksheet_leaves_out(name: &str, unread: usize) {
-    if unread > 0 {
-        userspace_warn!("{}", tr!("cmd-file-worksheet-leaves-out-unread", name = name.to_owned(), count = unread.to_string()));
-    }
 }

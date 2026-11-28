@@ -430,8 +430,9 @@ borehole-inspector-seam-depths = { $from }-{ $to }  { $thickness }
 borehole-inspector-seam-gap = ·
 borehole-inspector-seam-missing = ليس في هذا الثقب
 borehole-inspector-set-side = عمود المجموعة
-borehole-inspector-strat = الطبقات
+borehole-inspector-strat-auto = { $field } (تلقائي)
 borehole-inspector-strat-column = عمود الطبقات
+borehole-inspector-strat-field = حقل الطبقات
 borehole-inspector-summary = الملخص
 prismoid-inspector-by-tonnes = أطنان، من { $density }
 prismoid-inspector-by-volume = الحجم (لا كثافة للشبكة)
@@ -679,23 +680,93 @@ cmd-next-vertex-copied-vertices = تم نسخ الرؤوس ({ $count }) على �
 cmd-string-rework-closed = الخط المغلق ليس له طرف للمتابعة منه
 cmd-string-rework-changed = تغير الخط، اختره مرة أخرى
 cmd-string-rework-dropped = انتهت متابعة الخط أو إعادة الرسم عند تغيير مساحة العمل؛ لم يتم حفظ { $count } من النقاط المرسومة
-cmd-string-rework-redrew = أُعيد رسم الرؤوس ({ $count })
+cmd-string-rework-redrew =
+    أُعيد رسم المقطع: أُزيل { $removed ->
+        [zero] لا رؤوس
+        [one] رأس واحد
+        [two] رأسان
+        [few] { $removed } رؤوس
+        [many] { $removed } رأسًا
+       *[other] { $removed } رأس
+    }، ورُسمت { $count ->
+        [zero] لا نقاط
+        [one] نقطة واحدة
+        [two] نقطتان
+        [few] { $count } نقاط
+        [many] { $count } نقطةً
+       *[other] { $count } نقطة
+    }
 cmd-string-fill-short = المقطع ليس أطول من التباعد
-cmd-string-fill-added = تم ملء المقطع بـ { $count } رأسًا جديدًا
+cmd-string-fill-added =
+    { $count ->
+        [zero] لم يُملأ المقطع بأي رأس جديد
+        [one] تم ملء المقطع برأس جديد واحد
+        [two] تم ملء المقطع برأسين جديدين
+        [few] تم ملء المقطع بـ { $count } رؤوس جديدة
+        [many] تم ملء المقطع بـ { $count } رأسًا جديدًا
+       *[other] تم ملء المقطع بـ { $count } رأس جديد
+    }
 cmd-string-fill-too-many = سيضيف ذلك { $count } رأسًا؛ والحد الأقصى { $most }. استخدم تباعدًا أكبر، أو قسّم المقطع بـ إدراج نقطة واملأ كل جزء
 cmd-string-split-into = تم التقسيم إلى { $count } خطوط
 cmd-string-split-opened = تم فتح الحلقة عند تقاطع الخط معها
 cmd-string-split-no-crossing = لا يوجد تقاطع على هذا الخط
 cmd-string-trim-removed = تمت إزالة قطعة بين التقاطعات
+cmd-string-click-missed = لا يوجد خط ظاهر وغير مقفل تحت المؤشر
+cmd-string-click-missed-vertex = لا يوجد رأس لخط ظاهر وغير مقفل تحت المؤشر
+cmd-string-click-by-vertex = قريب جدًا من رأس: انقر على المقطع بعيدًا عن طرفيه
+cmd-string-nudge-locked = الرأس الممسوك على خط مخفي أو مقفل، لذا يبقى في مكانه
 cmd-object-edit-edited-kind = تم تعديل { $kind }
 cmd-object-edit-edited-kind-count-vertices = تم تعديل { $kind } ({ $count } رؤوس)
 cmd-object-edit-no-changes-apply = لا توجد تغييرات لتطبيقها
 cmd-object-edit-object-changed-since-editor-opened = تغيّر هذا الكائن منذ فتح المحرر؛ أعد فتحه لتعديل النسخة الحالية
 cmd-object-edit-target-changed = تغيّر الكائن قيد التعديل؛ سيتم تجاهل التعديل
 cmd-object-edit-object-no-longer-exists-document = هذا الكائن لم يعد موجودًا في المستند
-cmd-object-edit-no-strings-reverse = لا يمكن عكس أي خط محدد (مخفي أو مقفل)
-cmd-object-edit-strings-read-same-reversed = كل خط محدد يقرأ بالشكل نفسه معكوسا، لذا لم يتغير شيء
-cmd-object-edit-reversed-strings = تم عكس { $count } خط
+cmd-object-edit-no-strings-reverse = لم يُعكس أي خط محدد
+cmd-object-edit-strings-read-same-reversed =
+    { $count ->
+        [zero] لم يُترك أي خط كما هو
+        [one] تُرك { $count } خط كما هو: يُقرأ بالشكل نفسه معكوسًا
+        [two] تُرك خطان كما هما: يُقرآن بالشكل نفسه معكوسين
+        [few] تُركت { $count } خطوط كما هي: تُقرأ بالشكل نفسه معكوسة
+        [many] تُرك { $count } خطًا كما هو: يُقرأ بالشكل نفسه معكوسًا
+       *[other] تُرك { $count } خط كما هو: يُقرأ بالشكل نفسه معكوسًا
+    }
+cmd-object-edit-reversed-strings =
+    { $count ->
+        [zero] لم يُعكس أي خط
+        [one] تم عكس { $count } خط
+        [two] تم عكس خطين
+        [few] تم عكس { $count } خطوط
+        [many] تم عكس { $count } خطًا
+       *[other] تم عكس { $count } خط
+    }
+cmd-object-edit-reverse-left-layer-locked =
+    { $count ->
+        [zero] لم يُترك أي خط على طبقة مقفلة كما هو
+        [one] تُرك { $count } خط على طبقة مقفلة كما هو
+        [two] تُرك خطان على طبقة مقفلة كما هما
+        [few] تُركت { $count } خطوط على طبقات مقفلة كما هي
+        [many] تُرك { $count } خطًا على طبقة مقفلة كما هو
+       *[other] تُرك { $count } خط على طبقة مقفلة كما هو
+    }
+cmd-object-edit-reverse-left-locked =
+    { $count ->
+        [zero] لم يُترك أي خط مقفل كما هو
+        [one] تُرك { $count } خط مقفل كما هو
+        [two] تُرك خطان مقفلان كما هما
+        [few] تُركت { $count } خطوط مقفلة كما هي
+        [many] تُرك { $count } خطًا مقفلًا كما هو
+       *[other] تُرك { $count } خط مقفل كما هو
+    }
+cmd-object-edit-reverse-left-hidden =
+    { $count ->
+        [zero] لم يُترك أي خط مخفي كما هو
+        [one] تُرك { $count } خط مخفي كما هو
+        [two] تُرك خطان مخفيان كما هما
+        [few] تُركت { $count } خطوط مخفية كما هي
+        [many] تُرك { $count } خطًا مخفيًا كما هو
+       *[other] تُرك { $count } خط مخفي كما هو
+    }
 cmd-object-edit-select-single-design-object-edit = اختر كائن تصميم واحدًا للتعديل
 cmd-object-edit-unassigned = غير معيّن
 cmd-offset-create-offset = إنشاء إزاحة
@@ -1134,8 +1205,38 @@ cmd-text-edit-finished = انتهى تحرير نص الكائن { $object_id }
 cmd-text-updated = تم تحديث النص على الكائن { $object_id }
 cmd-thin-nothing-removed = لا يوجد رأس ضمن { $tolerance } m؛ لم يتم التبسيط
 cmd-thin-thin-strings = تبسيط الخطوط
-cmd-thin-count-removed = { $removed } رأس من { $count } خط
-cmd-thin-thinned-count = تم تبسيط { $count } خط، وإزالة { $removed } رأس
+cmd-thin-count-removed =
+    { $removed ->
+        [zero] لا رؤوس
+        [one] رأس واحد
+        [two] رأسان
+        [few] { $removed } رؤوس
+        [many] { $removed } رأسًا
+       *[other] { $removed } رأس
+    } من { $count ->
+        [zero] لا خطوط
+        [one] خط واحد
+        [two] خطين
+        [few] { $count } خطوط
+        [many] { $count } خطًا
+       *[other] { $count } خط
+    }
+cmd-thin-thinned-count =
+    تم تبسيط { $count ->
+        [zero] لا خطوط
+        [one] خط واحد
+        [two] خطين
+        [few] { $count } خطوط
+        [many] { $count } خطًا
+       *[other] { $count } خط
+    }، وإزالة { $removed ->
+        [zero] لا رؤوس
+        [one] رأس واحد
+        [two] رأسين
+        [few] { $removed } رؤوس
+        [many] { $removed } رأسًا
+       *[other] { $removed } رأس
+    }
 cmd-thickness-not-a-grid = لا يمكن القياس بالنسبة إلى { $name }: { $reason }
 cmd-thickness-not-a-grid-cells = ليس شبكة منتظمة واحدة من خلايا مربعة كالتي ينشئها إنشاء سطح
 cmd-thickness-not-a-grid-heights = اثنان من رؤوسه يتشاركان عقدة شبكة على ارتفاعين مختلفين
@@ -1400,7 +1501,7 @@ csv-drill-hole-holes-hole-s-carry-overlapping = { $holes } ثقب تحمل فو�
 csv-drill-hole-skipped-row-reason = تم تخطي صف: { $reason }
 csv-drill-hole-row-attribute-not-number = { $file } الصف { $row } يحتوي على '{ $value }' في عمود رقمي
 csv-drill-hole-row-repeats-dhid = { $file } الصف { $row } يكرر DHID '{ $dhid }'
-csv-drill-hole-most-rows-unreadable = { $file }: تعذرت قراءة { $skipped } من { $count } صفوف؛ الأسباب في وحدة التحكم
+csv-drill-hole-most-rows-unreadable = { $file }: تعذرت قراءة { $skipped } من { $count } صفوف
 csv-drill-hole-file-maps-dip-column-twice = { $file } يربط عمود الميل أو الانحدار مرتين
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } يربط عمود العمق الكلي مرتين
 csv-drill-hole-total-depths-left-out =
@@ -1456,7 +1557,7 @@ csv-geophysics-row-column-count = الصف { $row } في { $file } يحتوي ع
 csv-geophysics-row-negative-depth = الصف { $row } في { $file } له عمق سالب
 csv-geophysics-row-no-depth = الصف { $row } في { $file } ليس له عمق قابل للقراءة
 csv-geophysics-file-s-path-not-valid = مسار الملف ليس بترميز UTF-8 صالح، ولا يمكن للمشروع حفظه: أعد تسمية الملف أو مجلده ثم اربطه مرة أخرى
-csv-geophysics-rows-skipped = { $file }: تعذرت قراءة { $skipped } من أصل { $rows } صفًا؛ الأسباب في وحدة التحكم
+csv-geophysics-rows-skipped = { $file }: تعذرت قراءة { $skipped } من أصل { $rows } صفًا
 csv-geophysics-runs-not-grouped = جيوفيزياء { $count } ثقب تأتي في أكثر من مقطع، غير مجمّعة حسب الثقب؛ يضيف كل مقطع لاحق الأعماق التي ليس للثقب قراءة عندها فقط: { $holes }
 csv-geophysics-linked-downhole-geophysics-from-file = تم ربط الجيوفيزياء داخل الثقب من { $file }: { $holes } ثقب، المنحنيات { $curves }؛ قُرئ { $rows } صف وتُخطي { $skipped }. تبقى القراءات في الملف وتُقرأ ثقبًا ثقبًا
 csv-geophysics-no-readings = لا توجد قراءات
@@ -1507,7 +1608,11 @@ drill-hole-preset = إعداد مسبق
 drill-hole-px = بكسل
 drill-hole-rainbow = قوس قزح
 drill-hole-rename-out-of-sequence-hole = إعادة تسمية { $from } إلى { $to } تضعه خارج ترتيب عمود الطبقات في هذا الثقب.
-drill-hole-rename-out-of-sequence-holes = إعادة تسمية { $from } إلى { $to } تضعه خارج ترتيب عمود الطبقات في { $count } ثقبًا.
+drill-hole-rename-out-of-sequence-holes =
+    { $count ->
+        [one] إعادة تسمية { $from } إلى { $to } تضعه خارج ترتيب عمود الطبقات في ثقب واحد.
+       *[other] إعادة تسمية { $from } إلى { $to } تضعه خارج ترتيب عمود الطبقات في { $count } ثقبًا.
+    }
 drill-hole-rename-out-of-sequence-note = الطبقات المقلوبة أو المكررة تقع خارج الترتيب، لذا لا تُمنع إعادة التسمية. موافق يعيد التسمية على أي حال؛ وإلغاء يعود إلى إعادة التسمية.
 drill-hole-rename-out-of-sequence-title = خارج التسلسل
 drill-hole-rename-seam-every-hole-of = كل ثقب من
@@ -1887,6 +1992,7 @@ files-xy-grid-options = خيارات شبكة XY
 geophysics-checking-geophysics-files = جارٍ فحص ملفات الجيوفيزياء
 geophysics-downhole-geophysics-name-could-not = تعذر ربط الجيوفيزياء داخل الثقب لـ «{ $name }»: { $error }
 geophysics-file-changed = تغيّر ملف الجيوفيزياء منذ فهرسته
+geophysics-file-unchanged-kept = { $file } لم يتغير منذ فهرسته؛ يُحتفظ بفهرسه
 geophysics-file-cannot-be-opened = تعذّر فتح { $file }: { $error }
 geophysics-file-unreadable = تعذرت قراءة ملف الجيوفيزياء المرتبط بـ «{ $name }» في { $path } ({ $error })؛ اربطه مرة أخرى من قائمة النقر بزر الماوس الأيمن لمجموعة البيانات
 geophysics-linked-changed-rereading = تغيّرت الجيوفيزياء المرتبطة بـ «{ $name }» منذ فهرستها؛ جارٍ قراءتها مرة أخرى
@@ -2045,8 +2151,6 @@ io-worksheet-writes-two-files = يكتب الورقة بالاسم الذي تخ
 cmd-file-exported-worksheet-path = تم تصدير ورقة التصحيحات إلى { $path } والتصحيحات بجانبها إلى { $records }
 cmd-file-worksheet-export-failed-error = فشل تصدير ورقة التصحيحات: { $error }
 cmd-file-worksheet-no-corrections = لا توجد في { $name } تصحيحات للتصدير
-cmd-file-worksheet-only-unread-corrections = لا توجد في { $name } تصحيحات يمكن لهذا الإصدار قراءتها: سجلات التصحيح الـ { $count } محفوظة كما هي لكن لا يمكن تصديرها
-cmd-file-worksheet-leaves-out-unread = ورقة تصحيحات { $name } تستثني { $count } من سجلات التصحيح التي لا يستطيع هذا الإصدار قراءتها؛ وتبقى في المشروع كما حُفظت
 state-export-corrections-worksheet = تصدير ورقة التصحيحات
 
 ## Jobs strings
@@ -2153,9 +2257,6 @@ object-edit-vertices = الرؤوس
 
 omf-element-name-has-count-tie = العنصر «{ $name }» لديه { $count } توصيلات تشير إلى ثقوب لم يعد يحتويها
 omf-element-name-has-count-unreadable = العنصر «{ $name }» فيه { $count } من مقاطع العمل غير القابلة للقراءة؛ تم استبعادها
-omf-element-name-has-count-unreadable-strat = يحتوي العنصر '{ $name }' على { $count } من أعمدة الطبقات غير القابلة للقراءة؛ تم استبعادها
-omf-element-name-has-count-as-logged = يحتوي العنصر '{ $name }' على { $count } من قيم التسجيل الأصلي التي تعذرت قراءتها أو وضعها؛ تم الاحتفاظ بها دون تطبيقها
-omf-element-name-strat-field-unreadable = العنصر «{ $name }» فيه حقل طبقات غير قابل للقراءة؛ تم استبعاده
 omf-element-name-color-stops-unreadable = العنصر «{ $name }» فيه عدد قليل جدًا من نقاط الألوان لرسم تدرّج؛ استُخدمت نقاط الإعداد المسبق
 omf-element-name-color-unreadable = العنصر «{ $name }» فيه إعدادات ألوان لا يمكن قراءتها؛ تُفتح المجموعة بالألوان الافتراضية، واستُبعدت أقسام العمل وأعمدة الطبقات الخاصة بها
 omf-element-name-geophysics-unreadable = العنصر «{ $name }» فيه رابط جيوفيزيائي غير قابل للقراءة؛ تم استبعاده
@@ -2164,7 +2265,6 @@ omf-element-name-names-unknown-section = العنصر «{ $name }» يسمّي �
 omf-quality-mark-unreadable = تعذّرت قراءة علامة الجودة على السطح { $name }؛ يُفتح سطحًا عاديًا
 omf-layer-quality-mark-unreadable = تعذّرت قراءة علامة الجودة على الطبقة { $name }؛ تُفتح نقاطها نقاطًا عادية
 omf-ignoring-colour-map-omf-attribute = سيتم تجاهل خريطة الألوان في سمة OMF «{ $attribute }»: { $error }
-omf-correction-records-unread = تعذّرت قراءة { $count } من سجلات التصحيح الخاصة بـ { $name }: تُحفظ كما حُفظت لكنها لا تُطبَّق
 omf-corrections-unreadable = تعذّرت قراءة سجلات التصحيح الخاصة بـ { $name } وتم استبعادها
 omf-mining-data-exported-incline = بيانات تعدين صدّرها Incline
 omf-import = استيراد OMF
@@ -2433,6 +2533,7 @@ state-keep-outside = الإبقاء في الخارج
 state-kriged-block-model = نموذج كتل مقدّر بكريغنغ
 state-load-block-model = تحميل نموذج الكتل
 state-load-drillholes = تحميل ثقوب الحفر
+state-link-geophysics = ربط الجيوفيزياء
 state-load-layer = تحميل الطبقة
 state-load-point-cloud = تحميل سحابة نقطية
 state-load-raster = تحميل البيانات النقطية

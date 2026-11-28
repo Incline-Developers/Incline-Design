@@ -22,7 +22,8 @@ const CELL_OUTLINE_WIDTH: f32 = 2.0;
 const MASKED_CELL_OUTLINE_COLOR: [f32; 4] = [0.72, 0.72, 0.74, 0.85];
 
 /// How far a selected prismoid grid's wire colours are mixed toward the
-/// selection blue: the share Leo's `SELECTION_TINT` tints a selected surface.
+/// selection blue: the share `scene::gpu_cache::SELECTION_TINT` tints a
+/// selected surface.
 const PRISMOID_WIRE_SELECTION_TINT: f32 = 0.6;
 
 /// How far, in logical pixels, the blue glow under a selected prismoid
@@ -84,7 +85,7 @@ fn chunk_strokes<I, S, C>(items: impl IntoIterator<Item = I>, per_chunk: usize, 
 }
 
 /// The bind groups a prismoid grid's wires draw with, one per pass word in
-/// use: Leo's document style layout over a zeroed flag buffer (our strokes
+/// use: the document style layout over a zeroed flag buffer (our strokes
 /// carry no style slot) and our own pass word.
 pub(crate) struct PrismoidWireStyles {
     groups: Vec<(u32, wgpu::Buffer, wgpu::BindGroup)>,
@@ -935,8 +936,9 @@ impl<'a> Graphics<'a> {
 
     /// `held` again when it was built for `key`, the scene origin and the
     /// scale factor; else the strokes along `segments`, each with its width
-    /// and colour, built for them in order, in buffers of at most Leo's edge
-    /// chunk size. Each buffer is uploaded as it fills, so the host holds one
+    /// and colour, built for them in order, in buffers of at most
+    /// `TARGET_CHUNK_BYTES` (as `build_edge_chunks`) or the device's buffer
+    /// limit. Each buffer is uploaded as it fills, so the host holds one
     /// chunk of strokes at most.
     fn keyed_strokes(
         &self,
@@ -1794,7 +1796,7 @@ impl<'a> Graphics<'a> {
         // The coloured lattices first, so the rim and the section lines
         // draw over them.
         // A hidden grid, or any in a 2D section, keeps its strokes and skips
-        // the draw, as Leo's edges do.
+        // the draw, as the surface edges do.
         if !self.camera_uniform.section_cuts() {
             render_pass.set_pipeline(&self.pipes().stroke_render_pipeline);
             render_pass.set_bind_group(0, self.scene_camera_bind_group(), &[]);

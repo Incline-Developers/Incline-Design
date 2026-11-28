@@ -2,10 +2,12 @@ use glam::DVec3;
 
 use crate::{
     app::{App, MOVE_VERTEX_PICK_PX, PICK_THRESHOLD_PX},
+    i18n::tr,
     logging::CommandReportSpec,
     model::{Command, Object, ObjectId, ObjectPoint, SceneEntityId},
     rendering::pick,
     ui::state::ActiveTool,
+    userspace_log,
 };
 
 struct DeleteVertexHit {
@@ -81,9 +83,10 @@ impl<'a> App<'a> {
             return;
         }
         let Some(hit) = self.polyline_vertex_hit(pick::VertexPickFilter::AnyEditable) else {
+            userspace_log!("{}", tr!("cmd-string-click-missed-vertex"));
             return;
         };
-        if !self.activate_project_for_object(hit.object_id) || !self.editor.canvas_edits_object(self.active_document(), hit.object_id) {
+        if !self.clicked_string_editable(hit.object_id) {
             return;
         }
         self.show_object_vertex(hit.object_id, hit.vertex_index);

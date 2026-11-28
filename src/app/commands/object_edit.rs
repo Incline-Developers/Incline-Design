@@ -9,28 +9,57 @@ use crate::{
     app::App,
     i18n::tr,
     model::{
-        Command, Object, ObjectId,
+        Command, Object, ObjectId, SceneEntityId,
         object_edit::{drift_detected, reverse_vertices, validate_object},
     },
+    ui::state::CanvasRefusal,
     userspace_log, userspace_warn,
 };
 
-/// Why nothing was reversed, given how many of the selected strings may be
-/// edited: none means hiding or locking, else each reads the same reversed.
-fn no_reversal_reason(editable: usize) -> String {
-    match editable {
-        0 => tr!("cmd-object-edit-no-strings-reverse"),
-        _ => tr!("cmd-object-edit-strings-read-same-reversed"),
+/// The selected strings Reverse left as they were, by why.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ReverseLeft {
+    layer_locked: usize,
+    locked: usize,
+    hidden: usize,
+    unchanged: usize,
+}
+
+/// A line for each kind of string Reverse left as it was.
+fn reversal_left(left: ReverseLeft) -> Vec<String> {
+    let mut lines = Vec::new();
+    if left.layer_locked > 0 {
+        lines.push(tr!("cmd-object-edit-reverse-left-layer-locked", count = left.layer_locked));
     }
+    if left.locked > 0 {
+        lines.push(tr!("cmd-object-edit-reverse-left-locked", count = left.locked));
+    }
+    if left.hidden > 0 {
+        lines.push(tr!("cmd-object-edit-reverse-left-hidden", count = left.hidden));
+    }
+    if left.unchanged > 0 {
+        lines.push(tr!("cmd-object-edit-strings-read-same-reversed", count = left.unchanged));
+    }
+    lines
 }
 
 impl<'a> App<'a> {
     /// Reverse every selected string as one undoable batch, the way the
-    /// dialog's Reverse does one; hidden and locked strings are left alone.
-    /// With none selected the viewport picks them first, and the pick's Done
-    /// comes back here.
+    /// dialog's Reverse does one; hidden and locked strings are left alone
+    /// and counted. With none selected the viewport picks them first, and the
+    /// pick's Done comes back here.
     pub(crate) fn reverse_selected_strings(&mut self) {
-        let selected = self.selected_polylines();
+        let selected: Vec<ObjectId> = {
+            let document = self.active_document();
+            self.editor
+                .selected_handles
+                .iter()
+                .filter_map(|handle| match handle {
+                    SceneEntityId::Object(id) if matches!(document.get_object(*id), Some(Object::Polyline { .. })) => Some(*id),
+                    _ => None,
+                })
+                .collect()
+        };
         if selected.is_empty() {
             self.begin_selection_pick(crate::ui::state::SelectionPickTool::Reverse);
             return;
@@ -38,29 +67,43 @@ impl<'a> App<'a> {
         let Some(document) = self.workspace.active_document() else {
             return;
         };
-        let editable: Vec<ObjectId> = selected.into_iter().filter(|&id| self.editor.canvas_edits_object(document, id)).collect();
-        let replacements: Vec<Command> = editable
-            .iter()
-            .filter_map(|&id| {
-                let before = document.get_object(id)?.clone();
-                let mut after = before.clone();
-                let Object::Polyline { verts, closed, .. } = &mut after else {
-                    return None;
-                };
-                reverse_vertices(verts, *closed);
-                (before != after).then_some(Command::Replace { before, after })
-            })
-            .collect();
-        if replacements.is_empty() {
-            userspace_warn!("{}", no_reversal_reason(editable.len()));
-            return;
+        let mut left = ReverseLeft::default();
+        let mut replacements = Vec::new();
+        for id in selected {
+            match self.editor.canvas_refusal(document, id) {
+                Some(CanvasRefusal::LayerLocked) => left.layer_locked += 1,
+                Some(CanvasRefusal::Locked) => left.locked += 1,
+                Some(CanvasRefusal::Hidden) => left.hidden += 1,
+                Some(CanvasRefusal::Gone) => {}
+                None => {
+                    let Some(before) = document.get_object(id).cloned() else {
+                        continue;
+                    };
+                    let mut after = before.clone();
+                    if let Object::Polyline { verts, closed, .. } = &mut after {
+                        reverse_vertices(verts, *closed);
+                    }
+                    if before == after {
+                        left.unchanged += 1;
+                    } else {
+                        replacements.push(Command::Replace { before, after });
+                    }
+                }
+            }
         }
-        let count = replacements.len();
-        self.execute_edit(Command::Batch(replacements));
-        // A Copy Along pick waiting on one of them now marks another vertex.
-        self.refresh_copy_along_pick();
-        userspace_log!("{}", tr!("cmd-object-edit-reversed-strings", count = count.to_string()));
-        self.invalidate_geometry();
+        if replacements.is_empty() {
+            userspace_warn!("{}", tr!("cmd-object-edit-no-strings-reverse"));
+        } else {
+            let count = replacements.len();
+            self.execute_edit(Command::Batch(replacements));
+            // A Copy Along pick waiting on one of them now marks another vertex.
+            self.refresh_copy_along_pick();
+            userspace_log!("{}", tr!("cmd-object-edit-reversed-strings", count = count));
+            self.invalidate_geometry();
+        }
+        for line in reversal_left(left) {
+            userspace_log!("{line}");
+        }
     }
 
     /// Open the "Edit Object" dialog on `id`, seeding its working copy from

@@ -80,6 +80,22 @@ pub(crate) fn is_lithology_key(key: &str) -> bool {
     LITHOLOGY_KEYS.iter().any(|lithology| key.eq_ignore_ascii_case(lithology))
 }
 
+/// Whether `key` names a ply field: "ply" is one of its words, the parts
+/// between `_`, `-` and spaces, in any case (SUPPLY_CODE is not one).
+pub(crate) fn is_ply_key(key: &str) -> bool {
+    key.split(['_', '-', ' ']).any(|word| word.eq_ignore_ascii_case("ply"))
+}
+
+/// The categorical field of `fields` that names a seam: one keyed "seam"
+/// outright, else the first whose key holds "seam" and is no ply key
+/// (SEAM_PLY is a ply); a lithology key never.
+pub(crate) fn seam_field(fields: &[crate::model::drill_hole::DrillField]) -> Option<&crate::model::drill_hole::DrillField> {
+    let seams = || fields.iter().filter(|field| is_categorical(field) && !is_lithology_key(&field.key));
+    seams()
+        .find(|field| field.key.eq_ignore_ascii_case("seam"))
+        .or_else(|| seams().find(|field| field.key.to_ascii_lowercase().contains("seam") && !is_ply_key(&field.key)))
+}
+
 /// Whether `code` repeats another code `present` holds: that code with a
 /// trailing R, as DRTR beside DRT. A repeat never enters a strat column; its
 /// intervals keep their name. A code ending in R with no such base is not

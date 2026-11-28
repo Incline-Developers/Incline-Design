@@ -471,8 +471,9 @@ borehole-inspector-seam-depths = { $from }-{ $to }  { $thickness }
 borehole-inspector-seam-gap = ·
 borehole-inspector-seam-missing = Nicht in diesem Bohrloch
 borehole-inspector-set-side = Säule des Datensatzes
-borehole-inspector-strat = Strat
+borehole-inspector-strat-auto = { $field } (automatisch)
 borehole-inspector-strat-column = Strat-Säule
+borehole-inspector-strat-field = Strat-Feld
 borehole-inspector-summary = Zusammenfassung
 prismoid-inspector-by-tonnes = Tonnen, aus { $density }
 prismoid-inspector-by-volume = Volumen (das Gitter hat keine Dichte)
@@ -720,23 +721,61 @@ cmd-next-vertex-copied-vertices = { $count } Eckpunkte entlang der Linie kopiert
 cmd-string-rework-closed = Eine geschlossene Linie hat kein Ende zum Fortsetzen
 cmd-string-rework-changed = Die Linie hat sich geändert, bitte erneut wählen
 cmd-string-rework-dropped = Das Fortsetzen oder Neuzeichnen der Linie endete mit dem Wechsel des Arbeitsbereichs; { $count } gezeichnete Punkte wurden nicht gespeichert
-cmd-string-rework-redrew = { $count } Eckpunkte neu gezeichnet
+cmd-string-rework-redrew =
+    Abschnitt neu gezeichnet: { $removed ->
+        [one] { $removed } Eckpunkt
+       *[other] { $removed } Eckpunkte
+    } entfernt, { $count ->
+        [one] { $count } Punkt
+       *[other] { $count } Punkte
+    } eingezeichnet
 cmd-string-fill-short = Das Segment ist nicht länger als der Abstand
-cmd-string-fill-added = Das Segment wurde mit { $count } neuen Eckpunkten gefüllt
+cmd-string-fill-added =
+    { $count ->
+        [one] Das Segment wurde mit { $count } neuem Eckpunkt gefüllt
+       *[other] Das Segment wurde mit { $count } neuen Eckpunkten gefüllt
+    }
 cmd-string-fill-too-many = Das würde { $count } Eckpunkte hinzufügen; höchstens { $most } sind erlaubt. Wähle einen größeren Abstand oder teile das Segment mit Punkt einfügen und fülle jeden Teil
 cmd-string-split-into = In { $count } Linien geteilt
 cmd-string-split-opened = Der Ring wurde dort geöffnet, wo die Linie ihn kreuzt
 cmd-string-split-no-crossing = Keine Kreuzung auf dieser Linie
 cmd-string-trim-removed = Ein Stück zwischen Kreuzungen wurde entfernt
+cmd-string-click-missed = Keine sichtbare, nicht gesperrte Linie unter dem Cursor
+cmd-string-click-missed-vertex = Kein Eckpunkt einer sichtbaren, nicht gesperrten Linie unter dem Cursor
+cmd-string-click-by-vertex = Zu nah an einem Eckpunkt: auf das Segment abseits seiner Enden klicken
+cmd-string-nudge-locked = Der gehaltene Eckpunkt liegt auf einer ausgeblendeten oder gesperrten Linie und bleibt deshalb, wo er ist
 cmd-object-edit-edited-kind = { $kind } bearbeitet
 cmd-object-edit-edited-kind-count-vertices = { $kind } bearbeitet ({ $count } Scheitelpunkte)
 cmd-object-edit-no-changes-apply = Keine Änderungen anzuwenden
 cmd-object-edit-object-changed-since-editor-opened = Dieses Objekt hat sich geändert, seit der Editor geöffnet wurde; erneut öffnen, um die aktuelle Version zu bearbeiten
 cmd-object-edit-target-changed = Bearbeitetes Objekt hat sich geändert; Bearbeitung wird verworfen
 cmd-object-edit-object-no-longer-exists-document = Dieses Objekt existiert im Dokument nicht mehr
-cmd-object-edit-no-strings-reverse = Keine ausgewählte Linie kann umgekehrt werden (ausgeblendet oder gesperrt)
-cmd-object-edit-strings-read-same-reversed = Jede ausgewählte Linie liest sich umgekehrt gleich, daher hat sich nichts geändert
-cmd-object-edit-reversed-strings = { $count } Linie(n) umgekehrt
+cmd-object-edit-no-strings-reverse = Keine ausgewählte Linie wurde umgekehrt
+cmd-object-edit-strings-read-same-reversed =
+    { $count ->
+        [one] { $count } Linie blieb unverändert: Sie liest sich umgekehrt gleich
+       *[other] { $count } Linien blieben unverändert: Sie lesen sich umgekehrt gleich
+    }
+cmd-object-edit-reversed-strings =
+    { $count ->
+        [one] { $count } Linie umgekehrt
+       *[other] { $count } Linien umgekehrt
+    }
+cmd-object-edit-reverse-left-layer-locked =
+    { $count ->
+        [one] { $count } Linie auf einer gesperrten Ebene blieb unverändert
+       *[other] { $count } Linien auf gesperrten Ebenen blieben unverändert
+    }
+cmd-object-edit-reverse-left-locked =
+    { $count ->
+        [one] { $count } gesperrte Linie blieb unverändert
+       *[other] { $count } gesperrte Linien blieben unverändert
+    }
+cmd-object-edit-reverse-left-hidden =
+    { $count ->
+        [one] { $count } ausgeblendete Linie blieb unverändert
+       *[other] { $count } ausgeblendete Linien blieben unverändert
+    }
 cmd-object-edit-select-single-design-object-edit = Ein einzelnes Design-Objekt zum Bearbeiten auswählen
 cmd-object-edit-unassigned = Nicht zugewiesen
 cmd-offset-create-offset = Versatz erstellen
@@ -1171,8 +1210,22 @@ cmd-text-edit-finished = Textbearbeitung für Objekt { $object_id } abgeschlosse
 cmd-text-updated = Text auf Objekt { $object_id } aktualisiert
 cmd-thin-nothing-removed = Kein Stützpunkt liegt innerhalb von { $tolerance } m; nichts ausgedünnt
 cmd-thin-thin-strings = Linien ausdünnen
-cmd-thin-count-removed = { $removed } Stützpunkte aus { $count } Linie(n)
-cmd-thin-thinned-count = { $count } Linie(n) ausgedünnt, { $removed } Stützpunkte entfernt
+cmd-thin-count-removed =
+    { $removed ->
+        [one] { $removed } Stützpunkt
+       *[other] { $removed } Stützpunkte
+    } aus { $count ->
+        [one] { $count } Linie
+       *[other] { $count } Linien
+    }
+cmd-thin-thinned-count =
+    { $count ->
+        [one] { $count } Linie
+       *[other] { $count } Linien
+    } ausgedünnt, { $removed ->
+        [one] { $removed } Stützpunkt
+       *[other] { $removed } Stützpunkte
+    } entfernt
 cmd-thickness-not-a-grid = { $name } kann nicht als Bezug dienen: { $reason }
 cmd-thickness-not-a-grid-cells = sie ist kein einzelnes regelmäßiges Raster aus quadratischen Zellen, wie es Oberfläche erstellen erzeugt
 cmd-thickness-not-a-grid-heights = zwei ihrer Eckpunkte teilen einen Rasterknoten in unterschiedlicher Höhe
@@ -1437,7 +1490,7 @@ csv-drill-hole-holes-hole-s-carry-overlapping = { $holes } Bohrloch/-löcher ent
 csv-drill-hole-skipped-row-reason = Zeile übersprungen: { $reason }
 csv-drill-hole-row-attribute-not-number = { $file } Zeile { $row } enthält '{ $value }' in einer numerischen Spalte
 csv-drill-hole-row-repeats-dhid = { $file } Zeile { $row } wiederholt DHID '{ $dhid }'
-csv-drill-hole-most-rows-unreadable = { $file }: { $skipped } von { $count } Zeilen konnten nicht gelesen werden; die Gründe stehen in der Konsole
+csv-drill-hole-most-rows-unreadable = { $file }: { $skipped } von { $count } Zeilen konnten nicht gelesen werden
 csv-drill-hole-file-maps-dip-column-twice = { $file } ordnet eine Fallen- oder Neigungsspalte doppelt zu
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } ordnet eine Endteufenspalte doppelt zu
 csv-drill-hole-total-depths-left-out =
@@ -1493,7 +1546,7 @@ csv-geophysics-row-column-count = { $file } Zeile { $row } hat { $found } Spalte
 csv-geophysics-row-negative-depth = { $file } Zeile { $row } hat eine negative Tiefe
 csv-geophysics-row-no-depth = { $file } Zeile { $row } hat keine lesbare Tiefe
 csv-geophysics-file-s-path-not-valid = Der Pfad der Datei ist kein gültiges UTF-8, was ein Projekt nicht speichern kann: Benennen Sie die Datei oder ihren Ordner um und verknüpfen Sie sie erneut
-csv-geophysics-rows-skipped = { $file }: { $skipped } von { $rows } Zeilen konnten nicht gelesen werden; die Gründe stehen in der Konsole
+csv-geophysics-rows-skipped = { $file }: { $skipped } von { $rows } Zeilen konnten nicht gelesen werden
 csv-geophysics-runs-not-grouped = Die Geophysik für { $count } Bohrloch/-löcher liegt in mehr als einem Abschnitt vor, nicht nach Bohrloch gruppiert; jeder spätere Abschnitt ergänzt nur Tiefen, für die das Bohrloch keinen Messwert hat: { $holes }
 csv-geophysics-linked-downhole-geophysics-from-file = Bohrlochgeophysik aus { $file } verknüpft: { $holes } Bohrloch/-löcher, Kurven { $curves }; { $rows } Zeile(n) gelesen, { $skipped } übersprungen. Die Messwerte verbleiben in der Datei und werden bohrlochweise gelesen
 csv-geophysics-no-readings = keine Messwerte
@@ -1544,7 +1597,11 @@ drill-hole-preset = Voreinstellung
 drill-hole-px = px
 drill-hole-rainbow = Regenbogen
 drill-hole-rename-out-of-sequence-hole = Die Umbenennung von { $from } in { $to } bringt es in diesem Bohrloch aus der Reihenfolge der Strat-Säule.
-drill-hole-rename-out-of-sequence-holes = Die Umbenennung von { $from } in { $to } bringt es in { $count } Bohrlöchern aus der Reihenfolge der Strat-Säule.
+drill-hole-rename-out-of-sequence-holes =
+    { $count ->
+        [one] Die Umbenennung von { $from } in { $to } bringt es in { $count } Bohrloch aus der Reihenfolge der Strat-Säule.
+       *[other] Die Umbenennung von { $from } in { $to } bringt es in { $count } Bohrlöchern aus der Reihenfolge der Strat-Säule.
+    }
 drill-hole-rename-out-of-sequence-note = Überkippte oder wiederholte Schichten liegen außerhalb der Reihenfolge, daher wird die Umbenennung nicht blockiert. OK benennt trotzdem um; Abbrechen kehrt zur Umbenennung zurück.
 drill-hole-rename-out-of-sequence-title = Außerhalb der Reihenfolge
 drill-hole-rename-seam-every-hole-of = Jedes Bohrloch von
@@ -1924,6 +1981,7 @@ files-xy-grid-options = XY-Raster-Optionen
 geophysics-checking-geophysics-files = Geophysikdateien werden geprüft
 geophysics-downhole-geophysics-name-could-not = Die Bohrlochgeophysik für '{ $name }' konnte nicht verknüpft werden: { $error }
 geophysics-file-changed = Die Geophysikdatei hat sich seit der Indizierung geändert
+geophysics-file-unchanged-kept = { $file } hat sich seit der Indizierung nicht geändert; sein Index bleibt erhalten
 geophysics-file-cannot-be-opened = { $file } kann nicht geöffnet werden: { $error }
 geophysics-file-unreadable = Die mit '{ $name }' verknüpfte Geophysikdatei kann unter { $path } nicht gelesen werden ({ $error }); verknüpfen Sie sie erneut über das Kontextmenü des Datensatzes
 geophysics-linked-changed-rereading = Die mit '{ $name }' verknüpfte Geophysik hat sich seit der Indizierung geändert; sie wird erneut gelesen
@@ -2082,8 +2140,6 @@ io-worksheet-writes-two-files = Schreibt das Arbeitsblatt unter dem gewählten N
 cmd-file-exported-worksheet-path = Korrektur-Arbeitsblatt nach { $path } exportiert und die Korrekturen daneben nach { $records }
 cmd-file-worksheet-export-failed-error = Export des Korrektur-Arbeitsblatts fehlgeschlagen: { $error }
 cmd-file-worksheet-no-corrections = { $name } hat keine Korrekturen zum Exportieren
-cmd-file-worksheet-only-unread-corrections = { $name } hat keine Korrekturen, die diese Version lesen kann: die { $count } Korrektursätze bleiben wie gespeichert erhalten, lassen sich aber nicht exportieren
-cmd-file-worksheet-leaves-out-unread = Das Korrekturarbeitsblatt von { $name } lässt { $count } Korrektursätze aus, die diese Version nicht lesen kann; sie bleiben wie gespeichert im Projekt
 state-export-corrections-worksheet = Korrektur-Arbeitsblatt exportieren
 
 ## Jobs strings
@@ -2190,9 +2246,6 @@ object-edit-vertices = Eckpunkte
 
 omf-element-name-has-count-tie = Element '{ $name }' hat { $count } Verbindung(en), die Löcher benennen, die es nicht mehr enthält
 omf-element-name-has-count-unreadable = Element '{ $name }' hat { $count } unlesbare(n) Abbauabschnitt(e); sie wurden ausgelassen
-omf-element-name-has-count-unreadable-strat = Element '{ $name }' hat { $count } nicht lesbare Schichtspalte(n); sie wurden weggelassen
-omf-element-name-has-count-as-logged = Element '{ $name }' hat { $count } Wert(e) wie protokolliert, die nicht gelesen oder zugeordnet werden konnten; sie bleiben erhalten, werden aber nicht angewendet
-omf-element-name-strat-field-unreadable = Element '{ $name }' hat ein unlesbares Schichtfeld; es wurde ausgelassen
 omf-element-name-color-stops-unreadable = Element '{ $name }' hat zu wenige Farbstopps für einen Verlauf; die Stopps der Vorlage wurden verwendet
 omf-element-name-color-unreadable = Element '{ $name }' hat Farbeinstellungen, die nicht gelesen werden konnten; der Satz öffnet mit den Standardfarben, seine Arbeitsabschnitte und Schichtspalten wurden ausgelassen
 omf-element-name-geophysics-unreadable = Element '{ $name }' hat eine unlesbare Geophysik-Verknüpfung; sie wurde ausgelassen
@@ -2201,7 +2254,6 @@ omf-element-name-names-unknown-section = Element '{ $name }' nennt einen unbekan
 omf-quality-mark-unreadable = Die Qualitätsmarke auf Fläche { $name } konnte nicht gelesen werden; sie öffnet als einfache Fläche
 omf-layer-quality-mark-unreadable = Die Qualitätsmarke auf Ebene { $name } konnte nicht gelesen werden; ihre Punkte öffnen als einfache Punkte
 omf-ignoring-colour-map-omf-attribute = Farbtabelle des OMF-Attributs '{ $attribute }' wird ignoriert: { $error }
-omf-correction-records-unread = { $count } Korrektursätze von { $name } konnten nicht gelesen werden: sie bleiben wie gespeichert erhalten, werden aber nicht angewendet
 omf-corrections-unreadable = Die Korrektursätze von { $name } konnten nicht gelesen werden und wurden ausgelassen
 omf-mining-data-exported-incline = Von Incline exportierte Bergbaudaten
 omf-import = OMF-Import
@@ -2470,6 +2522,7 @@ state-keep-outside = Außenbereich behalten
 state-kriged-block-model = Gekrigtes Blockmodell
 state-load-block-model = Blockmodell laden
 state-load-drillholes = Bohrlöcher laden
+state-link-geophysics = Geophysik verknüpfen
 state-load-layer = Ebene laden
 state-load-point-cloud = Punktwolke laden
 state-load-raster = Raster laden

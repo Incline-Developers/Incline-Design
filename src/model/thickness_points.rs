@@ -3,11 +3,11 @@
 //! to the bedding of a reference surface.
 //!
 //! True thickness is the roof-to-floor vector taken on the bedding normal,
-//! one formula for every hole whatever its angle to the seam [Dennison 1968;
-//! Heckscher & Saunders, "Precision in the dip"]. The bedding is the
-//! reference surface's slope at the pick it passes through (the roof for a
-//! roof surface, the floor for a floor one), read off its own grid nodes, so a
-//! surface from a saved project measures as well as one built this session.
+//! one formula for every hole whatever its angle to the seam [Dennison 1968].
+//! The bedding is the reference surface's slope at the pick it passes through
+//! (the roof for a roof surface, the floor for a floor one), read off its own
+//! grid nodes, so a surface from a saved project measures as well as one
+//! built this session.
 //!
 //! Beside them, the misfit of a prismoid grid at the same picks and at
 //! quality points: always the model less the pick.

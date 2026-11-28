@@ -428,8 +428,9 @@ borehole-inspector-seam-depths = { $from }-{ $to }  { $thickness }
 borehole-inspector-seam-gap = ·
 borehole-inspector-seam-missing = No está en este sondaje
 borehole-inspector-set-side = Columna del conjunto
-borehole-inspector-strat = Estrat.
+borehole-inspector-strat-auto = { $field } (automático)
 borehole-inspector-strat-column = Columna estratigráfica
+borehole-inspector-strat-field = Campo estrat.
 borehole-inspector-summary = Resumen
 prismoid-inspector-by-tonnes = toneladas, a partir de { $density }
 prismoid-inspector-by-volume = volumen (la malla no tiene densidad)
@@ -677,23 +678,61 @@ cmd-next-vertex-copied-vertices = Se copiaron { $count } vértices a lo largo de
 cmd-string-rework-closed = Una cadena cerrada no tiene extremo desde el que continuar
 cmd-string-rework-changed = La cadena cambió, selecciónela de nuevo
 cmd-string-rework-dropped = La continuación o el redibujado de la cadena terminó al cambiar el espacio de trabajo; no se guardaron sus { $count } puntos dibujados
-cmd-string-rework-redrew = Se redibujaron { $count } vértices
+cmd-string-rework-redrew =
+    Se redibujó el tramo: { $removed ->
+        [one] se quitó { $removed } vértice
+       *[other] se quitaron { $removed } vértices
+    } y { $count ->
+        [one] se trazó { $count } punto
+       *[other] se trazaron { $count } puntos
+    }
 cmd-string-fill-short = El segmento no es más largo que la separación
-cmd-string-fill-added = Se rellenó el segmento con { $count } vértices nuevos
+cmd-string-fill-added =
+    { $count ->
+        [one] Se rellenó el segmento con { $count } vértice nuevo
+       *[other] Se rellenó el segmento con { $count } vértices nuevos
+    }
 cmd-string-fill-too-many = Eso añadiría { $count } vértices; el máximo es { $most }. Usa una separación mayor, o divide el segmento con Insertar punto y rellena cada parte
 cmd-string-split-into = Dividida en { $count } cadenas
 cmd-string-split-opened = Se abrió el anillo donde la cadena lo cruza
 cmd-string-split-no-crossing = No hay cruce en esa cadena
 cmd-string-trim-removed = Se quitó un tramo entre cruces
+cmd-string-click-missed = Ninguna cadena visible y desbloqueada bajo el cursor
+cmd-string-click-missed-vertex = Ningún vértice de una cadena visible y desbloqueada bajo el cursor
+cmd-string-click-by-vertex = Demasiado cerca de un vértice: haga clic en el segmento lejos de sus extremos
+cmd-string-nudge-locked = El vértice sujeto está en una cadena oculta o bloqueada, así que se queda donde está
 cmd-object-edit-edited-kind = { $kind } editado
 cmd-object-edit-edited-kind-count-vertices = { $kind } editado ({ $count } vértices)
 cmd-object-edit-no-changes-apply = No hay cambios que aplicar
 cmd-object-edit-object-changed-since-editor-opened = Este objeto ha cambiado desde que se abrió el editor; vuelva a abrirlo para editar la versión actual
 cmd-object-edit-target-changed = El objeto en edición ha cambiado; se descarta la edición
 cmd-object-edit-object-no-longer-exists-document = Ese objeto ya no existe en el documento
-cmd-object-edit-no-strings-reverse = Ninguna cadena seleccionada se puede invertir (oculta o bloqueada)
-cmd-object-edit-strings-read-same-reversed = Cada cadena seleccionada se lee igual al revés, así que nada cambió
-cmd-object-edit-reversed-strings = { $count } cadena(s) invertida(s)
+cmd-object-edit-no-strings-reverse = No se invirtió ninguna cadena seleccionada
+cmd-object-edit-strings-read-same-reversed =
+    { $count ->
+        [one] Se dejó { $count } cadena como estaba: se lee igual al revés
+       *[other] Se dejaron { $count } cadenas como estaban: se leen igual al revés
+    }
+cmd-object-edit-reversed-strings =
+    { $count ->
+        [one] Se invirtió { $count } cadena
+       *[other] Se invirtieron { $count } cadenas
+    }
+cmd-object-edit-reverse-left-layer-locked =
+    { $count ->
+        [one] Se dejó { $count } cadena en una capa bloqueada como estaba
+       *[other] Se dejaron { $count } cadenas en capas bloqueadas como estaban
+    }
+cmd-object-edit-reverse-left-locked =
+    { $count ->
+        [one] Se dejó { $count } cadena bloqueada como estaba
+       *[other] Se dejaron { $count } cadenas bloqueadas como estaban
+    }
+cmd-object-edit-reverse-left-hidden =
+    { $count ->
+        [one] Se dejó { $count } cadena oculta como estaba
+       *[other] Se dejaron { $count } cadenas ocultas como estaban
+    }
 cmd-object-edit-select-single-design-object-edit = Seleccione un único objeto de diseño para editar
 cmd-object-edit-unassigned = Sin asignar
 cmd-offset-create-offset = Crear equidistante
@@ -1128,8 +1167,22 @@ cmd-text-edit-finished = Se terminó de editar el texto del objeto { $object_id 
 cmd-text-updated = Se actualizó el texto del objeto { $object_id }
 cmd-thin-nothing-removed = Ningún vértice está dentro de { $tolerance } m; no se simplificó nada
 cmd-thin-thin-strings = Simplificar cadenas
-cmd-thin-count-removed = { $removed } vértices de { $count } cadena(s)
-cmd-thin-thinned-count = { $count } cadena(s) simplificada(s), { $removed } vértices eliminados
+cmd-thin-count-removed =
+    { $removed ->
+        [one] { $removed } vértice
+       *[other] { $removed } vértices
+    } de { $count ->
+        [one] { $count } cadena
+       *[other] { $count } cadenas
+    }
+cmd-thin-thinned-count =
+    Se simplificó { $count ->
+        [one] { $count } cadena
+       *[other] { $count } cadenas
+    }, { $removed ->
+        [one] { $removed } vértice eliminado
+       *[other] { $removed } vértices eliminados
+    }
 cmd-thickness-not-a-grid = No se puede medir contra { $name }: { $reason }
 cmd-thickness-not-a-grid-cells = no es una única malla regular de celdas cuadradas, como la que crea Construir superficie
 cmd-thickness-not-a-grid-heights = dos de sus vértices comparten un nodo de la malla a alturas distintas
@@ -1394,7 +1447,7 @@ csv-drill-hole-holes-hole-s-carry-overlapping = { $holes } sondaje(s) tienen int
 csv-drill-hole-skipped-row-reason = Se omitió una fila: { $reason }
 csv-drill-hole-row-attribute-not-number = { $file } fila { $row } tiene '{ $value }' en una columna numérica
 csv-drill-hole-row-repeats-dhid = { $file } fila { $row } repite el DHID '{ $dhid }'
-csv-drill-hole-most-rows-unreadable = { $file }: no se pudieron leer { $skipped } de { $count } filas; los motivos están en la consola
+csv-drill-hole-most-rows-unreadable = { $file }: no se pudieron leer { $skipped } de { $count } filas
 csv-drill-hole-file-maps-dip-column-twice = { $file } asigna dos veces una columna de buzamiento o inclinación
 csv-drill-hole-file-has-more-than-one-total-depth = { $file } asigna dos veces una columna de profundidad total
 csv-drill-hole-total-depths-left-out =
@@ -1450,7 +1503,7 @@ csv-geophysics-row-column-count = La fila { $row } de { $file } tiene { $found }
 csv-geophysics-row-negative-depth = La fila { $row } de { $file } tiene una profundidad negativa
 csv-geophysics-row-no-depth = La fila { $row } de { $file } no tiene una profundidad legible
 csv-geophysics-file-s-path-not-valid = la ruta del archivo no es UTF-8 válido, algo que un proyecto no puede guardar: cambie el nombre del archivo o de su carpeta y vincúlelo de nuevo
-csv-geophysics-rows-skipped = { $file }: no se pudieron leer { $skipped } de { $rows } filas; los motivos están en la consola
+csv-geophysics-rows-skipped = { $file }: no se pudieron leer { $skipped } de { $rows } filas
 csv-geophysics-runs-not-grouped = La geofísica de { $count } sondaje(s) viene en más de un tramo, sin agrupar por sondaje; cada tramo posterior solo añade las profundidades en las que su sondaje no tiene lectura: { $holes }
 csv-geophysics-linked-downhole-geophysics-from-file = Se vinculó la geofísica de sondaje desde { $file }: { $holes } sondaje(s), curvas { $curves }; { $rows } fila(s) leída(s), { $skipped } omitida(s). Las lecturas permanecen en el archivo y se leen un sondaje cada vez
 csv-geophysics-no-readings = sin lecturas
@@ -1501,7 +1554,11 @@ drill-hole-preset = Preajuste
 drill-hole-px = px
 drill-hole-rainbow = Arcoíris
 drill-hole-rename-out-of-sequence-hole = Cambiar { $from } a { $to } lo deja fuera del orden de la columna estratigráfica en este sondaje.
-drill-hole-rename-out-of-sequence-holes = Cambiar { $from } a { $to } lo deja fuera del orden de la columna estratigráfica en { $count } sondajes.
+drill-hole-rename-out-of-sequence-holes =
+    { $count ->
+        [one] Cambiar { $from } a { $to } lo deja fuera del orden de la columna estratigráfica en { $count } sondaje.
+       *[other] Cambiar { $from } a { $to } lo deja fuera del orden de la columna estratigráfica en { $count } sondajes.
+    }
 drill-hole-rename-out-of-sequence-note = Los estratos invertidos o repetidos quedan fuera de orden, así que el cambio de nombre no se bloquea. Aceptar lo cambia de todos modos; Cancelar vuelve al cambio de nombre.
 drill-hole-rename-out-of-sequence-title = Fuera de secuencia
 drill-hole-rename-seam-every-hole-of = Todos los sondajes de
@@ -1881,6 +1938,7 @@ files-xy-grid-options = Opciones de cuadrícula XY
 geophysics-checking-geophysics-files = Comprobando archivos de geofísica
 geophysics-downhole-geophysics-name-could-not = No se pudo vincular la geofísica de sondaje de «{ $name }»: { $error }
 geophysics-file-changed = El archivo de geofísica cambió desde que se indexó
+geophysics-file-unchanged-kept = { $file } no ha cambiado desde que se indexó; se conserva su índice
 geophysics-file-cannot-be-opened = { $file } no se puede abrir: { $error }
 geophysics-file-unreadable = No se puede leer el archivo de geofísica vinculado a «{ $name }» en { $path } ({ $error }); vincúlelo de nuevo desde el menú contextual del conjunto de datos
 geophysics-linked-changed-rereading = La geofísica vinculada a «{ $name }» cambió desde que se indexó; se lee de nuevo
@@ -2039,8 +2097,6 @@ io-worksheet-writes-two-files = Escribe la hoja con el nombre que elija, una lí
 cmd-file-exported-worksheet-path = Se exportó la hoja de correcciones a { $path } y las correcciones a su lado a { $records }
 cmd-file-worksheet-export-failed-error = La exportación de la hoja de correcciones falló: { $error }
 cmd-file-worksheet-no-corrections = { $name } no tiene correcciones que exportar
-cmd-file-worksheet-only-unread-corrections = { $name } no tiene correcciones que esta versión pueda leer: sus { $count } registros de corrección se conservan tal como se guardaron, pero no se pueden exportar
-cmd-file-worksheet-leaves-out-unread = La hoja de correcciones de { $name } omite { $count } registros de corrección que esta versión no puede leer; permanecen en el proyecto tal como se guardaron
 state-export-corrections-worksheet = Exportar hoja de correcciones
 
 ## Jobs strings
@@ -2147,9 +2203,6 @@ object-edit-vertices = Vértices
 
 omf-element-name-has-count-tie = El elemento «{ $name }» tiene { $count } conexión(es) que nombran barrenos que ya no contiene
 omf-element-name-has-count-unreadable = El elemento «{ $name }» tiene { $count } sección(es) de trabajo ilegible(s); se excluyeron
-omf-element-name-has-count-unreadable-strat = El elemento '{ $name }' tiene { $count } columna(s) estratigráfica(s) ilegible(s); se omitieron
-omf-element-name-has-count-as-logged = El elemento '{ $name }' tiene { $count } valor(es) tal como se registraron que no se pudieron leer o ubicar; se conservan, pero no se aplican
-omf-element-name-strat-field-unreadable = El elemento '{ $name }' tiene un campo estratigráfico ilegible; se omitió
 omf-element-name-color-stops-unreadable = El elemento '{ $name }' tiene muy pocas paradas de color para dibujar una rampa; se usaron las del preajuste
 omf-element-name-color-unreadable = El elemento '{ $name }' tiene ajustes de color que no se pudieron leer; el conjunto se abre con los colores predeterminados y se omitieron sus secciones de trabajo y columnas estratigráficas
 omf-element-name-geophysics-unreadable = El elemento '{ $name }' tiene un vínculo de geofísica ilegible; se omitió
@@ -2158,7 +2211,6 @@ omf-element-name-names-unknown-section = El elemento «{ $name }» nombra una se
 omf-quality-mark-unreadable = No se pudo leer la marca de calidad de la superficie { $name }; se abre como superficie simple
 omf-layer-quality-mark-unreadable = No se pudo leer la marca de calidad de la capa { $name }; sus puntos se abren como puntos simples
 omf-ignoring-colour-map-omf-attribute = Se ignora el mapa de colores del atributo OMF «{ $attribute }»: { $error }
-omf-correction-records-unread = No se pudieron leer { $count } registros de corrección de { $name }: se conservan tal como se guardaron, pero no se aplican
 omf-corrections-unreadable = No se pudieron leer los registros de corrección de { $name } y se dejaron fuera
 omf-mining-data-exported-incline = Datos mineros exportados por Incline
 omf-import = Importación OMF
@@ -2427,6 +2479,7 @@ state-keep-outside = Mantener fuera
 state-kriged-block-model = Modelo de bloques por kriging
 state-load-block-model = Cargar modelo de bloques
 state-load-drillholes = Cargar sondajes
+state-link-geophysics = Vincular geofísica
 state-load-layer = Cargar capa
 state-load-point-cloud = Cargar nube de puntos
 state-load-raster = Cargar ráster
