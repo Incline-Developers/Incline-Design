@@ -1259,8 +1259,9 @@ borehole-inspector-seam-depths = { $from }-{ $to }  { $thickness }
 borehole-inspector-seam-gap = ·
 borehole-inspector-seam-missing = Not in this hole
 borehole-inspector-set-side = Set column
-borehole-inspector-strat = Strat
+borehole-inspector-strat-auto = { $field } (automatic)
 borehole-inspector-strat-column = Strat column
+borehole-inspector-strat-field = Strat field
 borehole-inspector-summary = Summary
 
 ## Prismoid inspector

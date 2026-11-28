@@ -117,6 +117,7 @@ impl<'a> DrillHoleProperties<'a> {
             .fingerprint(self.fingerprint())
             .max_height(max_height)
             .measure_last(self.deleted.len())
+            .scroll_bar_lane()
             .show(ui);
     }
 
@@ -288,9 +289,9 @@ const LOG_SCALE_WIDTH: f32 = 52.0;
 /// Narrowest the depth scale is drawn; never dropped entirely, only squeezed.
 const LOG_SCALE_MIN_WIDTH: f32 = 34.0;
 /// Width of the stratigraphic column drawn between the scale and the hole.
-const LOG_STRAT_WIDTH: f32 = 64.0;
+const LOG_STRAT_WIDTH: f32 = 96.0;
 /// Narrowest a strat column is still worth drawing before it is dropped.
-const LOG_STRAT_MIN_WIDTH: f32 = 22.0;
+const LOG_STRAT_MIN_WIDTH: f32 = 32.0;
 /// Narrowest the hole track is drawn before the strat column is dropped.
 const LOG_TRACK_MIN_WIDTH: f32 = 24.0;
 /// Gap between neighbouring columns: strat, density, the hole, gamma.
@@ -1126,7 +1127,7 @@ impl<'a> BoreholeLog<'a> {
         }
         // Elided to the column's own width, or a field named at length
         // would write itself across the top of the hole beside it.
-        let name = elided(painter, field.label.clone(), font, visuals.weak_text_color(), strat.width());
+        let name = elided(painter, field.label.clone(), font, visuals.text_color(), strat.width());
         painter.galley(
             egui::pos2(strat.center().x - name.size().x * 0.5, strat.top() - 4.0 - name.size().y),
             name,
@@ -1616,8 +1617,9 @@ fn log_columns(width: f32, strat: bool, left: bool, right: bool) -> LogColumns {
         return dropped;
     }
     if !kept[1] && !kept[2] {
-        // The strat column and the hole alone share as they always have.
-        let strat = LOG_STRAT_WIDTH.min(rest * 0.45).min(rest - LOG_TRACK_GAP - LOG_TRACK_MIN_WIDTH);
+        // The strat column and the hole alone share as they always have, the
+        // column never under its minimum, which the keep test left room for.
+        let strat = LOG_STRAT_WIDTH.min(rest * 0.45).max(LOG_STRAT_MIN_WIDTH).min(rest - LOG_TRACK_GAP - LOG_TRACK_MIN_WIDTH);
         return LogColumns {
             strat,
             track: rest - strat - LOG_TRACK_GAP,

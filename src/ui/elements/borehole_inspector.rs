@@ -456,10 +456,24 @@ const COLUMN_ROW_HEIGHT: f32 = 24.0;
 const SECTION_LANE_WIDTH: f32 = 96.0;
 /// Height of the Hole and Set column headings above the rows.
 const COLUMN_HEADER_HEIGHT: f32 = 16.0;
-/// Share of the row beside the sections that the hole's cell takes.
-const HOLE_CELL_SHARE: f32 = 0.45;
 /// Width of a set row's drag handle, the data grid's.
 const COLUMN_HANDLE_WIDTH: f32 = 18.0;
+/// Width of a set row's colour swatch.
+const COLUMN_SWATCH_WIDTH: f32 = 14.0;
+/// Width of a set row's frameless remove button.
+const COLUMN_REMOVE_WIDTH: f32 = 20.0;
+/// Least width the hole's cell keeps, however long a code name is, while
+/// the row has room for it beside the set side's handle, swatch and button.
+const HOLE_CELL_MIN_WIDTH: f32 = 72.0;
+
+/// The width the set side of the Column tab has for a row area `rows_width`
+/// wide whose widest "n  CODE" label is `widest_label` points wide: the
+/// label and the row's handle, swatch and button, while the hole's cell
+/// keeps [`HOLE_CELL_MIN_WIDTH`]; past that the label truncates.
+fn set_side_width(rows_width: f32, widest_label: f32) -> f32 {
+    let fixed = COLUMN_HANDLE_WIDTH + COLUMN_SWATCH_WIDTH + COLUMN_REMOVE_WIDTH + 3.0 * 2.0 + 4.0;
+    (widest_label + fixed).min(rows_width - 6.0 - HOLE_CELL_MIN_WIDTH).max(fixed)
+}
 
 /// A set row being dragged to a new place in its column.
 struct ColumnRowDrag {
@@ -521,7 +535,21 @@ fn draw_strat_column(
             let sections = egui::Rect::from_min_size(rect.min, egui::vec2(lane, height));
             draw_section_blocks(ui, sections, dataset, &field.key, column);
             let rows = egui::Rect::from_min_max(egui::pos2(sections.right() + 6.0, rect.top()), rect.max);
-            let hole_width = rows.width() * HOLE_CELL_SHARE;
+            // The widest "n  CODE" label the set side has to show, measured
+            // the way the data table measures its columns.
+            let body_font = egui::TextStyle::Body.resolve(ui.style());
+            let widest_label = column
+                .iter()
+                .enumerate()
+                .map(|(place, code)| {
+                    ui.painter()
+                        .layout_no_wrap(format!("{}  {code}", place + 1), body_font.clone(), egui::Color32::PLACEHOLDER)
+                        .size()
+                        .x
+                })
+                .fold(0.0_f32, f32::max);
+            let set_side = set_side_width(rows.width(), widest_label);
+            let hole_width = rows.width() - 6.0 - set_side;
             let set_left = rows.left() + hole_width + 6.0;
             let font = egui::TextStyle::Small.resolve(ui.style());
             let weak = ui.visuals().weak_text_color();
@@ -538,7 +566,11 @@ fn draw_strat_column(
                 row_ui.push_id(("strat_column_row", place), |ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     if ui
-                        .add(MenuButton::new(tr!("common-minus-sign")).min_width(24.0))
+                        .add(
+                            egui::Button::new(tr!("common-minus-sign"))
+                                .frame(false)
+                                .min_size(egui::vec2(COLUMN_REMOVE_WIDTH, COLUMN_REMOVE_WIDTH)),
+                        )
                         .hint(tr!("borehole-inspector-remove-from-column"))
                         .clicked()
                     {
@@ -563,7 +595,7 @@ fn draw_strat_column(
                         handle_response.hint(tr!("borehole-inspector-drag-to-reorder"));
                         // The colour the log and the scene give this code.
                         let [red, green, blue] = crate::ui::widgets::borehole_log::strat_run_color(&dataset.color, field, code);
-                        let (swatch, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                        let (swatch, _) = ui.allocate_exact_size(egui::vec2(COLUMN_SWATCH_WIDTH, COLUMN_SWATCH_WIDTH), egui::Sense::hover());
                         ui.painter()
                             .rect_filled(swatch, GROUP_CORNER_RADIUS, crate::rendering::color::rgba_to_color32([red, green, blue, 1.0]));
                         let text = format!("{}  {code}", place + 1);
@@ -1007,16 +1039,25 @@ fn draw_curve_pickers(ui: &mut egui::Ui, editor: &mut EditorState, id: DrillHole
     }
 }
 
+/// The text the strat field picker shows closed: the label of the field the
+/// geologist `picked`, else the one the column `read` by itself.
+fn strat_picker_text(picked: Option<&DrillField>, read: Option<&DrillField>) -> String {
+    if let Some(field) = picked {
+        return field.label.clone();
+    }
+    match read {
+        Some(field) => tr!("borehole-inspector-strat-auto", field = field.label.clone()),
+        None => tr!("borehole-inspector-guessed-name"),
+    }
+}
+
 /// What the strat column reads, the panel's own choice: the Log and Column
 /// tabs share it, so both read the same field.
 fn draw_strat_field_picker(ui: &mut egui::Ui, editor: &mut EditorState, dataset: &OpenDrillHoleDataset) {
     let fields = &dataset.dataset.fields;
-    let label_of = |key: Option<&str>, fallback: &str| {
-        key.and_then(|key| dataset.dataset.field(key))
-            .map_or_else(|| fallback.to_owned(), |field| field.label.clone())
-    };
     let guessed = tr!("borehole-inspector-guessed-name");
-    let selected = label_of(strat_choice_for(editor, dataset).as_deref(), &guessed);
+    let picked = strat_choice_for(editor, dataset).and_then(|key| dataset.dataset.field(&key));
+    let selected = strat_picker_text(picked, crate::model::strat_order::strat_field_of(dataset, None));
     let options = std::iter::once((None, guessed.into())).chain(
         fields
             .iter()
@@ -1024,9 +1065,15 @@ fn draw_strat_field_picker(ui: &mut egui::Ui, editor: &mut EditorState, dataset:
             .map(|field| (Some(field.key.clone()), field.label.clone().into())),
     );
     let mut chosen = strat_choice_for(editor, dataset);
-    if MenuFieldCombo::new(("borehole_log_strat_field", dataset.id), tr!("borehole-inspector-strat"), &mut chosen, selected, options)
-        .show(ui)
-        .changed()
+    if MenuFieldCombo::new(
+        ("borehole_log_strat_field", dataset.id),
+        tr!("borehole-inspector-strat-field"),
+        &mut chosen,
+        selected,
+        options,
+    )
+    .show(ui)
+    .changed()
     {
         match chosen {
             Some(key) => editor.borehole_log_strat_field.insert(dataset.id, key),
